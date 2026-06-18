@@ -20,6 +20,14 @@ import {
 } from "@assistant-ui/react-markdown";
 import "katex/dist/katex.min.css";
 import {
+  GlobalWorkerOptions,
+  TextLayer,
+  getDocument,
+  type PDFDocumentProxy,
+  type RenderTask,
+} from "pdfjs-dist";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import {
   Bot,
   Check,
   ChevronLeft,
@@ -52,9 +60,11 @@ import {
 import rehypeKatex from "rehype-katex";
 import {
   type ChangeEvent,
+  createContext,
   type ReactNode,
   type RefObject,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -64,6 +74,7 @@ import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "reac
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { getAppCopy, type AppCopy } from "./i18n";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import {
   defaultUiPreferences,
@@ -71,6 +82,14 @@ import {
   type UiPreferences,
   uiPreferencesStorageKey,
 } from "./settings";
+
+GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
+const AppCopyContext = createContext<AppCopy>(getAppCopy("zh-CN"));
+
+function useAppCopy() {
+  return useContext(AppCopyContext);
+}
 
 type PagePack = {
   schema: string;
@@ -143,6 +162,14 @@ type SelectedContext = {
     width: number;
     height: number;
   };
+  selectionRects?: Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }>;
+  viewportScale?: number;
+  viewportRotation?: number;
   createdAt: number;
 };
 
@@ -251,11 +278,85 @@ const samplePack: PagePack = {
   ],
 };
 
+const englishSamplePack: PagePack = {
+  schema: "lecture_pairpack.v1",
+  document: {
+    id: "demo_course_pdf",
+    title: "Course PDF Page-by-Page Notes",
+    source_pdf_url: "",
+    page_count: 3,
+  },
+  pages: [
+    {
+      page_no: 1,
+      source: {
+        pdf_page_ref: "#page=1",
+        text_md: "Course goal: convert PDF slides into page-by-page teaching notes. Core constraints are page alignment, structured output, and repeatable runs.",
+        ocr_used: false,
+        parser: "docling",
+      },
+      teaching: {
+        slide_title: "From Notes PDF to Split Workspace",
+        speaker_notes_md:
+          "## From Notes PDF to Split Workspace\n\nThis page sets the product direction: instead of regenerating an explanation PDF, the app keeps the original PDF page as the reference and places editable teaching notes beside it.\n\n### Teaching Line\n\n- Emphasize that the original PDF remains the source of truth, while notes are a teaching-oriented expansion of the current page.\n- Explain that PagePair JSON binds page number, parsed text, notes, and confidence together.\n- Close by pointing out why this format is easier to review, rerun, and version.",
+        concepts: ["PagePair JSON", "Side-by-side review", "Page alignment"],
+        visual_explanations: ["The left side preserves page context; the right side carries editable notes only."],
+        prerequisites: ["The course PDF has been parsed at page level"],
+        confidence: 0.94,
+      },
+      status: "ready",
+    },
+    {
+      page_no: 2,
+      source: {
+        pdf_page_ref: "#page=2",
+        text_md: "System flow: upload PDF -> parse Page JSON -> global summary -> page-by-page generation -> JSON validation -> web display.",
+        ocr_used: false,
+        parser: "docling",
+      },
+      teaching: {
+        slide_title: "Recommended Technical Path",
+        speaker_notes_md:
+          "## Recommended Technical Path\n\nUse Docling or PyMuPDF in the parsing layer to generate stable Page JSON; use OpenAI Gateway and the Responses API in the generation layer; render lecture_pairpack.v1.json in the web layer.\n\n### Teaching Line\n\n- Keep parsing and generation separate instead of sending the full PDF directly to the model.\n- Treat OpenAI Gateway as the only model entry point, while the frontend only tracks task status and result data.\n- For scanned or formula-heavy pages, route through OCR or a specialized parser fallback.",
+        concepts: ["OpenAI Gateway", "Docling", "PyMuPDF", "Structured Outputs"],
+        visual_explanations: ["The flow diagram should emphasize the parser, generator, and validator boundaries."],
+        prerequisites: ["The team has confirmed it will not generate a notes PDF"],
+        confidence: 0.91,
+      },
+      status: "ready",
+    },
+    {
+      page_no: 3,
+      source: {
+        pdf_page_ref: "#page=3",
+        text_md: "Authentication: the frontend uses OAuth sign-in; model requests go through the backend proxy. Output is JSON and Markdown, not PDF.",
+        ocr_used: false,
+        parser: "docling",
+      },
+      teaching: {
+        slide_title: "OAuth and Output Format",
+        speaker_notes_md:
+          "## OAuth and Output Format\n\nThe browser should not hold model API credentials directly. The user enters through OpenAI OAuth or an app session, and the backend proxies model calls in one place.\n\n### Teaching Line\n\n- OAuth handles user identity and authorization entry.\n- OpenAI Gateway handles model calls, rate limits, logs, and caching.\n- The final display format is JSON plus Markdown rendering, with optional export to Markdown or PPTX later.",
+        concepts: ["OAuth", "Backend proxy", "Markdown rendering"],
+        visual_explanations: ["The authentication path should point from browser to backend, then from backend to the model API."],
+        prerequisites: ["A backend session design already exists"],
+        confidence: 0.88,
+      },
+      status: "ready",
+    },
+  ],
+};
+
+const samplePacks: Record<UiPreferences["language"], PagePack> = {
+  "zh-CN": samplePack,
+  "en-US": englishSamplePack,
+};
+
 function createId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function requestJson<T>(path: string, options: RequestInit = {}) {
+async function requestJson<T>(path: string, options: RequestInit = {}, accountNotFoundMessage = "请先连接 OpenAI OAuth 后再发送。") {
   const response = await fetch(path, {
     ...options,
     headers: {
@@ -272,23 +373,23 @@ async function requestJson<T>(path: string, options: RequestInit = {}) {
       parsed = null;
     }
     if (parsed?.error === "account_not_found") {
-      throw new Error("请先连接 OpenAI OAuth 后再发送。");
+      throw new Error(accountNotFoundMessage);
     }
     throw new Error(parsed?.message || parsed?.error || detail || `HTTP ${response.status}`);
   }
   return (await response.json()) as T;
 }
 
-function normalizePack(raw: unknown): PagePack {
+function normalizePack(raw: unknown, copy: AppCopy): PagePack {
   const source = raw as Partial<PagePack> & { pages?: unknown[]; title?: string };
   const pages = Array.isArray(source) ? source : source.pages;
-  if (!Array.isArray(pages)) throw new Error("JSON 需要包含 pages 数组");
+  if (!Array.isArray(pages)) throw new Error(copy.errors.jsonNeedsPages);
 
   return {
     schema: source.schema || "lecture_pairpack.v1",
     document: {
       id: source.document?.id || "imported_document",
-      title: source.document?.title || source.title || "导入文档",
+      title: source.document?.title || source.title || copy.errors.importedDocument,
       source_pdf_url: source.document?.source_pdf_url || "",
       page_count: pages.length,
     },
@@ -315,7 +416,7 @@ function normalizePack(raw: unknown): PagePack {
           parser: page.source?.parser || "imported",
         },
         teaching: {
-          slide_title: teaching.slide_title || teaching.title || `第 ${index + 1} 页讲解`,
+          slide_title: teaching.slide_title || teaching.title || copy.errors.importedPageTitle(index),
           speaker_notes_md: teaching.speaker_notes_md || teaching.notes || "",
           concepts: Array.isArray(teaching.concepts) ? teaching.concepts : [],
           visual_explanations: Array.isArray(teaching.visual_explanations)
@@ -335,28 +436,28 @@ function compactText(value: string, max = 120) {
   return text.length > max ? `${text.slice(0, max - 1)}...` : text;
 }
 
-function contextSourceLabel(context: AgentContextItem) {
-  if (context.type === "formula") return `公式 · PDF p.${context.page_no}`;
-  if (context.type === "selection") return `选中内容 · PDF p.${context.page_no}`;
-  if (context.type === "pdf_reference") return `PDF 来源 · p.${context.page_no}`;
-  return `来源 PDF p.${context.page_no} · ${compactText(context.source || context.title, 28)}`;
+function contextSourceLabel(context: AgentContextItem, copy: AppCopy) {
+  if (context.type === "formula") return copy.agent.contextFormula(context.page_no);
+  if (context.type === "selection") return copy.agent.contextSelection(context.page_no);
+  if (context.type === "pdf_reference") return copy.agent.contextPdfReference(context.page_no);
+  return copy.agent.contextSource(context.page_no, compactText(context.source || context.title, 28));
 }
 
-function selectedContextSourceLabel(context: SelectedContext) {
-  if (context.sourceType === "pdf-page") return `来源 PDF p.${context.pdfPageNumber || context.pageNumber || "?"}`;
-  if (context.sourceType === "generated-explanation") return `讲解 p.${context.generatedPageNumber || context.pageNumber || "?"}`;
-  if (context.sourceType === "assistant-message") return "助手消息";
-  if (context.sourceType === "page") return `页面 p.${context.pageNumber || "?"}`;
-  return "选中内容";
+function selectedContextSourceLabel(context: SelectedContext, copy: AppCopy) {
+  if (context.sourceType === "pdf-page") return copy.agent.selectedPdfPage(context.pdfPageNumber || context.pageNumber || "?");
+  if (context.sourceType === "generated-explanation") return copy.agent.selectedNotesPage(context.generatedPageNumber || context.pageNumber || "?");
+  if (context.sourceType === "assistant-message") return copy.agent.assistantMessage;
+  if (context.sourceType === "page") return copy.agent.pageSource(context.pageNumber || "?");
+  return copy.common.selectedContent;
 }
 
-function selectedContextToAgentContext(context: SelectedContext): AgentContextItem {
+function selectedContextToAgentContext(context: SelectedContext, copy: AppCopy): AgentContextItem {
   const pageNo = context.pdfPageNumber || context.generatedPageNumber || context.pageNumber || 1;
   return {
     id: context.id,
     type: detectContextType(context.text),
-    title: selectedContextSourceLabel(context),
-    source: context.sectionTitle || selectedContextSourceLabel(context),
+    title: selectedContextSourceLabel(context, copy),
+    source: context.sectionTitle || selectedContextSourceLabel(context, copy),
     page_no: pageNo,
     text: context.text,
   };
@@ -373,19 +474,23 @@ function selectedContextPayload(context: SelectedContext) {
     generatedPageNumber: context.generatedPageNumber,
     sectionTitle: context.sectionTitle,
     messageId: context.messageId,
+    rect: context.rect,
+    selectionRects: context.selectionRects,
+    viewportScale: context.viewportScale,
+    viewportRotation: context.viewportRotation,
   };
 }
 
-function composerContextPreview(contexts: AgentContextItem[], attachments: AgentAttachment[]) {
+function composerContextPreview(contexts: AgentContextItem[], attachments: AgentAttachment[], copy: AppCopy) {
   if (contexts.length) {
     const first = contexts[contexts.length - 1];
     const extra = contexts.length > 1 ? ` +${contexts.length - 1}` : "";
-    return `${contextSourceLabel(first)}${extra}`;
+    return `${contextSourceLabel(first, copy)}${extra}`;
   }
   if (attachments.length) {
     const first = attachments[attachments.length - 1];
     const extra = attachments.length > 1 ? ` +${attachments.length - 1}` : "";
-    return `图片 · ${compactText(first.name, 28)}${extra}`;
+    return `${copy.agent.imagePreview(compactText(first.name, 28))}${extra}`;
   }
   return "";
 }
@@ -420,22 +525,13 @@ function wrapBareCircuitMath(text: string) {
     .replace(/\b([A-Z][A-Za-z0-9]*_\{?[A-Za-z0-9]+\}?(?:\^\+)?|[A-Z]\^\+)\b/g, (_match, token) => `$${token}$`);
 }
 
-function pageSuggestions(page: PageData, pageAware: boolean) {
+function pageSuggestions(page: PageData, pageAware: boolean, copy: AppCopy) {
   if (!pageAware) {
-    return [
-      "解释选中内容",
-      "生成简洁学习笔记",
-      "查找缺失假设",
-    ];
+    return copy.agent.selectedFallbackSuggestions;
   }
   const title = compactText(page.teaching.slide_title, 42);
   const concept = page.teaching.concepts[0] || "this page";
-  return [
-    `解释“${title}”`,
-    `生成本页考试风格笔记`,
-    `根据“${concept}”考我`,
-    "查找缺失假设",
-  ];
+  return copy.agent.pageSuggestions(title, concept);
 }
 
 function splitOAuthUserCode(value: string) {
@@ -458,12 +554,12 @@ function detectContextType(text: string): AgentContextItem["type"] {
     : "selection";
 }
 
-function pageContext(pack: PagePack, page: PageData): AgentContextItem {
+function pageContext(pack: PagePack, page: PageData, copy: AppCopy): AgentContextItem {
   const teaching = page.teaching;
   return {
     id: createId("ctx_page"),
     type: "page",
-    title: `第 ${page.page_no} 页`,
+    title: copy.common.pageLabel(page.page_no),
     source: teaching.slide_title,
     page_no: page.page_no,
     text: [
@@ -473,7 +569,7 @@ function pageContext(pack: PagePack, page: PageData): AgentContextItem {
       page.source.text_md ? `Source text: ${page.source.text_md}` : "",
       teaching.speaker_notes_md ? `Teaching notes: ${teaching.speaker_notes_md}` : "",
       teaching.visual_explanations.length
-        ? `Visual notes: ${teaching.visual_explanations.join("；")}`
+        ? `Visual notes: ${teaching.visual_explanations.join(copy.common.sentenceSeparator)}`
         : "",
     ]
       .filter(Boolean)
@@ -481,7 +577,7 @@ function pageContext(pack: PagePack, page: PageData): AgentContextItem {
   };
 }
 
-function readFileAsDataUrl(file: File) {
+function readFileAsDataUrl(file: File, copy: AppCopy) {
   return new Promise<AgentAttachment>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () =>
@@ -493,7 +589,7 @@ function readFileAsDataUrl(file: File) {
         size: file.size || 0,
         data_url: String(reader.result || ""),
       });
-    reader.onerror = () => reject(reader.error || new Error("图片读取失败"));
+    reader.onerror = () => reject(reader.error || new Error(copy.errors.imageReadFailed));
     reader.readAsDataURL(file);
   });
 }
@@ -501,6 +597,7 @@ function readFileAsDataUrl(file: File) {
 function usePageSelection(args: {
   documentTitle: string;
   page: PageData;
+  copy: AppCopy;
   setLastSelection: (context: SelectedContext | null) => void;
 }) {
   const [toolbar, setToolbar] = useState<SelectionToolbarState | null>(null);
@@ -528,14 +625,27 @@ function usePageSelection(args: {
     const rect = range.getBoundingClientRect();
     if (!rect.width && !rect.height) return;
 
-    const source = detectSelectionSource(anchorElement);
+    const source = detectSelectionSource(anchorElement, args.copy);
+    const pdfPageLayer = anchorElement.closest<HTMLElement>(".pdf-page-layered");
+    const pdfPageNumber = Number(pdfPageLayer?.dataset.pageNumber || args.page.page_no);
+    const viewportScale = Number(pdfPageLayer?.dataset.viewportScale || "");
+    const viewportRotation = Number(pdfPageLayer?.dataset.viewportRotation || "");
+    const pageRect = pdfPageLayer?.getBoundingClientRect();
+    const selectionRects = Array.from(range.getClientRects())
+      .filter((item) => item.width > 0 && item.height > 0)
+      .map((item) => ({
+        x: pageRect ? item.left - pageRect.left : item.left,
+        y: pageRect ? item.top - pageRect.top : item.top,
+        width: item.width,
+        height: item.height,
+      }));
     const context: SelectedContext = {
       id: createId("selected"),
       text,
       sourceType: source.sourceType,
       documentTitle: args.documentTitle,
-      pageNumber: args.page.page_no,
-      pdfPageNumber: source.sourceType === "pdf-page" ? args.page.page_no : undefined,
+      pageNumber: source.sourceType === "pdf-page" && Number.isFinite(pdfPageNumber) ? pdfPageNumber : args.page.page_no,
+      pdfPageNumber: source.sourceType === "pdf-page" && Number.isFinite(pdfPageNumber) ? pdfPageNumber : undefined,
       generatedPageNumber: source.sourceType === "generated-explanation" ? args.page.page_no : undefined,
       sectionTitle: source.label,
       rect: {
@@ -544,6 +654,9 @@ function usePageSelection(args: {
         width: rect.width,
         height: rect.height,
       },
+      selectionRects,
+      viewportScale: source.sourceType === "pdf-page" && Number.isFinite(viewportScale) ? viewportScale : undefined,
+      viewportRotation: source.sourceType === "pdf-page" && Number.isFinite(viewportRotation) ? viewportRotation : undefined,
       createdAt: Date.now(),
     };
 
@@ -592,12 +705,12 @@ function shouldIgnoreSelection(element: Element) {
   );
 }
 
-function detectSelectionSource(element: Element): { sourceType: SelectedContextSourceType; label: string } {
-  if (element.closest(".pdf-pane")) return { sourceType: "pdf-page", label: "PDF 页面选区" };
-  if (element.closest(".notes-pane")) return { sourceType: "generated-explanation", label: "讲解区选区" };
-  if (element.closest(".assistant-message")) return { sourceType: "assistant-message", label: "助手消息选区" };
-  if (element.closest(".page-rail")) return { sourceType: "page", label: "目录选区" };
-  return { sourceType: "unknown", label: "页面选区" };
+function detectSelectionSource(element: Element, copy: AppCopy): { sourceType: SelectedContextSourceType; label: string } {
+  if (element.closest(".pdf-page-layered, .pdf-text-layer")) return { sourceType: "pdf-page", label: copy.agent.selectionSources.pdfPage };
+  if (element.closest(".notes-pane")) return { sourceType: "generated-explanation", label: copy.agent.selectionSources.notes };
+  if (element.closest(".assistant-message")) return { sourceType: "assistant-message", label: copy.agent.selectionSources.assistant };
+  if (element.closest(".page-rail")) return { sourceType: "page", label: copy.agent.selectionSources.rail };
+  return { sourceType: "unknown", label: copy.agent.selectionSources.page };
 }
 
 function messageText(message: unknown): string {
@@ -615,6 +728,7 @@ function createPdfAgentAdapter(args: {
   getSnapshot: () => AgentSnapshot;
   getPack: () => PagePack;
   getPage: () => PageData;
+  copy: AppCopy;
   isBackendOffline: () => boolean;
   clearSelectedContext: () => void;
 }): ChatModelAdapter {
@@ -624,7 +738,7 @@ function createPdfAgentAdapter(args: {
       const pack = args.getPack();
       const page = args.getPage();
       const selectedAgentContext = snapshot.selectedContext
-        ? selectedContextToAgentContext(snapshot.selectedContext)
+        ? selectedContextToAgentContext(snapshot.selectedContext, args.copy)
         : null;
       const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
       const latestUserText = latestUser ? messageText(latestUser) : "";
@@ -673,7 +787,7 @@ function createPdfAgentAdapter(args: {
           content: messageText(message),
           parts: [{ type: "text", text: messageText(message) }],
         })),
-        input: latestUserText || "请根据上下文继续。",
+        input: latestUserText || args.copy.agent.continuePrompt,
         parts,
         attachments: snapshot.attachments,
         context: selectedAgentContext ? [selectedAgentContext, ...snapshot.contexts] : snapshot.contexts,
@@ -688,10 +802,11 @@ function createPdfAgentAdapter(args: {
             body: JSON.stringify(payload),
             signal: options.abortSignal,
           },
+          args.copy.errors.accountNotFound,
         );
         const content = response.message?.content || response.content;
-        if (!content) throw new Error("AI 网关返回了空结果");
-        for await (const partial of streamAssistantText(content, options.abortSignal)) {
+        if (!content) throw new Error(args.copy.errors.emptyGatewayResult);
+        for await (const partial of streamAssistantText(content, options.abortSignal, args.copy.errors.generationStopped)) {
           yield {
             content: [{ type: "text", text: partial }] satisfies ThreadAssistantMessagePart[],
             status: { type: "running" },
@@ -705,14 +820,15 @@ function createPdfAgentAdapter(args: {
         if ((error as Error).name === "AbortError") throw error;
         if (!args.isBackendOffline()) throw error;
         const local = [
-          "本地预览回复：真实回答会通过后端 `/api/agent/chat` 使用 OpenAI OAuth 发送。",
-          snapshot.contexts.length ? `已读取 ${snapshot.contexts.length} 段上下文。` : `已读取第 ${page.page_no} 页。`,
-          snapshot.attachments.length ? `同时包含 ${snapshot.attachments.length} 张图片。` : "",
-          latestUserText ? `你的问题：${latestUserText}` : "",
+          args.copy.agent.localPreviewIntro,
+          selectedAgentContext ? args.copy.agent.localPreviewSelected(selectedAgentContext.title) : "",
+          snapshot.contexts.length ? args.copy.agent.localPreviewContexts(snapshot.contexts.length) : args.copy.agent.localPreviewPage(page.page_no),
+          snapshot.attachments.length ? args.copy.agent.localPreviewImages(snapshot.attachments.length) : "",
+          latestUserText ? args.copy.agent.localPreviewQuestion(latestUserText) : "",
         ]
           .filter(Boolean)
           .join("\n\n");
-        for await (const partial of streamAssistantText(local, options.abortSignal)) {
+        for await (const partial of streamAssistantText(local, options.abortSignal, args.copy.errors.generationStopped)) {
           yield {
             content: [{ type: "text", text: partial }] satisfies ThreadAssistantMessagePart[],
             status: { type: "running" },
@@ -729,11 +845,11 @@ function createPdfAgentAdapter(args: {
   };
 }
 
-async function* streamAssistantText(text: string, signal: AbortSignal) {
+async function* streamAssistantText(text: string, signal: AbortSignal, stopMessage: string) {
   const chunks = chunkAssistantText(text);
   let partial = "";
   for (const chunk of chunks) {
-    if (signal.aborted) throw new DOMException("生成已停止", "AbortError");
+    if (signal.aborted) throw new DOMException(stopMessage, "AbortError");
     partial += chunk;
     yield partial;
     await new Promise((resolve) => window.setTimeout(resolve, 12));
@@ -746,7 +862,9 @@ function chunkAssistantText(text: string) {
 }
 
 export default function App() {
-  const [pack, setPack] = useState<PagePack>(samplePack);
+  const [uiPreferences, setUiPreferences] = useState<UiPreferences>(() => loadUiPreferences());
+  const copy = useMemo(() => getAppCopy(uiPreferences.language), [uiPreferences.language]);
+  const [pack, setPack] = useState<PagePack>(() => samplePacks[uiPreferences.language]);
   const [currentPageNo, setCurrentPageNo] = useState(1);
   const [pdfUrl, setPdfUrl] = useState("");
   const [activeTab, setActiveTab] = useState<"notes" | "structure" | "json">("notes");
@@ -757,11 +875,11 @@ export default function App() {
   const [oauthDevice, setOauthDevice] = useState<OAuthDevicePrompt | null>(null);
   const [oauthCodeCopied, setOauthCodeCopied] = useState(false);
   const [oauthSecondsLeft, setOauthSecondsLeft] = useState(0);
-  const [jobStatus, setJobStatus] = useState("本地原型");
+  const [jobStatus, setJobStatus] = useState(copy.status.localPrototype);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
-  const [uiPreferences, setUiPreferences] = useState<UiPreferences>(() => loadUiPreferences());
+  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
   const [contexts, setContexts] = useState<AgentContextItem[]>([]);
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [selectedContext, setSelectedContext] = useState<SelectedContext | null>(null);
@@ -773,7 +891,12 @@ export default function App() {
   const oauthPollTimerRef = useRef<number | null>(null);
   const oauthCountdownTimerRef = useRef<number | null>(null);
 
-  const page = pack.pages.find((item) => item.page_no === currentPageNo) || pack.pages[0];
+  const pdfNavigationPageCount = Math.max(pdfUrl ? pdfPageCount || pack.document.page_count || pack.pages.length : pack.pages.length, 1);
+  const currentPdfPageNo = Math.min(Math.max(currentPageNo, 1), pdfNavigationPageCount);
+  const page =
+    pack.pages.find((item) => item.page_no === currentPageNo) ||
+    pack.pages[Math.min(Math.max(currentPageNo - 1, 0), Math.max(pack.pages.length - 1, 0))] ||
+    samplePacks[uiPreferences.language].pages[0];
   const currentIndex = Math.max(0, pack.pages.findIndex((item) => item.page_no === page.page_no));
   const pdfOnly = !panels.rail && !panels.notes && !panels.agent;
   const fullWorkbench = panels.rail && panels.notes && panels.agent;
@@ -782,11 +905,12 @@ export default function App() {
   );
   const visiblePaneCount = 1 + Number(panels.rail) + Number(panels.notes) + Number(panels.agent);
   const pdfViewerSrc = pdfUrl
-    ? `${pdfUrl}#page=${page.page_no}&toolbar=0&navpanes=0&scrollbar=0&view=FitH`
+    ? `${pdfUrl}#page=${currentPdfPageNo}&toolbar=0&navpanes=0&scrollbar=0&view=FitH`
     : "";
   const { toolbar: selectionToolbar, clearSelection } = usePageSelection({
     documentTitle: pack.document.title,
     page,
+    copy,
     setLastSelection: (context) => {
       lastSelectionRef.current = context;
     },
@@ -819,7 +943,7 @@ export default function App() {
   const resetPreferences = useCallback(() => {
     setUiPreferences(defaultUiPreferences);
     window.localStorage.removeItem(uiPreferencesStorageKey);
-    setJobStatus("本地 UI 设置已重置");
+    setJobStatus(getAppCopy(defaultUiPreferences.language).status.preferencesReset);
   }, []);
 
   const stopOAuthTimers = useCallback(() => {
@@ -857,27 +981,27 @@ export default function App() {
 
   const captureSelection = useCallback((context = selectionToolbar?.context || lastSelectionRef.current) => {
     if (!context) {
-      setJobStatus("没有可加入的页面选区");
+      setJobStatus(copy.status.noSelection);
       return;
     }
     setSelectedContext(context);
     setPanels((current) => ({ ...current, agent: true }));
     clearSelection();
     focusComposer();
-    setJobStatus("选中内容已加入对话");
-  }, [clearSelection, focusComposer, selectionToolbar?.context]);
+    setJobStatus(copy.status.selectionAdded);
+  }, [clearSelection, copy.status.noSelection, copy.status.selectionAdded, focusComposer, selectionToolbar?.context]);
 
   const sendSelectionPrompt = useCallback((context: SelectedContext, intent: "explain" | "summarize") => {
-    const label = selectedContextSourceLabel(context);
+    const label = selectedContextSourceLabel(context, copy);
     const prompt = intent === "explain"
-      ? `请解释这段选中内容，优先基于该来源回答：${label}`
-      : `请总结这段选中内容，提炼关键概念和可能的公式关系：${label}`;
+      ? copy.agent.quickExplainPrompt(label)
+      : copy.agent.quickSummarizePrompt(label);
     setSelectedContext(context);
     setPanels((current) => ({ ...current, agent: true }));
     setPendingSelectionPrompt({ id: createId("quick_prompt"), prompt, context });
     clearSelection();
-    setJobStatus(intent === "explain" ? "正在解释选中内容" : "正在总结选中内容");
-  }, [clearSelection]);
+    setJobStatus(intent === "explain" ? copy.status.explainingSelection : copy.status.summarizingSelection);
+  }, [clearSelection, copy]);
 
   useEffect(() => {
     if (!commandMenuOpen) return undefined;
@@ -914,6 +1038,18 @@ export default function App() {
   }, [uiPreferences.theme]);
 
   useEffect(() => {
+    document.documentElement.lang = uiPreferences.language === "en-US" ? "en" : "zh-CN";
+    document.documentElement.dataset.pagepairLanguage = uiPreferences.language;
+  }, [uiPreferences.language]);
+
+  useEffect(() => {
+    setPack((current) => {
+      if (current.document.id !== "demo_course_pdf" || current.document.source_pdf_url) return current;
+      return samplePacks[uiPreferences.language];
+    });
+  }, [uiPreferences.language]);
+
+  useEffect(() => {
     if (!uiPreferences.autoSaveSession) {
       window.localStorage.setItem(uiPreferencesStorageKey, JSON.stringify({ autoSaveSession: false }));
       return;
@@ -940,15 +1076,15 @@ export default function App() {
     if (!oauthDevice) return;
     await navigator.clipboard?.writeText(oauthDevice.user_code).catch(() => undefined);
     setOauthCodeCopied(true);
-    setJobStatus(`授权码 ${oauthDevice.user_code} 已复制`);
+    setJobStatus(copy.status.codeCopied(oauthDevice.user_code));
     window.setTimeout(() => setOauthCodeCopied(false), 1800);
-  }, [oauthDevice]);
+  }, [copy, oauthDevice]);
 
   const openOAuthVerification = useCallback(() => {
     if (!oauthDevice) return;
     window.open(oauthDevice.verification_uri, "_blank", "noopener,noreferrer");
-    setJobStatus(`请在 OpenAI 页面输入授权码 ${oauthDevice.user_code}`);
-  }, [oauthDevice]);
+    setJobStatus(copy.status.enterCode(oauthDevice.user_code));
+  }, [copy, oauthDevice]);
 
   const cancelOAuthLogin = useCallback(() => {
     stopOAuthTimers();
@@ -956,8 +1092,8 @@ export default function App() {
     setOauthSecondsLeft(0);
     setOauthCodeCopied(false);
     setOauthMode((mode) => (mode === "polling" ? "ready" : mode));
-    setJobStatus("OAuth 登录已取消");
-  }, [stopOAuthTimers]);
+    setJobStatus(copy.status.oauthCanceled);
+  }, [copy.status.oauthCanceled, stopOAuthTimers]);
 
   const connectOAuth = async () => {
     try {
@@ -973,7 +1109,7 @@ export default function App() {
         setOauthAccount(null);
         setOauthDevice(null);
         setOauthSecondsLeft(0);
-        setJobStatus("OAuth 会话已断开");
+        setJobStatus(copy.status.oauthDisconnected);
         return;
       }
       stopOAuthTimers();
@@ -993,7 +1129,7 @@ export default function App() {
       setOauthCodeCopied(true);
       window.setTimeout(() => setOauthCodeCopied(false), 1800);
       setOauthMode("polling");
-      setJobStatus(`授权码 ${device.user_code} 已显示，复制后打开授权页`);
+      setJobStatus(copy.status.codeShown(device.user_code));
 
       oauthCountdownTimerRef.current = window.setInterval(() => {
         const secondsLeft = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
@@ -1006,7 +1142,7 @@ export default function App() {
           setOauthMode("ready");
           setOauthDevice(null);
           setOauthSecondsLeft(0);
-          setJobStatus("OAuth 授权码已过期");
+          setJobStatus(copy.status.codeExpired);
           return;
         }
         try {
@@ -1024,7 +1160,7 @@ export default function App() {
           setOauthDevice(null);
           setOauthSecondsLeft(0);
           setOauthCodeCopied(false);
-          setJobStatus("OAuth 已连接");
+          setJobStatus(copy.status.oauthConnected);
         } catch (error) {
           stopOAuthTimers();
           setOauthMode("ready");
@@ -1043,7 +1179,7 @@ export default function App() {
       setOauthSecondsLeft(0);
       setOauthMode((mode) => (mode === "mock" ? "offline" : "mock"));
       setOauthAccount((account) => (account ? null : "static preview"));
-      setJobStatus("OAuth 后端未启动，已进入静态模拟连接");
+      setJobStatus(copy.status.oauthBackendMock);
     }
   };
 
@@ -1057,6 +1193,9 @@ export default function App() {
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
     const url = URL.createObjectURL(file);
     setPdfUrl(url);
+    setPdfPageCount(null);
+    setCurrentPageNo(1);
+    setSelectedContext(null);
     setPack((current) => ({
       ...current,
       document: {
@@ -1067,14 +1206,26 @@ export default function App() {
     }));
   };
 
+  const handlePdfDocumentReady = useCallback((pageCount: number) => {
+    setPdfPageCount(pageCount);
+    setCurrentPageNo((current) => Math.min(Math.max(current, 1), Math.max(pageCount, 1)));
+    setPack((current) => ({
+      ...current,
+      document: {
+        ...current.document,
+        page_count: pageCount,
+      },
+    }));
+  }, []);
+
   const loadJson = (file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const next = normalizePack(JSON.parse(String(reader.result)));
+        const next = normalizePack(JSON.parse(String(reader.result)), copy);
         setPack(next);
         setCurrentPageNo(next.pages[0]?.page_no || 1);
-        setJobStatus("已导入 PagePair JSON");
+        setJobStatus(copy.status.jsonImported);
       } catch (error) {
         setJobStatus((error as Error).message);
       }
@@ -1095,36 +1246,37 @@ export default function App() {
   };
 
   const movePage = (delta: number) => {
-    const nextIndex = Math.min(Math.max(currentIndex + delta, 0), pack.pages.length - 1);
-    setCurrentPageNo(pack.pages[nextIndex].page_no);
+    setCurrentPageNo((current) => Math.min(Math.max(current + delta, 1), pdfNavigationPageCount));
   };
 
   const authText =
     oauthMode === "connected"
-      ? `OpenAI Gateway：OAuth 会话已连接${oauthAccount ? ` · ${oauthAccount}` : ""}`
+      ? copy.auth.gatewayConnected(oauthAccount)
       : oauthMode === "polling"
-        ? "OpenAI Gateway：等待授权"
+        ? copy.auth.gatewayWaiting
         : oauthMode === "offline"
-          ? "OpenAI Gateway：后端未启动"
-          : "OpenAI Gateway：未连接";
+          ? copy.auth.gatewayOffline
+          : copy.auth.gatewayDisconnected;
   const connectionText =
     oauthMode === "connected"
-      ? "OAuth 已连接"
+      ? copy.auth.connectionConnected
       : oauthMode === "polling"
-        ? "等待验证码"
+        ? copy.auth.connectionWaiting
         : oauthMode === "offline" || oauthMode === "mock"
-          ? "本地预览"
-          : "网关就绪";
+          ? copy.auth.connectionLocal
+          : copy.auth.connectionReady;
 
   return (
-    <div
-      className={`app-shell ${pdfOnly ? "pdf-focus" : ""} ${uiPreferences.compactMode ? "compact-mode" : ""}`}
-      data-accent={uiPreferences.accentColor}
-      data-font-scale={uiPreferences.fontScale}
-      data-pdf-background={uiPreferences.pdfBackground}
-      data-scrollbar-style={uiPreferences.scrollbarStyle}
-      data-theme-mode={uiPreferences.theme}
-    >
+    <AppCopyContext.Provider value={copy}>
+      <div
+        className={`app-shell ${pdfOnly ? "pdf-focus" : ""} ${uiPreferences.compactMode ? "compact-mode" : ""}`}
+        data-accent={uiPreferences.accentColor}
+        data-font-scale={uiPreferences.fontScale}
+        data-pdf-background={uiPreferences.pdfBackground}
+        data-scrollbar-style={uiPreferences.scrollbarStyle}
+        data-theme-mode={uiPreferences.theme}
+        lang={uiPreferences.language === "en-US" ? "en" : "zh-CN"}
+      >
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark">PP</div>
@@ -1134,36 +1286,36 @@ export default function App() {
           </div>
         </div>
         <div className="topbar-actions">
-          <div className="layout-switcher" role="group" aria-label="工作区布局">
-            <IconButton label="恢复完整工作台" active={fullWorkbench} onClick={() => setPanels(fullPanelVisibility)}>
+          <div className="layout-switcher" role="group" aria-label={copy.topbar.layoutSwitcherAria}>
+            <IconButton label={copy.topbar.restoreWorkbench} active={fullWorkbench} onClick={() => setPanels(fullPanelVisibility)}>
               <Columns3 />
             </IconButton>
-            <IconButton label={panels.rail ? "隐藏左侧目录" : "显示左侧目录"} active={panels.rail} onClick={() => togglePanel("rail")}>
+            <IconButton label={panels.rail ? copy.topbar.hideRail : copy.topbar.showRail} active={panels.rail} onClick={() => togglePanel("rail")}>
               {panels.rail ? <PanelLeftClose /> : <PanelLeftOpen />}
             </IconButton>
-            <IconButton label={panels.notes ? "隐藏讲解面板" : "显示讲解面板"} active={panels.notes} onClick={() => togglePanel("notes")}>
+            <IconButton label={panels.notes ? copy.topbar.hideNotes : copy.topbar.showNotes} active={panels.notes} onClick={() => togglePanel("notes")}>
               <NotebookText />
             </IconButton>
-            <IconButton label={panels.agent ? "隐藏助手" : "显示助手"} active={panels.agent} onClick={() => togglePanel("agent")}>
+            <IconButton label={panels.agent ? copy.topbar.hideAgent : copy.topbar.showAgent} active={panels.agent} onClick={() => togglePanel("agent")}>
               {panels.agent ? <PanelRightClose /> : <PanelRightOpen />}
             </IconButton>
-            <IconButton label={pdfOnly ? "退出 PDF 专注" : "只看 PDF"} active={pdfOnly} onClick={togglePdfOnly}>
+            <IconButton label={pdfOnly ? copy.topbar.exitPdfFocus : copy.topbar.pdfOnly} active={pdfOnly} onClick={togglePdfOnly}>
               <Maximize2 />
             </IconButton>
           </div>
-          <FileButton label="上传 PDF" accept="application/pdf" onFile={loadPdf}>
+          <FileButton label={copy.topbar.uploadPdf} accept="application/pdf" onFile={loadPdf}>
             <Upload />
           </FileButton>
-          <IconButton label="打开设置" onClick={() => openSettings("general")}>
+          <IconButton label={copy.topbar.openSettings} onClick={() => openSettings("general")}>
             <Settings2 />
           </IconButton>
           <div className="command-menu" ref={commandMenuRef}>
             <button
               className={`mini-button ${commandMenuOpen ? "active" : ""}`}
               type="button"
-              aria-label="更多操作"
+              aria-label={copy.topbar.moreActions}
               aria-expanded={commandMenuOpen}
-              title="更多操作"
+              title={copy.topbar.moreActions}
               onClick={() => setCommandMenuOpen((open) => !open)}
             >
               <MoreHorizontal />
@@ -1175,28 +1327,28 @@ export default function App() {
                   void connectOAuth();
                 }}>
                   <Lock />
-                  {oauthMode === "polling" ? "查看 OpenAI 验证码" : "连接 OpenAI OAuth"}
+                  {oauthMode === "polling" ? copy.topbar.viewOpenAiCode : copy.topbar.connectOpenAi}
                 </button>
                 <button type="button" onClick={() => {
                   jsonImportInputRef.current?.click();
                   closeCommandMenu();
                 }}>
                   <FileInput />
-                  导入 PagePair JSON
+                  {copy.topbar.importJson}
                 </button>
                 <button type="button" onClick={() => {
                   closeCommandMenu();
                   exportJson();
                 }}>
                   <FileJson />
-                  导出 JSON
+                  {copy.topbar.exportJson}
                 </button>
                 <button type="button" onClick={() => {
                   closeCommandMenu();
                   openSettings("advanced");
                 }}>
                   <Settings2 />
-                  高级设置
+                  {copy.topbar.advancedSettings}
                 </button>
               </div>
             ) : null}
@@ -1212,16 +1364,16 @@ export default function App() {
               }}
             />
           </div>
-          <button className="primary-button" type="button" onClick={() => setJobStatus("生成任务已交给后端 harness")}>
+          <button className="primary-button" type="button" onClick={() => setJobStatus(copy.status.generationQueued)}>
             <Zap />
-            生成
+            {copy.topbar.generate}
           </button>
         </div>
       </header>
 
       <section className="reader-progress">
         <div className="progress-meta">
-          <span>讲解 {currentIndex + 1} / {pack.pages.length}</span>
+          <span>{copy.common.explanationProgress(currentIndex + 1, pack.pages.length)}</span>
           <strong>{pack.document.title}</strong>
         </div>
         <input
@@ -1230,7 +1382,7 @@ export default function App() {
           max={Math.max(pack.pages.length, 1)}
           value={currentIndex + 1}
           onChange={(event) => setCurrentPageNo(pack.pages[Number(event.target.value) - 1]?.page_no || 1)}
-          aria-label="页面进度"
+          aria-label={copy.topbar.pageProgressAria}
         />
       </section>
 
@@ -1254,7 +1406,7 @@ export default function App() {
         onPreferenceChange={updatePreference}
         onResetLayout={() => {
           setPanels(fullPanelVisibility);
-          setJobStatus("工作区布局已重置");
+          setJobStatus(copy.status.layoutReset);
         }}
         onResetPreferences={resetPreferences}
         onConnectOAuth={connectOAuth}
@@ -1278,11 +1430,11 @@ export default function App() {
             <aside className="page-rail">
               <div className="rail-tools">
                 <div className="search-box">
-                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索页标题" />
+                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.rail.searchPlaceholder} />
                 </div>
                 <div className="rail-meta">
-                  <span>{pack.pages.length} 页</span>
-                  <span>{pack.pages.filter((item) => item.status === "ready").length} 已就绪</span>
+                  <span>{copy.common.pageCount(pack.pages.length)}</span>
+                  <span>{copy.common.readyCount(pack.pages.filter((item) => item.status === "ready").length)}</span>
                 </div>
               </div>
               <div className="page-list">
@@ -1297,10 +1449,10 @@ export default function App() {
                     <span className="page-copy">
                       <strong>{item.teaching.slide_title}</strong>
                       <span>
-                        {item.status === "ready" ? "已就绪" : item.status} · {item.source.parser}
+                        {item.status === "ready" ? copy.common.ready : item.status} · {item.source.parser}
                       </span>
                     </span>
-                    <span className="page-score">已对齐</span>
+                    <span className="page-score">{copy.common.aligned}</span>
                   </button>
                 ))}
               </div>
@@ -1312,14 +1464,14 @@ export default function App() {
           <Panel className="workspace-panel" defaultSize={pdfOnly ? 100 : 30} minSize={24}>
             <section className="pdf-pane">
               <PaneToolbar
-                title={pdfUrl ? `来源 PDF p.${page.page_no}` : "示例 PDF 页面"}
+                title={pdfUrl ? copy.common.sourcePdfPage(page.page_no) : copy.pdf.samplePdfPage}
                 right={
                   <div className="toolbar-actions">
-                    <IconButton label="上一页" onClick={() => movePage(-1)}>
+                    <IconButton label={copy.pdf.previousPage} onClick={() => movePage(-1)}>
                       <ChevronLeft />
                     </IconButton>
-                    <output>{page.page_no} / {pack.pages.length}</output>
-                    <IconButton label="下一页" onClick={() => movePage(1)}>
+                    <output>{currentPdfPageNo} / {pdfNavigationPageCount}</output>
+                    <IconButton label={copy.pdf.nextPage} onClick={() => movePage(1)}>
                       <ChevronRight />
                     </IconButton>
                   </div>
@@ -1327,7 +1479,13 @@ export default function App() {
               />
               <div className={`pdf-frame ${pdfUrl ? "has-pdf" : ""}`}>
                 {pdfUrl ? (
-                  <iframe title="PDF 预览" src={pdfViewerSrc} />
+                  <PdfPageRenderer
+                    documentTitle={pack.document.title}
+                    fallbackSrc={pdfViewerSrc}
+                    pageNumber={currentPdfPageNo}
+                    url={pdfUrl}
+                    onDocumentReady={handlePdfDocumentReady}
+                  />
                 ) : (
                   <SlidePreview page={page} />
                 )}
@@ -1346,11 +1504,11 @@ export default function App() {
           <Panel className="workspace-panel" hidden={!panels.notes} defaultSize={27} minSize={22}>
             <section className="notes-pane">
               <PaneToolbar
-                title="结构化讲解"
+                title={copy.notes.title}
                 right={
                   <div className="notes-toolbar-right">
-                    <span className="source-pill">来源 PDF p.{page.page_no}</span>
-                    <span className="source-pill">讲解 {currentIndex + 1} / {pack.pages.length}</span>
+                    <span className="source-pill">{copy.common.sourcePdfPage(page.page_no)}</span>
+                    <span className="source-pill">{copy.common.explanationProgress(currentIndex + 1, pack.pages.length)}</span>
                     <div className="tab-group">
                       {(["notes", "structure", "json"] as const).map((tab) => (
                         <button
@@ -1359,7 +1517,7 @@ export default function App() {
                           className={`tab-button ${activeTab === tab ? "active" : ""}`}
                           onClick={() => setActiveTab(tab)}
                         >
-                          {tab === "notes" ? "讲解" : tab === "structure" ? "结构" : "JSON"}
+                          {tab === "notes" ? copy.notes.tabNotes : tab === "structure" ? copy.notes.tabStructure : copy.notes.tabJson}
                         </button>
                       ))}
                     </div>
@@ -1389,8 +1547,8 @@ export default function App() {
                 setPendingSelectionPrompt((current) => (current?.id === id ? null : current));
               }}
               addCurrentPage={() => {
-                addContext(pageContext(pack, page));
-                setJobStatus("当前页已加入助手");
+                addContext(pageContext(pack, page, copy));
+                setJobStatus(copy.status.currentPageAdded);
               }}
               captureSelection={captureSelection}
               composerInputRef={composerInputRef}
@@ -1418,13 +1576,15 @@ export default function App() {
         </button>
         {uiPreferences.debugMode && <span>{jobStatus}</span>}
       </footer>
-    </div>
+      </div>
+    </AppCopyContext.Provider>
   );
 }
 
 function WorkspaceResizeHandle() {
+  const copy = useAppCopy();
   return (
-    <PanelResizeHandle className="workspace-resize-handle" aria-label="调整面板宽度">
+    <PanelResizeHandle className="workspace-resize-handle" aria-label={copy.topbar.resizeHandle}>
       <span />
     </PanelResizeHandle>
   );
@@ -1450,24 +1610,26 @@ function AgentPanel(props: {
   showSourcePills: boolean;
   pageAwareSuggestions: boolean;
 }) {
+  const copy = useAppCopy();
   const adapter = useMemo(
     () =>
       createPdfAgentAdapter({
         getSnapshot: props.getSnapshot,
         getPack: props.getPack,
         getPage: props.getPage,
+        copy,
         isBackendOffline: () => props.backendOffline,
         clearSelectedContext: () => props.setSelectedContext(null),
       }),
-    [props.backendOffline, props.getPage, props.getPack, props.getSnapshot, props.setSelectedContext],
+    [copy, props.backendOffline, props.getPage, props.getPack, props.getSnapshot, props.setSelectedContext],
   );
   const runtime = useLocalRuntime(adapter);
   const page = props.getPage();
-  const suggestions = pageSuggestions(page, props.pageAwareSuggestions);
-  const contextPreview = composerContextPreview(props.contexts, props.attachments);
+  const suggestions = pageSuggestions(page, props.pageAwareSuggestions, copy);
+  const contextPreview = composerContextPreview(props.contexts, props.attachments, copy);
 
   const addImages = async (files: FileList | File[]) => {
-    const images = await Promise.all([...files].filter((file) => file.type.startsWith("image/")).slice(0, 6).map(readFileAsDataUrl));
+    const images = await Promise.all([...files].filter((file) => file.type.startsWith("image/")).slice(0, 6).map((file) => readFileAsDataUrl(file, copy)));
     props.setAttachments((items) => [...items, ...images].slice(-8));
   };
 
@@ -1476,13 +1638,13 @@ function AgentPanel(props: {
       <div className="agent-toolbar">
         <div className="toolbar-title">
           <span className="agent-dot" />
-          <span>助手</span>
+          <span>{copy.common.assistant}</span>
         </div>
         <div className="toolbar-actions">
           <span className="agent-model">{props.oauthMode === "connected" ? "OAuth" : props.backendOffline ? "Local" : "OAuth"}</span>
-          <IconButton label="加入当前页" onClick={props.addCurrentPage}><FileJson /></IconButton>
-          <IconButton label="加入选区" onClick={props.captureSelection}><Bot /></IconButton>
-          <label className="mini-button" title="加入图片" aria-label="加入图片">
+          <IconButton label={copy.agent.addCurrentPage} onClick={props.addCurrentPage}><FileJson /></IconButton>
+          <IconButton label={copy.agent.addSelection} onClick={props.captureSelection}><Bot /></IconButton>
+          <label className="mini-button" title={copy.agent.addImage} aria-label={copy.agent.addImage}>
             <Image />
             <input
               type="file"
@@ -1494,14 +1656,14 @@ function AgentPanel(props: {
               }}
             />
           </label>
-          <IconButton label="清空上下文" onClick={() => props.setContexts([])}><Trash2 /></IconButton>
+          <IconButton label={copy.agent.clearContext} onClick={() => props.setContexts([])}><Trash2 /></IconButton>
         </div>
       </div>
       <div className="agent-context-strip" hidden={!props.showSourcePills || (!props.contexts.length && !props.attachments.length)}>
         {props.contexts.map((context) => (
           <span className="context-pill" key={context.id} title={context.text}>
-            <span>{contextSourceLabel(context)}</span>
-            <button type="button" onClick={() => props.setContexts((items) => items.filter((item) => item.id !== context.id))} aria-label="移除上下文">
+            <span>{contextSourceLabel(context, copy)}</span>
+            <button type="button" onClick={() => props.setContexts((items) => items.filter((item) => item.id !== context.id))} aria-label={copy.agent.removeContext}>
               <X />
             </button>
           </span>
@@ -1509,8 +1671,8 @@ function AgentPanel(props: {
         {props.attachments.map((attachment) => (
           <span className="context-pill image-pill" key={attachment.id} title={attachment.name}>
             <img src={attachment.data_url} alt="" />
-            <span>图片 · {compactText(attachment.name, 28)}</span>
-            <button type="button" onClick={() => props.setAttachments((items) => items.filter((item) => item.id !== attachment.id))} aria-label="移除图片">
+            <span>{copy.agent.imagePreview(compactText(attachment.name, 28))}</span>
+            <button type="button" onClick={() => props.setAttachments((items) => items.filter((item) => item.id !== attachment.id))} aria-label={copy.agent.removeImage}>
               <X />
             </button>
           </span>
@@ -1540,33 +1702,236 @@ function SelectionToolbar(props: {
   onExplain: (context: SelectedContext) => void;
   onSummarize: (context: SelectedContext) => void;
 }) {
+  const copy = useAppCopy();
   if (!props.state) return null;
   const { context, x, y } = props.state;
   return (
     <div
       className="selection-toolbar"
       role="toolbar"
-      aria-label="选中内容操作"
+      aria-label={copy.agent.selectionToolbarAria}
       style={{ left: x, top: y }}
       onMouseDown={(event) => event.preventDefault()}
     >
       <button type="button" onClick={() => props.onAdd(context)}>
-        添加到对话
+        {copy.agent.addToConversation}
       </button>
       <button type="button" onClick={() => props.onExplain(context)}>
-        解释选中内容
+        {copy.agent.explainSelection}
       </button>
       <button type="button" onClick={() => props.onSummarize(context)}>
-        总结选中内容
+        {copy.agent.summarizeSelection}
       </button>
     </div>
   );
+}
+
+function PdfPageRenderer({
+  documentTitle,
+  fallbackSrc,
+  pageNumber,
+  url,
+  onDocumentReady,
+}: {
+  documentTitle: string;
+  fallbackSrc: string;
+  pageNumber: number;
+  url: string;
+  onDocumentReady: (pageCount: number) => void;
+}) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textLayerRef = useRef<HTMLDivElement>(null);
+  const viewportWidth = useElementWidth(viewportRef);
+  const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
+  const [documentError, setDocumentError] = useState("");
+  const [pageStatus, setPageStatus] = useState<"loading" | "ready" | "empty-text" | "error">("loading");
+  const [pageError, setPageError] = useState("");
+  const [viewportMeta, setViewportMeta] = useState({
+    width: 0,
+    height: 0,
+    scale: 1,
+    rotation: 0,
+    pageNumber,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    setPdfDocument(null);
+    setDocumentError("");
+    setPageError("");
+    setPageStatus("loading");
+    const loadingTask = getDocument({ url });
+
+    loadingTask.promise
+      .then((document) => {
+        if (cancelled) {
+          return;
+        }
+        setPdfDocument(document);
+        onDocumentReady(document.numPages);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setDocumentError((error as Error).message || "PDF.js 无法加载该 PDF");
+        setPageStatus("error");
+      });
+
+    return () => {
+      cancelled = true;
+      void loadingTask.destroy().catch(() => undefined);
+    };
+  }, [onDocumentReady, url]);
+
+  useEffect(() => {
+    if (!pdfDocument || !canvasRef.current || !textLayerRef.current) return undefined;
+
+    let cancelled = false;
+    let renderTask: RenderTask | null = null;
+    let textLayer: TextLayer | null = null;
+    const textLayerElement = textLayerRef.current;
+    const canvas = canvasRef.current;
+
+    const renderPage = async () => {
+      setPageStatus("loading");
+      setPageError("");
+      textLayerElement.replaceChildren();
+
+      const safePageNumber = Math.min(Math.max(pageNumber, 1), pdfDocument.numPages);
+      const pdfPage = await pdfDocument.getPage(safePageNumber);
+      if (cancelled) return;
+
+      const baseViewport = pdfPage.getViewport({ scale: 1 });
+      const availableWidth = Math.max((viewportWidth || 760) - 34, 280);
+      const scale = Math.min(2.2, Math.max(0.45, availableWidth / baseViewport.width));
+      const viewport = pdfPage.getViewport({ scale });
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+      const canvasContext = canvas.getContext("2d");
+      if (!canvasContext) throw new Error("浏览器无法创建 PDF canvas context");
+
+      canvas.width = Math.floor(viewport.width * pixelRatio);
+      canvas.height = Math.floor(viewport.height * pixelRatio);
+      canvas.style.width = `${viewport.width}px`;
+      canvas.style.height = `${viewport.height}px`;
+      textLayerElement.style.width = `${viewport.width}px`;
+      textLayerElement.style.height = `${viewport.height}px`;
+      setViewportMeta({
+        width: viewport.width,
+        height: viewport.height,
+        scale,
+        rotation: viewport.rotation,
+        pageNumber: safePageNumber,
+      });
+
+      renderTask = pdfPage.render({
+        canvas,
+        canvasContext,
+        viewport,
+        transform: pixelRatio === 1 ? undefined : [pixelRatio, 0, 0, pixelRatio, 0, 0],
+        background: "rgb(255,255,255)",
+      });
+
+      const textContent = await pdfPage.getTextContent();
+      if (cancelled) return;
+
+      if (!hasSelectableText(textContent)) {
+        await renderTask.promise;
+        if (!cancelled) setPageStatus("empty-text");
+        return;
+      }
+
+      textLayer = new TextLayer({
+        textContentSource: textContent,
+        container: textLayerElement,
+        viewport,
+      });
+
+      await Promise.all([renderTask.promise, textLayer.render()]);
+      if (!cancelled) setPageStatus("ready");
+    };
+
+    void renderPage().catch((error) => {
+      if (cancelled || isPdfRenderCancel(error)) return;
+      setPageError((error as Error).message || "PDF 当前页渲染失败");
+      setPageStatus("error");
+    });
+
+    return () => {
+      cancelled = true;
+      renderTask?.cancel();
+      textLayer?.cancel();
+      textLayerElement.replaceChildren();
+    };
+  }, [pageNumber, pdfDocument, viewportWidth]);
+
+  if (documentError) {
+    return (
+      <div className="pdf-native-fallback">
+        <iframe title="PDF 预览 fallback" src={fallbackSrc} />
+        <div className="pdf-layer-note error">PDF.js 渲染失败，已保留原生预览 fallback。{documentError}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pdf-js-viewer" ref={viewportRef} aria-label={`${documentTitle} 第 ${pageNumber} 页`}>
+      <div
+        className="pdf-page-layered"
+        ref={pageRef}
+        data-page-number={viewportMeta.pageNumber}
+        data-viewport-rotation={viewportMeta.rotation}
+        data-viewport-scale={viewportMeta.scale}
+        style={{
+          width: viewportMeta.width ? `${viewportMeta.width}px` : undefined,
+          height: viewportMeta.height ? `${viewportMeta.height}px` : undefined,
+        }}
+      >
+        <canvas ref={canvasRef} className="pdf-visual-layer" />
+        <div ref={textLayerRef} className="textLayer pdf-text-layer" aria-label="PDF 可选文本层" />
+      </div>
+      {pageStatus === "loading" && <div className="pdf-layer-note">正在渲染 PDF 页面...</div>}
+      {pageStatus === "empty-text" && (
+        <div className="pdf-layer-note">当前 PDF 页没有可选文本层。可以继续查看页面，OCR/text extraction 接口预留后续接入。</div>
+      )}
+      {pageStatus === "error" && <div className="pdf-layer-note error">{pageError || "PDF 当前页渲染失败"}</div>}
+    </div>
+  );
+}
+
+function useElementWidth(ref: RefObject<HTMLElement | null>) {
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return undefined;
+    const update = () => setWidth(element.clientWidth);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+
+  return width;
+}
+
+function hasSelectableText(textContent: { items: unknown[] }) {
+  return textContent.items.some((item) => {
+    const value = item && typeof item === "object" && "str" in item ? item.str : "";
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+function isPdfRenderCancel(error: unknown) {
+  const name = (error as { name?: string })?.name || "";
+  return name === "RenderingCancelledException" || name === "AbortException";
 }
 
 function QuickSelectionPromptRunner(props: {
   prompt: QuickSelectionPrompt | null;
   onConsumed: (id: string) => void;
 }) {
+  const copy = useAppCopy();
   const thread = useThreadRuntime();
   const consumedRef = useRef<string | null>(null);
 
@@ -1592,21 +1957,22 @@ function OAuthDeviceDialog(props: {
   onOpen: () => void;
   onCancel: () => void;
 }) {
+  const copy = useAppCopy();
   const groups = splitOAuthUserCode(props.device.user_code);
 
   return (
     <section className="oauth-device-panel" role="dialog" aria-labelledby="oauth-device-title" aria-live="polite">
       <div className="oauth-device-header">
         <div>
-          <p>OpenAI Codex 登录</p>
-          <h2 id="oauth-device-title">输入网页要求的 9 位验证码</h2>
+          <p>{copy.oauth.kicker}</p>
+          <h2 id="oauth-device-title">{copy.oauth.title}</h2>
         </div>
-        <button className="oauth-device-close" type="button" aria-label="取消 OAuth 登录" onClick={props.onCancel}>
+        <button className="oauth-device-close" type="button" aria-label={copy.oauth.cancel} onClick={props.onCancel}>
           <X />
         </button>
       </div>
 
-      <div className="oauth-code-display" aria-label={`授权码 ${props.device.user_code}`}>
+      <div className="oauth-code-display" aria-label={copy.oauth.codeAria(props.device.user_code)}>
         {groups.map((group, groupIndex) => (
           <div className="oauth-code-group" key={`${group}-${groupIndex}`}>
             {groupIndex > 0 && <span className="oauth-code-separator">-</span>}
@@ -1620,16 +1986,16 @@ function OAuthDeviceDialog(props: {
       <div className="oauth-device-actions">
         <button className="oauth-secondary-button" type="button" onClick={props.onCopy}>
           {props.copied ? <Check /> : <Copy />}
-          {props.copied ? "已复制" : "复制验证码"}
+          {props.copied ? copy.oauth.copied : copy.oauth.copyCode}
         </button>
         <button className="oauth-primary-button" type="button" onClick={props.onOpen}>
           <ExternalLink />
-          打开授权页
+          {copy.oauth.openAuthPage}
         </button>
       </div>
 
       <div className="oauth-device-meta">
-        <span><Clock /> {formatSeconds(props.secondsLeft)} 后过期</span>
+        <span><Clock /> {copy.oauth.expiresIn(formatSeconds(props.secondsLeft))}</span>
         <span>{props.device.verification_uri}</span>
       </div>
     </section>
@@ -1651,6 +2017,7 @@ function AssistantThread({
   onRemoveSelectedContext: () => void;
   composerInputRef: RefObject<HTMLTextAreaElement | null>;
 }) {
+  const copy = useAppCopy();
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
       <ThreadPrimitive.Viewport className="aui-thread-viewport">
@@ -1658,7 +2025,7 @@ function AssistantThread({
           <ThreadPrimitive.Empty>
             <div className="aui-welcome">
               <span className="aui-welcome-kicker">PDF p.{page.page_no} · {compactText(page.teaching.slide_title, 36)}</span>
-              <h2>询问当前页面</h2>
+              <h2>{copy.agent.askCurrentPage}</h2>
               <div className="prompt-suggestions" aria-label="Prompt suggestions">
                 {suggestions.map((suggestion) => (
                   <span key={suggestion}>{suggestion}</span>
@@ -1692,13 +2059,14 @@ function AssistantMessage() {
 }
 
 function UserMessage() {
+  const copy = useAppCopy();
   return (
     <MessagePrimitive.Root className="aui-message user-message">
       <div className="message-bubble user-bubble">
         <MessagePrimitive.Quote>
           {(quote) => (
             <div className="message-quote">
-              <span>选中内容</span>
+              <span>{copy.agent.quoteLabel}</span>
               <p>{compactText(quote.text, 220)}</p>
             </div>
           )}
@@ -1707,7 +2075,7 @@ function UserMessage() {
       </div>
       <ActionBarPrimitive.Root className="message-actions" hideWhenRunning autohide="not-last">
         <ActionBarPrimitive.Edit asChild>
-          <button type="button" aria-label="编辑"><RefreshCw /></button>
+          <button type="button" aria-label={copy.agent.edit}><RefreshCw /></button>
         </ActionBarPrimitive.Edit>
       </ActionBarPrimitive.Root>
     </MessagePrimitive.Root>
@@ -1715,6 +2083,7 @@ function UserMessage() {
 }
 
 function AgentMessage() {
+  const copy = useAppCopy();
   const status = useAuiState((state) => state.message.status);
   const content = useAuiState((state) => state.message.content);
   const isThinking = status?.type === "running" && content.length === 0;
@@ -1722,14 +2091,14 @@ function AgentMessage() {
 
   return (
     <MessagePrimitive.Root className="aui-message assistant-message">
-      <div className="assistant-label">助手</div>
+      <div className="assistant-label">{copy.common.assistant}</div>
       <div className="message-bubble assistant-bubble">
         {isThinking && <AssistantThinkingIndicator />}
-        {isStopped && <MessageStatusNote>生成已停止</MessageStatusNote>}
+        {isStopped && <MessageStatusNote>{copy.agent.generationStopped}</MessageStatusNote>}
         <MessagePrimitive.Parts components={{ Text: MarkdownPart }} />
         <MessagePrimitive.Error>
           <ErrorPrimitive.Root className="message-error">
-            生成失败，请重试
+            {copy.agent.generationFailed}
           </ErrorPrimitive.Root>
         </MessagePrimitive.Error>
       </div>
@@ -1745,10 +2114,10 @@ function AgentMessage() {
         </BranchPickerPrimitive.Root>
         <ActionBarPrimitive.Root className="message-actions" hideWhenRunning autohide="not-last">
           <ActionBarPrimitive.Copy asChild>
-            <button type="button" aria-label="复制"><Copy /></button>
+            <button type="button" aria-label={copy.agent.copy}><Copy /></button>
           </ActionBarPrimitive.Copy>
           <ActionBarPrimitive.Reload asChild>
-            <button type="button" aria-label="重新生成"><RefreshCw /></button>
+            <button type="button" aria-label={copy.agent.regenerate}><RefreshCw /></button>
           </ActionBarPrimitive.Reload>
         </ActionBarPrimitive.Root>
       </div>
@@ -1767,6 +2136,7 @@ function AssistantComposer({
   onRemoveSelectedContext: () => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
 }) {
+  const copy = useAppCopy();
   const thread = useThreadRuntime();
 
   useEffect(() => {
@@ -1795,18 +2165,18 @@ function AssistantComposer({
         <ComposerPrimitive.Input
           ref={inputRef}
           className="aui-composer-input"
-          placeholder={selectedContext ? "基于选中内容提问" : "询问当前页面或选中内容"}
+          placeholder={selectedContext ? copy.agent.askWithSelectionPlaceholder : copy.agent.askPlaceholder}
           rows={2}
-          submitMode="ctrlEnter"
-          aria-label="助手输入框"
+          submitMode="enter"
+          aria-label={copy.agent.inputAria}
         />
         <div className="aui-composer-actions">
-          <button className="composer-tool" type="button" title="数学公式"><Sigma /></button>
+          <button className="composer-tool" type="button" title={copy.agent.formulaTitle}><Sigma /></button>
           <ComposerPrimitive.Cancel asChild>
-            <button className="composer-send" type="button" aria-label="停止"><Square /></button>
+            <button className="composer-send" type="button" aria-label={copy.agent.stop}><Square /></button>
           </ComposerPrimitive.Cancel>
           <ComposerPrimitive.Send asChild>
-            <button className="composer-send" type="button" aria-label="发送"><Send /></button>
+            <button className="composer-send" type="button" aria-label={copy.agent.send}><Send /></button>
           </ComposerPrimitive.Send>
         </div>
       </ComposerPrimitive.Root>
@@ -1821,6 +2191,7 @@ function MarkdownPart() {
 }
 
 function AssistantThinkingIndicator() {
+  const copy = useAppCopy();
   return (
     <div className="assistant-thinking" aria-label="Assistant is thinking">
       <span className="thinking-wave" aria-hidden="true">
@@ -1830,7 +2201,7 @@ function AssistantThinkingIndicator() {
         <span />
         <span />
       </span>
-      <span>正在基于当前上下文思考</span>
+      <span>{copy.agent.thinking}</span>
     </div>
   );
 }
@@ -1840,6 +2211,7 @@ function MessageStatusNote({ children }: { children: ReactNode }) {
 }
 
 function SelectedSourcePreview({ context, onRemove }: { context: SelectedContext; onRemove: () => void }) {
+  const copy = useAppCopy();
   const [expanded, setExpanded] = useState(false);
   return (
     <div className={`selected-source-preview ${expanded ? "expanded" : ""}`}>
@@ -1849,10 +2221,10 @@ function SelectedSourcePreview({ context, onRemove }: { context: SelectedContext
         onClick={() => setExpanded((current) => !current)}
         aria-expanded={expanded}
       >
-        <span className="selected-source-label">{selectedContextSourceLabel(context)}</span>
+        <span className="selected-source-label">{selectedContextSourceLabel(context, copy)}</span>
         <span className="selected-source-text">{compactText(context.text, expanded ? 520 : 118)}</span>
       </button>
-      <button className="selected-source-remove" type="button" onClick={onRemove} aria-label="移除选中内容">
+      <button className="selected-source-remove" type="button" onClick={onRemove} aria-label={copy.agent.removeSelectedContent}>
         <X />
       </button>
     </div>
@@ -1872,9 +2244,10 @@ function PaneToolbar({ title, badge, right }: { title: string; badge?: string; r
 }
 
 function SlidePreview({ page }: { page: PageData }) {
+  const copy = useAppCopy();
   return (
     <article className="slide-preview">
-      <div className="slide-kicker">第 {page.page_no} 页</div>
+      <div className="slide-kicker">{copy.common.pageLabel(page.page_no)}</div>
       <h2>{page.teaching.slide_title}</h2>
       <div className="slide-grid">
         <div>
@@ -1934,14 +2307,15 @@ function ReaderMarkdown({ className, text }: { className: string; text?: string 
 }
 
 function StructurePanel({ page }: { page: PageData }) {
+  const copy = useAppCopy();
   const rows = [
-    ["页号", `第 ${page.page_no} 页`],
-    ["解析器", page.source.parser],
-    ["OCR", page.source.ocr_used ? "已启用" : "未启用"],
-    ["对齐置信度", `${Math.round(page.teaching.confidence * 100)}%`],
-    ["前置概念", page.teaching.prerequisites.join("、") || "无"],
-    ["图表说明", page.teaching.visual_explanations.join("；") || "无"],
-    ["解析文本", page.source.text_md || "无"],
+    [copy.structure.pageNo, copy.common.pageLabel(page.page_no)],
+    [copy.structure.parser, page.source.parser],
+    [copy.structure.ocr, page.source.ocr_used ? copy.structure.ocrEnabled : copy.structure.ocrDisabled],
+    [copy.structure.confidence, `${Math.round(page.teaching.confidence * 100)}%`],
+    [copy.structure.prerequisites, page.teaching.prerequisites.join(copy.common.listSeparator) || copy.common.none],
+    [copy.structure.visualNotes, page.teaching.visual_explanations.join(copy.common.sentenceSeparator) || copy.common.none],
+    [copy.structure.sourceText, page.source.text_md || copy.common.none],
   ];
   return (
     <div className="structure-grid">

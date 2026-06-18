@@ -3,8 +3,10 @@ export type AccentColor = "clay" | "graphite" | "sage";
 export type PdfBackground = "paper" | "plain" | "soft";
 export type FontScale = "compact" | "default" | "large";
 export type ScrollbarStyle = "thin" | "subtle" | "native";
+export type Language = "zh-CN" | "en-US";
 
 export type UiPreferences = {
+  language: Language;
   autoSaveSession: boolean;
   theme: ThemeMode;
   accentColor: AccentColor;
@@ -21,6 +23,7 @@ export type UiPreferences = {
 export const uiPreferencesStorageKey = "pagepair.uiPreferences.v1";
 
 export const defaultUiPreferences: UiPreferences = {
+  language: "zh-CN",
   autoSaveSession: true,
   theme: "system",
   accentColor: "clay",
