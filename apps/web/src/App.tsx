@@ -52,6 +52,13 @@ import {
   useState,
 } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
+import { SettingsModal, type SettingsSection } from "./SettingsModal";
+import {
+  defaultUiPreferences,
+  loadUiPreferences,
+  type UiPreferences,
+  uiPreferencesStorageKey,
+} from "./settings";
 
 type PagePack = {
   schema: string;
@@ -277,6 +284,45 @@ function compactText(value: string, max = 120) {
   return text.length > max ? `${text.slice(0, max - 1)}...` : text;
 }
 
+function contextSourceLabel(context: AgentContextItem) {
+  if (context.type === "formula") return `Formula · Page ${context.page_no}`;
+  if (context.type === "selection") return `Selected passage · Page ${context.page_no}`;
+  if (context.type === "pdf_reference") return `PDF reference · Page ${context.page_no}`;
+  return `Using page ${context.page_no} · ${compactText(context.source || context.title, 28)}`;
+}
+
+function composerContextPreview(contexts: AgentContextItem[], attachments: AgentAttachment[]) {
+  if (contexts.length) {
+    const first = contexts[contexts.length - 1];
+    const extra = contexts.length > 1 ? ` +${contexts.length - 1}` : "";
+    return `${contextSourceLabel(first)}${extra}`;
+  }
+  if (attachments.length) {
+    const first = attachments[attachments.length - 1];
+    const extra = attachments.length > 1 ? ` +${attachments.length - 1}` : "";
+    return `Using image · ${compactText(first.name, 28)}${extra}`;
+  }
+  return "";
+}
+
+function pageSuggestions(page: PageData, pageAware: boolean) {
+  if (!pageAware) {
+    return [
+      "Explain the selected passage",
+      "Generate concise study notes",
+      "Find missing assumptions",
+    ];
+  }
+  const title = compactText(page.teaching.slide_title, 42);
+  const concept = page.teaching.concepts[0] || "this page";
+  return [
+    `Explain "${title}"`,
+    `Generate exam-style notes for page ${page.page_no}`,
+    `Quiz me on ${concept}`,
+    "Find the missing assumptions",
+  ];
+}
+
 function splitOAuthUserCode(value: string) {
   const compact = value.replace(/[^a-z0-9]/gi, "").toUpperCase();
   if (compact.length === 9) return [compact.slice(0, 4), compact.slice(4)];
@@ -444,6 +490,9 @@ export default function App() {
   const [oauthCodeCopied, setOauthCodeCopied] = useState(false);
   const [oauthSecondsLeft, setOauthSecondsLeft] = useState(0);
   const [jobStatus, setJobStatus] = useState("本地原型");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
+  const [uiPreferences, setUiPreferences] = useState<UiPreferences>(() => loadUiPreferences());
   const [contexts, setContexts] = useState<AgentContextItem[]>([]);
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const lastSelectionRef = useRef<AgentContextItem | null>(null);
@@ -469,6 +518,21 @@ export default function App() {
       const currentPdfOnly = !current.rail && !current.notes && !current.agent;
       return currentPdfOnly ? fullPanelVisibility : { rail: false, notes: false, agent: false };
     });
+  }, []);
+
+  const openSettings = useCallback((section: SettingsSection = "general") => {
+    setSettingsSection(section);
+    setSettingsOpen(true);
+  }, []);
+
+  const updatePreference = useCallback(<K extends keyof UiPreferences>(key: K, value: UiPreferences[K]) => {
+    setUiPreferences((current) => ({ ...current, [key]: value }));
+  }, []);
+
+  const resetPreferences = useCallback(() => {
+    setUiPreferences(defaultUiPreferences);
+    window.localStorage.removeItem(uiPreferencesStorageKey);
+    setJobStatus("本地 UI 设置已重置");
   }, []);
 
   const stopOAuthTimers = useCallback(() => {
@@ -550,6 +614,10 @@ export default function App() {
     document.addEventListener("selectionchange", handleSelectionChange);
     return () => document.removeEventListener("selectionchange", handleSelectionChange);
   }, [handleSelectionChange]);
+
+  useEffect(() => {
+    window.localStorage.setItem(uiPreferencesStorageKey, JSON.stringify(uiPreferences));
+  }, [uiPreferences]);
 
   const refreshOAuthStatus = async () => {
     try {
@@ -737,9 +805,24 @@ export default function App() {
         : oauthMode === "offline"
           ? "OpenAI Gateway: 后端未启动"
           : "OpenAI Gateway: 未连接";
+  const connectionText =
+    oauthMode === "connected"
+      ? "OAuth connected"
+      : oauthMode === "polling"
+        ? "Waiting for code"
+        : oauthMode === "offline" || oauthMode === "mock"
+          ? "Local preview"
+          : "Gateway ready";
 
   return (
-    <div className={`app-shell ${pdfOnly ? "pdf-focus" : ""}`}>
+    <div
+      className={`app-shell ${pdfOnly ? "pdf-focus" : ""} ${uiPreferences.compactMode ? "compact-mode" : ""}`}
+      data-accent={uiPreferences.accentColor}
+      data-font-scale={uiPreferences.fontScale}
+      data-pdf-background={uiPreferences.pdfBackground}
+      data-scrollbar-style={uiPreferences.scrollbarStyle}
+      data-theme-mode={uiPreferences.theme}
+    >
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark">PP</div>
@@ -782,7 +865,7 @@ export default function App() {
           <IconButton label="导出 JSON" onClick={exportJson}>
             <FileJson />
           </IconButton>
-          <IconButton label="阅读设置">
+          <IconButton label="打开设置" onClick={() => openSettings("general")}>
             <Settings2 />
           </IconButton>
           <button className="primary-button" type="button" onClick={() => setJobStatus("生成任务已交给后端 harness")}>
@@ -817,6 +900,26 @@ export default function App() {
           onCancel={cancelOAuthLogin}
         />
       )}
+
+      <SettingsModal
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        activeSection={settingsSection}
+        onSectionChange={setSettingsSection}
+        preferences={uiPreferences}
+        onPreferenceChange={updatePreference}
+        onResetLayout={() => {
+          setPanels(fullPanelVisibility);
+          setJobStatus("工作区布局已重置");
+        }}
+        onResetPreferences={resetPreferences}
+        onConnectOAuth={connectOAuth}
+        oauthMode={oauthMode}
+        oauthAccount={oauthAccount}
+        providerStatus={authText}
+        jobStatus={jobStatus}
+        documentTitle={pack.document.title}
+      />
 
       <main className="workspace" data-pane-count={visiblePaneCount}>
         <PanelGroup orientation="horizontal" className="workspace-panels">
@@ -878,7 +981,7 @@ export default function App() {
                   <SlidePreview page={page} />
                 )}
               </div>
-              {page.source.text_md && (
+              {uiPreferences.showPageSummaryHint && page.source.text_md && (
                 <div className="pdf-source-strip">
                   <Sigma />
                   <p>{page.source.text_md}</p>
@@ -935,14 +1038,19 @@ export default function App() {
               getPage={getPage}
               backendOffline={oauthMode === "offline" || oauthMode === "mock"}
               oauthMode={oauthMode}
+              showSourcePills={uiPreferences.showSourcePills}
+              pageAwareSuggestions={uiPreferences.pageAwareSuggestions}
             />
           </Panel>
         </PanelGroup>
       </main>
 
       <footer className="statusbar">
-        <span>{authText}</span>
-        <span>{jobStatus}</span>
+        <button className={`connection-indicator ${oauthMode}`} type="button" onClick={() => openSettings("account")}>
+          <span />
+          {connectionText}
+        </button>
+        {uiPreferences.debugMode && <span>{jobStatus}</span>}
       </footer>
     </div>
   );
@@ -968,6 +1076,8 @@ function AgentPanel(props: {
   getPage: () => PageData;
   backendOffline: boolean;
   oauthMode: OAuthMode;
+  showSourcePills: boolean;
+  pageAwareSuggestions: boolean;
 }) {
   const adapter = useMemo(
     () =>
@@ -980,6 +1090,9 @@ function AgentPanel(props: {
     [props.backendOffline, props.getPage, props.getPack, props.getSnapshot],
   );
   const runtime = useLocalRuntime(adapter);
+  const page = props.getPage();
+  const suggestions = pageSuggestions(page, props.pageAwareSuggestions);
+  const contextPreview = composerContextPreview(props.contexts, props.attachments);
 
   const addImages = async (files: FileList | File[]) => {
     const images = await Promise.all([...files].filter((file) => file.type.startsWith("image/")).slice(0, 6).map(readFileAsDataUrl));
@@ -1012,21 +1125,19 @@ function AgentPanel(props: {
           <IconButton label="清空上下文" onClick={() => props.setContexts([])}><Trash2 /></IconButton>
         </div>
       </div>
-      <div className="agent-context-strip">
+      <div className="agent-context-strip" hidden={!props.showSourcePills || (!props.contexts.length && !props.attachments.length)}>
         {props.contexts.map((context) => (
-          <span className="context-pill" key={context.id}>
-            <span>{context.type === "formula" ? "Using formula" : `Using page ${context.page_no}`}</span>
-            <strong>{compactText(context.source || context.title, 36)}</strong>
+          <span className="context-pill" key={context.id} title={context.text}>
+            <span>{contextSourceLabel(context)}</span>
             <button type="button" onClick={() => props.setContexts((items) => items.filter((item) => item.id !== context.id))} aria-label="移除上下文">
               <X />
             </button>
           </span>
         ))}
         {props.attachments.map((attachment) => (
-          <span className="context-pill image-pill" key={attachment.id}>
+          <span className="context-pill image-pill" key={attachment.id} title={attachment.name}>
             <img src={attachment.data_url} alt="" />
-            <span>Using image</span>
-            <strong>{compactText(attachment.name, 32)}</strong>
+            <span>Image · {compactText(attachment.name, 28)}</span>
             <button type="button" onClick={() => props.setAttachments((items) => items.filter((item) => item.id !== attachment.id))} aria-label="移除图片">
               <X />
             </button>
@@ -1034,7 +1145,7 @@ function AgentPanel(props: {
         ))}
       </div>
       <AssistantRuntimeProvider runtime={runtime}>
-        <AssistantThread />
+        <AssistantThread page={page} suggestions={suggestions} contextPreview={contextPreview} />
       </AssistantRuntimeProvider>
     </aside>
   );
@@ -1092,18 +1203,27 @@ function OAuthDeviceDialog(props: {
   );
 }
 
-function AssistantThread() {
+function AssistantThread({
+  page,
+  suggestions,
+  contextPreview,
+}: {
+  page: PageData;
+  suggestions: string[];
+  contextPreview: string;
+}) {
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
       <ThreadPrimitive.Viewport className="aui-thread-viewport">
         <div className="aui-thread-inner">
           <ThreadPrimitive.Empty>
             <div className="aui-welcome">
-              <h2>What should we look at?</h2>
+              <span className="aui-welcome-kicker">Page {page.page_no} · {compactText(page.teaching.slide_title, 36)}</span>
+              <h2>Ask about this page</h2>
               <div className="prompt-suggestions" aria-label="Prompt suggestions">
-                <span>Explain the selected passage</span>
-                <span>Compare this page with the notes</span>
-                <span>Find missing assumptions</span>
+                {suggestions.map((suggestion) => (
+                  <span key={suggestion}>{suggestion}</span>
+                ))}
               </div>
             </div>
           </ThreadPrimitive.Empty>
@@ -1114,7 +1234,7 @@ function AssistantThread() {
             <ThreadPrimitive.ScrollToBottom asChild>
               <button className="scroll-bottom" type="button">↓</button>
             </ThreadPrimitive.ScrollToBottom>
-            <AssistantComposer />
+            <AssistantComposer contextPreview={contextPreview} />
           </ThreadPrimitive.ViewportFooter>
         </div>
       </ThreadPrimitive.Viewport>
@@ -1177,25 +1297,33 @@ function AgentMessage() {
   );
 }
 
-function AssistantComposer() {
+function AssistantComposer({ contextPreview }: { contextPreview: string }) {
   return (
-    <ComposerPrimitive.Root className="aui-composer-root">
-      <ComposerPrimitive.Input
-        className="aui-composer-input"
-        placeholder="Ask with selected PDF context"
-        rows={2}
-        aria-label="Agent message input"
-      />
-      <div className="aui-composer-actions">
-        <button className="composer-tool" type="button" title="数学公式"><Sigma /></button>
-        <ComposerPrimitive.Cancel asChild>
-          <button className="composer-send" type="button" aria-label="停止"><Square /></button>
-        </ComposerPrimitive.Cancel>
-        <ComposerPrimitive.Send asChild>
-          <button className="composer-send" type="button" aria-label="发送"><Send /></button>
-        </ComposerPrimitive.Send>
-      </div>
-    </ComposerPrimitive.Root>
+    <div className="composer-shell">
+      {contextPreview && (
+        <div className="composer-context-preview">
+          <span />
+          {contextPreview}
+        </div>
+      )}
+      <ComposerPrimitive.Root className="aui-composer-root">
+        <ComposerPrimitive.Input
+          className="aui-composer-input"
+          placeholder="Ask about this page or selected source"
+          rows={2}
+          aria-label="Agent message input"
+        />
+        <div className="aui-composer-actions">
+          <button className="composer-tool" type="button" title="数学公式"><Sigma /></button>
+          <ComposerPrimitive.Cancel asChild>
+            <button className="composer-send" type="button" aria-label="停止"><Square /></button>
+          </ComposerPrimitive.Cancel>
+          <ComposerPrimitive.Send asChild>
+            <button className="composer-send" type="button" aria-label="发送"><Send /></button>
+          </ComposerPrimitive.Send>
+        </div>
+      </ComposerPrimitive.Root>
+    </div>
   );
 }
 
