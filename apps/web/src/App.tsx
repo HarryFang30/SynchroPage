@@ -20,13 +20,13 @@ import {
 } from "@assistant-ui/react-markdown";
 import "katex/dist/katex.min.css";
 import {
-  GlobalWorkerOptions,
+  PDFWorker,
   TextLayer,
   getDocument,
   type PDFDocumentProxy,
   type RenderTask,
 } from "pdfjs-dist";
-import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import PdfJsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
 import {
   Bot,
   Check,
@@ -83,8 +83,6 @@ import {
   type UiPreferences,
   uiPreferencesStorageKey,
 } from "./settings";
-
-GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const AppCopyContext = createContext<AppCopy>(getAppCopy("zh-CN"));
 
@@ -1819,7 +1817,8 @@ function PdfPageRenderer({
     setDocumentError("");
     setPageError("");
     setPageStatus("loading");
-    const loadingTask = getDocument({ url });
+    const pdfWorker = PDFWorker.create({ port: new PdfJsWorker() });
+    const loadingTask = getDocument({ url, worker: pdfWorker });
 
     loadingTask.promise
       .then((document) => {
