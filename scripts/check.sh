@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 PYTHONPATH=src python3 -m compileall -q src tests
 PYTHONPATH=src python3 -m unittest discover -s tests
-npm run build
+npm --prefix apps/web run build
 
 if command -v ruby >/dev/null 2>&1; then
   ruby -e 'require "yaml"; YAML.load_file("config/auth/openai_oauth.yaml"); YAML.load_file("config/harness/course_pdf_harness.yaml"); YAML.load_file("config/prompts/course_agent.prompt.yaml")'

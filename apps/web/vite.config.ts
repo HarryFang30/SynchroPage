@@ -3,7 +3,6 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react()],
-  root: "apps/web",
   server: {
     host: "127.0.0.1",
     port: 5173,
@@ -13,7 +12,7 @@ export default defineConfig({
     }
   },
   build: {
-    outDir: "../../dist/web",
+    outDir: "dist",
     emptyOutDir: true
   }
 });

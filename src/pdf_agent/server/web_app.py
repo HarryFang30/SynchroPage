@@ -25,7 +25,7 @@ from pdf_agent.gateway import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_WEB_ROOT = PROJECT_ROOT / "apps" / "web"
-DIST_WEB_ROOT = PROJECT_ROOT / "dist" / "web"
+DIST_WEB_ROOT = SOURCE_WEB_ROOT / "dist"
 WEB_ROOT = DIST_WEB_ROOT if DIST_WEB_ROOT.exists() else SOURCE_WEB_ROOT
 OAUTH_CONFIG_PATH = PROJECT_ROOT / "config" / "auth" / "openai_oauth.yaml"
 DEFAULT_AGENT_MODEL = os.environ.get("PDF_AGENT_MODEL", "gpt-5.5")
@@ -253,7 +253,7 @@ def create_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     *,
-    web_root: Path = WEB_ROOT,
+    web_root: Path | None = None,
     oauth_config_path: Path = OAUTH_CONFIG_PATH,
     model: str = DEFAULT_AGENT_MODEL,
 ) -> PdfAgentHttpServer:
@@ -264,11 +264,15 @@ def create_server(
     return PdfAgentHttpServer(
         (host, port),
         PdfAgentRequestHandler,
-        web_root=web_root,
+        web_root=web_root or _default_web_root(),
         oauth_api=oauth_api,
         chat_gateway=chat_gateway,
         runner=runner,
     )
+
+
+def _default_web_root() -> Path:
+    return DIST_WEB_ROOT if (DIST_WEB_ROOT / "index.html").exists() else SOURCE_WEB_ROOT
 
 
 def main(argv: list[str] | None = None) -> int:

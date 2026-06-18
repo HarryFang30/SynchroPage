@@ -49,19 +49,21 @@ tests/
 
 生成物不要进仓库：`dist/`、`node_modules/`、`__pycache__/`、runtime data、`.env*` 都已被忽略。
 
+仓库根目录只保留仓库级配置。前端自己的 `package.json`、`package-lock.json`、`tsconfig*.json` 和 `vite.config.ts` 全部位于 `apps/web/`。
+
 ## 环境要求
 
 - Python 3.11 或更新版本。
 - Node.js 20 或更新版本。当前开发机使用 Node `v24.6.0`、npm `11.12.1`。
 - Ruby 可选。`scripts/check.sh` 会在 Ruby 存在时用它校验 YAML 语法。
-- 首次 `npm install` 和真实 OpenAI OAuth / 模型调用需要网络。
+- 首次安装前端依赖和真实 OpenAI OAuth / 模型调用需要网络。
 
 ## 安装
 
 在仓库根目录执行：
 
 ```bash
-npm install
+npm --prefix apps/web install
 ```
 
 当前 Python 后端只依赖标准库，不强制安装包。直接从源码运行时使用 `PYTHONPATH=src`。
@@ -78,7 +80,7 @@ python3 -m pip install -e .
 pdf-agent-web --port 8765
 ```
 
-注意：`pdf-agent-web` 只启动 Python server；前端仍需要先执行 `npm run build`，或者用 `./scripts/run-web.sh` 自动完成构建。
+注意：`pdf-agent-web` 只启动 Python server；前端仍需要先执行 `npm --prefix apps/web run build`，或者用 `./scripts/run-web.sh` 自动完成构建。
 
 ## 快速启动
 
@@ -97,7 +99,7 @@ http://127.0.0.1:8765/
 等价手动命令：
 
 ```bash
-npm run build
+npm --prefix apps/web run build
 PYTHONPATH=src python3 -m pdf_agent.server.web_app --port 8765
 ```
 
@@ -118,7 +120,7 @@ PYTHONPATH=src python3 -m pdf_agent.server.web_app --port 8765
 终端 B：启动 Vite。
 
 ```bash
-npm run dev
+npm --prefix apps/web run dev
 ```
 
 打开：
@@ -127,7 +129,7 @@ npm run dev
 http://127.0.0.1:5173/
 ```
 
-`vite.config.ts` 会把 `/api` 和 `/auth` 代理到 `http://127.0.0.1:8765`，所以前端开发时不需要额外 CORS 配置。
+`apps/web/vite.config.ts` 会把 `/api` 和 `/auth` 代理到 `http://127.0.0.1:8765`，所以前端开发时不需要额外 CORS 配置。
 
 ## OpenAI OAuth 使用方式
 
@@ -187,7 +189,7 @@ POST   /auth/openai/default
 DELETE /auth/openai/accounts/:account_id
 ```
 
-静态资源优先从 `dist/web` 提供。没有构建产物时会指向 `apps/web`，源码开发请使用 Vite。
+静态资源优先从 `apps/web/dist` 提供。没有构建产物时会指向 `apps/web`，源码开发请使用 Vite。
 
 ## 校验
 
@@ -202,10 +204,10 @@ DELETE /auth/openai/accounts/:account_id
 ```bash
 PYTHONPATH=src python3 -m compileall -q src tests
 PYTHONPATH=src python3 -m unittest discover -s tests
-npm run build
+npm --prefix apps/web run build
 ```
 
-`npm run build` 可能出现 Vite chunk-size warning，因为 assistant-ui 和 markdown renderer 被打进主 bundle。这个 warning 不影响本地运行。
+`npm --prefix apps/web run build` 可能出现 Vite chunk-size warning，因为 assistant-ui 和 markdown renderer 被打进主 bundle。这个 warning 不影响本地运行。
 
 ## 关键文档
 

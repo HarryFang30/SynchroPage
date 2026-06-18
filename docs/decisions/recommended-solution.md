@@ -146,7 +146,7 @@ GET  /api/documents/:document_id/export?format=json|markdown
 - 右侧：讲解 Markdown、概念、图表说明、JSON tab。
 - 顶部：OpenAI OAuth 入口、上传 PDF、导入/导出 JSON、生成按钮。
 
-当前仓库中的 `apps/web/` 是 React/TypeScript PagePair Reader，右侧 Agent Panel 基于 `@assistant-ui/react`。运行时先构建到 `dist/web`，再由 `pdf_agent.server.web_app` 提供静态资源、OAuth 路由和 `/api/agent/chat` 后端代理：
+当前仓库中的 `apps/web/` 是自包含的 React/TypeScript PagePair Reader，右侧 Agent Panel 基于 `@assistant-ui/react`。前端自己的 `package.json`、`tsconfig*.json` 和 `vite.config.ts` 都放在 `apps/web/`，运行时先构建到 `apps/web/dist`，再由 `pdf_agent.server.web_app` 提供静态资源、OAuth 路由和 `/api/agent/chat` 后端代理：
 
 ```bash
 ./scripts/run-web.sh --port 8765
