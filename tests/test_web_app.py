@@ -32,6 +32,17 @@ class WebAppTest(unittest.TestCase):
                     "pageNumber": 7,
                     "sectionTitle": "讲解区选区",
                 },
+                "pdfContext": {
+                    "documentTitle": "Linear Algebra",
+                    "pageCount": 3,
+                    "truncated": False,
+                    "truncationPolicy": "all-pages",
+                    "pages": [
+                        {"page_no": 1, "title": "Intro", "text_md": "Vector spaces"},
+                        {"page_no": 2, "title": "Basis", "text_md": "Basis and span"},
+                        {"page_no": 3, "title": "Eigenvectors", "text_md": "Eigenvectors"},
+                    ],
+                },
                 "parts": [
                     {"type": "text", "text": "解释这个公式"},
                     {
@@ -61,11 +72,53 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(payload["model"], "gpt-5.5")
         content = payload["input"][0]["content"]
         self.assertEqual(content[0]["type"], "input_text")
+        self.assertIn("Selected text:\n\nD_i = Q_i^+", content[0]["text"])
+        self.assertIn("User question:\n\n解释这个公式", content[0]["text"])
+        self.assertIn("# PDF document context", content[0]["text"])
+        self.assertIn("[p.1] Intro", content[0]["text"])
+        self.assertIn("[p.3] Eigenvectors", content[0]["text"])
         self.assertIn("# User selected source material", content[0]["text"])
         self.assertIn("D_i = Q_i^+", content[0]["text"])
         self.assertIn("$$Ax = \\lambda x$$", content[0]["text"])
         self.assertIn("上一轮问题", content[0]["text"])
         self.assertEqual(content[1], {"type": "input_image", "image_url": "data:image/png;base64,AAAA"})
+
+    def test_agent_payload_truncates_large_pdf_context_to_edges(self) -> None:
+        payload = _build_responses_payload(
+            {
+                "document": {"id": "doc_big", "title": "Large PDF"},
+                "page": {"page_no": 30, "source": {}, "teaching": {"slide_title": "Middle"}},
+                "input": "解释这段",
+                "selectedContext": {
+                    "text": "selected middle text",
+                    "sourceType": "pdf-page",
+                    "documentTitle": "Large PDF",
+                    "pdfPageNumber": 30,
+                },
+                "pdfContext": {
+                    "documentTitle": "Large PDF",
+                    "pageCount": 60,
+                    "truncated": True,
+                    "truncationPolicy": "first-last-10",
+                    "pages": [
+                        {"page_no": page_no, "title": f"Page {page_no}", "text_md": f"Body {page_no}"}
+                        for page_no in range(1, 61)
+                    ],
+                },
+            },
+            default_model="fallback-model",
+        )
+
+        prompt = payload["input"][0]["content"][0]["text"]
+        self.assertIn("Included pages: first 10 and last 10 pages", prompt)
+        self.assertIn("[p.1] Page 1", prompt)
+        self.assertIn("[p.10] Page 10", prompt)
+        self.assertIn("[p.51] Page 51", prompt)
+        self.assertIn("[p.60] Page 60", prompt)
+        self.assertIn("Selected text:\n\nselected middle text", prompt)
+        self.assertIn("User question:\n\n解释这段", prompt)
+        self.assertNotIn("[p.11] Page 11", prompt)
+        self.assertNotIn("[p.30] Page 30", prompt)
 
     def test_extracts_streaming_response_text(self) -> None:
         stream = "\n".join(

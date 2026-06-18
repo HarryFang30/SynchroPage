@@ -31,6 +31,9 @@ OAUTH_CONFIG_PATH = PROJECT_ROOT / "config" / "auth" / "openai_oauth.yaml"
 DEFAULT_AGENT_MODEL = os.environ.get("PDF_AGENT_MODEL", "gpt-5.5")
 MAX_CONTEXT_ITEMS = 10
 MAX_CONTEXT_CHARS = 16_000
+MAX_PDF_CONTEXT_CHARS = 120_000
+PDF_CONTEXT_FULL_PAGE_LIMIT = 50
+PDF_CONTEXT_EDGE_PAGE_COUNT = 10
 MAX_TRANSCRIPT_MESSAGES = 8
 MAX_IMAGE_ATTACHMENTS = 8
 MAX_IMAGE_DATA_URL_CHARS = 8_000_000
@@ -314,9 +317,12 @@ def _build_agent_prompt(body: Mapping[str, Any]) -> str:
     teaching = page.get("teaching") if isinstance(page.get("teaching"), Mapping) else {}
     source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
     messages = _transcript_messages(body.get("messages"))
-    selected_context = _selected_context(body.get("selectedContext"))
+    selected_context_value = body.get("selectedContext")
+    selected_context = _selected_context(selected_context_value)
     contexts = [*_context_items(body.get("context")), *_context_parts(body.get("parts"))]
-    input_text = _truncate(_text_from_parts(body.get("parts")) or str(body.get("input") or ""), MAX_CONTEXT_CHARS)
+    raw_input = str(body.get("input") or "").strip() or _text_from_parts(body.get("parts"))
+    input_text = _build_user_request(raw_input, selected_context_value)
+    pdf_context = _pdf_document_context(body.get("pdfContext"))
 
     sections = [
         "# User request",
@@ -324,10 +330,16 @@ def _build_agent_prompt(body: Mapping[str, Any]) -> str:
         "# Document",
         f"Title: {_string_value(document.get('title'), 'Untitled')}",
         f"Document ID: {_string_value(document.get('id'), 'unknown')}",
-        "# Current page",
-        f"Page: {_string_value(page.get('page_no'), 'unknown')}",
-        f"Title: {_string_value(teaching.get('slide_title'), 'Untitled page')}",
     ]
+    if pdf_context:
+        sections.extend(["# PDF document context", pdf_context])
+    sections.extend(
+        [
+            "# Current page",
+            f"Page: {_string_value(page.get('page_no'), 'unknown')}",
+            f"Title: {_string_value(teaching.get('slide_title'), 'Untitled page')}",
+        ]
+    )
     if source.get("text_md"):
         sections.extend(["Source text:", _truncate(str(source.get("text_md")), MAX_CONTEXT_CHARS)])
     if teaching.get("speaker_notes_md"):
@@ -347,10 +359,93 @@ def _build_agent_prompt(body: Mapping[str, Any]) -> str:
     return "\n\n".join(section for section in sections if section)
 
 
+def _build_user_request(input_text: str, selected_context: Any) -> str:
+    cleaned_input = _truncate(input_text.strip(), MAX_CONTEXT_CHARS)
+    selected_text = _selected_context_text(selected_context)
+    if not selected_text:
+        return cleaned_input
+    if cleaned_input.lstrip().lower().startswith("selected text:"):
+        return cleaned_input
+    user_question = cleaned_input or "Please answer using the selected text."
+    return "\n\n".join(
+        [
+            "Selected text:",
+            selected_text,
+            "User question:",
+            user_question,
+        ]
+    )
+
+
+def _selected_context_text(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    return _truncate(str(value.get("text") or "").strip(), MAX_CONTEXT_CHARS)
+
+
+def _pdf_document_context(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    pages = value.get("pages")
+    if not isinstance(pages, list):
+        return ""
+
+    page_count = _int_value(value.get("pageCount"), len(pages))
+    allowed_pages = set(_pdf_context_page_numbers(page_count))
+    truncated = bool(value.get("truncated")) or page_count > PDF_CONTEXT_FULL_PAGE_LIMIT
+    policy = "first 10 and last 10 pages" if truncated else "all pages"
+
+    chunks = [
+        f"Document title: {_string_value(value.get('documentTitle'), 'Untitled')}",
+        f"Page count: {page_count}",
+        f"Included pages: {policy}",
+    ]
+    remaining = MAX_PDF_CONTEXT_CHARS - sum(len(chunk) for chunk in chunks)
+    included = 0
+    for item in pages:
+        if not isinstance(item, Mapping):
+            continue
+        page_no = _int_value(item.get("page_no"), 0)
+        if page_no <= 0 or page_no not in allowed_pages:
+            continue
+        title = _string_value(item.get("title"), f"PDF p.{page_no}")
+        text = str(item.get("text_md") or "").strip()
+        if not text:
+            text = "[No embedded text extracted for this page.]"
+        prefix = f"[p.{page_no}] {title}\n"
+        available_for_text = remaining - len(prefix)
+        if available_for_text <= 0:
+            chunks.append("[PDF context truncated by server character budget.]")
+            break
+        truncated_by_budget = len(text) > available_for_text
+        block = f"{prefix}{_truncate(text, available_for_text) if truncated_by_budget else text}"
+        if truncated_by_budget:
+            chunks.extend([block, "[PDF context truncated by server character budget.]"])
+            break
+        if remaining - len(block) < 0:
+            chunks.append("[PDF context truncated by server character budget.]")
+            break
+        chunks.append(block)
+        remaining -= len(block)
+        included += 1
+        if not truncated and included >= PDF_CONTEXT_FULL_PAGE_LIMIT:
+            break
+    return "\n\n".join(chunks if included else [])
+
+
+def _pdf_context_page_numbers(page_count: int) -> list[int]:
+    total = max(0, page_count)
+    if total <= PDF_CONTEXT_FULL_PAGE_LIMIT:
+        return list(range(1, total + 1))
+    pages = set(range(1, min(PDF_CONTEXT_EDGE_PAGE_COUNT, total) + 1))
+    pages.update(range(max(1, total - PDF_CONTEXT_EDGE_PAGE_COUNT + 1), total + 1))
+    return sorted(pages)
+
+
 def _selected_context(value: Any) -> str:
     if not isinstance(value, Mapping):
         return ""
-    text = _truncate(str(value.get("text") or ""), MAX_CONTEXT_CHARS)
+    text = _selected_context_text(value)
     if not text:
         return ""
     source_type = _string_value(value.get("sourceType"), "unknown")
@@ -614,6 +709,13 @@ def _string_value(value: Any, default: str) -> str:
         return default
     cleaned = str(value).strip()
     return cleaned or default
+
+
+def _int_value(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _truncate(value: str, max_chars: int) -> str:

@@ -120,6 +120,21 @@ type PageData = {
   status: string;
 };
 
+type PdfContextPage = {
+  page_no: number;
+  title?: string;
+  text_md: string;
+};
+
+type PdfContextPayload = {
+  documentId: string;
+  documentTitle: string;
+  pageCount: number;
+  truncated: boolean;
+  truncationPolicy: "all-pages" | "first-last-10";
+  pages: PdfContextPage[];
+};
+
 type AgentContextItem = {
   id: string;
   type: "page" | "selection" | "formula" | "pdf_reference";
@@ -188,6 +203,7 @@ type AgentSnapshot = {
   contexts: AgentContextItem[];
   attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
+  pdfContext: PdfContextPayload | null;
 };
 
 type OAuthMode = "unknown" | "ready" | "connected" | "polling" | "offline" | "mock";
@@ -207,6 +223,9 @@ const fullPanelVisibility: PanelVisibility = {
   notes: true,
   agent: true,
 };
+
+const PDF_CONTEXT_FULL_PAGE_LIMIT = 50;
+const PDF_CONTEXT_EDGE_PAGE_COUNT = 10;
 
 const samplePack: PagePack = {
   schema: "lecture_pairpack.v1",
@@ -480,6 +499,97 @@ function selectedContextPayload(context: SelectedContext) {
   };
 }
 
+function buildSelectedQuestionPrompt(question: string, selectedContext: SelectedContext | null, copy: AppCopy) {
+  const userQuestion = question.trim() || copy.agent.continuePrompt;
+  if (!selectedContext?.text.trim()) return userQuestion;
+  return [
+    "Selected text:",
+    selectedContext.text.trim(),
+    "User question:",
+    userQuestion,
+  ].join("\n\n");
+}
+
+function pdfContextPageNumbers(pageCount: number) {
+  const total = Math.max(0, Math.floor(pageCount));
+  if (total <= PDF_CONTEXT_FULL_PAGE_LIMIT) {
+    return Array.from({ length: total }, (_, index) => index + 1);
+  }
+  const pages = new Set<number>();
+  for (let pageNo = 1; pageNo <= Math.min(PDF_CONTEXT_EDGE_PAGE_COUNT, total); pageNo += 1) {
+    pages.add(pageNo);
+  }
+  for (let pageNo = Math.max(1, total - PDF_CONTEXT_EDGE_PAGE_COUNT + 1); pageNo <= total; pageNo += 1) {
+    pages.add(pageNo);
+  }
+  return Array.from(pages).sort((left, right) => left - right);
+}
+
+function textContentToPlainText(textContent: { items?: unknown[] }) {
+  const lines: string[] = [];
+  let current = "";
+  for (const item of textContent.items || []) {
+    if (!item || typeof item !== "object" || !("str" in item)) continue;
+    const text = String((item as { str?: unknown }).str || "");
+    if (!text) continue;
+    current += text;
+    if ((item as { hasEOL?: boolean }).hasEOL) {
+      lines.push(current.trimEnd());
+      current = "";
+    } else {
+      current += " ";
+    }
+  }
+  if (current.trim()) lines.push(current.trimEnd());
+  return lines.join("\n").replace(/[ \t]+\n/g, "\n").trim();
+}
+
+async function extractPdfContextFromDocument(
+  document: PDFDocumentProxy,
+  documentId: string,
+  documentTitle: string,
+): Promise<PdfContextPayload> {
+  const pageCount = document.numPages;
+  const pages: PdfContextPage[] = [];
+  for (const pageNo of pdfContextPageNumbers(pageCount)) {
+    const page = await document.getPage(pageNo);
+    const textContent = await page.getTextContent();
+    pages.push({
+      page_no: pageNo,
+      title: `PDF p.${pageNo}`,
+      text_md: textContentToPlainText(textContent),
+    });
+  }
+  return {
+    documentId,
+    documentTitle,
+    pageCount,
+    truncated: pageCount > PDF_CONTEXT_FULL_PAGE_LIMIT,
+    truncationPolicy: pageCount > PDF_CONTEXT_FULL_PAGE_LIMIT ? "first-last-10" : "all-pages",
+    pages,
+  };
+}
+
+function buildPdfContextFromPack(pack: PagePack): PdfContextPayload {
+  const pageCount = Math.max(pack.document.page_count || pack.pages.length, pack.pages.length);
+  const wantedPages = new Set(pdfContextPageNumbers(pageCount));
+  const pages = pack.pages
+    .filter((page) => wantedPages.has(page.page_no))
+    .map((page) => ({
+      page_no: page.page_no,
+      title: page.teaching.slide_title || `PDF p.${page.page_no}`,
+      text_md: page.source.text_md || page.teaching.speaker_notes_md || "",
+    }));
+  return {
+    documentId: pack.document.id,
+    documentTitle: pack.document.title,
+    pageCount,
+    truncated: pageCount > PDF_CONTEXT_FULL_PAGE_LIMIT,
+    truncationPolicy: pageCount > PDF_CONTEXT_FULL_PAGE_LIMIT ? "first-last-10" : "all-pages",
+    pages,
+  };
+}
+
 function composerContextPreview(contexts: AgentContextItem[], attachments: AgentAttachment[], copy: AppCopy) {
   if (contexts.length) {
     const first = contexts[contexts.length - 1];
@@ -741,9 +851,10 @@ function createPdfAgentAdapter(args: {
         : null;
       const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
       const latestUserText = latestUser ? messageText(latestUser) : "";
+      const promptInput = buildSelectedQuestionPrompt(latestUserText, snapshot.selectedContext, args.copy);
 
       const parts = [
-        latestUserText ? { type: "text", text: latestUserText } : null,
+        promptInput ? { type: "text", text: promptInput } : null,
         selectedAgentContext
           ? {
               type: "quote",
@@ -786,11 +897,12 @@ function createPdfAgentAdapter(args: {
           content: messageText(message),
           parts: [{ type: "text", text: messageText(message) }],
         })),
-        input: latestUserText || args.copy.agent.continuePrompt,
+        input: promptInput,
         parts,
         attachments: snapshot.attachments,
         context: selectedAgentContext ? [selectedAgentContext, ...snapshot.contexts] : snapshot.contexts,
         selectedContext: snapshot.selectedContext ? selectedContextPayload(snapshot.selectedContext) : null,
+        pdfContext: snapshot.pdfContext,
       };
 
       try {
@@ -882,6 +994,7 @@ export default function App() {
   const [contexts, setContexts] = useState<AgentContextItem[]>([]);
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [selectedContext, setSelectedContext] = useState<SelectedContext | null>(null);
+  const [pdfTextContext, setPdfTextContext] = useState<PdfContextPayload | null>(null);
   const [pendingSelectionPrompt, setPendingSelectionPrompt] = useState<QuickSelectionPrompt | null>(null);
   const lastSelectionRef = useRef<SelectedContext | null>(null);
   const appShellRef = useRef<HTMLDivElement>(null);
@@ -988,8 +1101,13 @@ export default function App() {
   }, []);
 
   const getSnapshot = useCallback(
-    () => ({ contexts, attachments, selectedContext }),
-    [attachments, contexts, selectedContext],
+    () => ({
+      contexts,
+      attachments,
+      selectedContext,
+      pdfContext: pdfUrl ? pdfTextContext : buildPdfContextFromPack(pack),
+    }),
+    [attachments, contexts, pack, pdfTextContext, pdfUrl, selectedContext],
   );
   const getPack = useCallback(() => pack, [pack]);
   const getPage = useCallback(() => page, [page]);
@@ -1241,6 +1359,7 @@ export default function App() {
     setPdfPageCount(null);
     setCurrentPageNo(1);
     setSelectedContext(null);
+    setPdfTextContext(null);
     setPack((current) => ({
       ...current,
       document: {
@@ -1263,12 +1382,17 @@ export default function App() {
     }));
   }, []);
 
+  const handlePdfContextReady = useCallback((context: PdfContextPayload) => {
+    setPdfTextContext(context);
+  }, []);
+
   const loadJson = (file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
       try {
         const next = normalizePack(JSON.parse(String(reader.result)), copy);
         setPack(next);
+        setPdfTextContext(null);
         setCurrentPageNo(next.pages[0]?.page_no || 1);
         setJobStatus(copy.status.jsonImported);
       } catch (error) {
@@ -1518,11 +1642,13 @@ export default function App() {
               <div className={`pdf-frame ${pdfUrl ? "has-pdf" : ""}`}>
                 {pdfUrl ? (
                   <PdfPageRenderer
+                    documentId={pack.document.id}
                     documentTitle={pack.document.title}
                     fallbackSrc={pdfViewerSrc}
                     pageNumber={currentPdfPageNo}
                     url={pdfUrl}
                     onDocumentReady={handlePdfDocumentReady}
+                    onPdfContextReady={handlePdfContextReady}
                   />
                 ) : (
                   <SlidePreview page={page} />
@@ -1767,17 +1893,21 @@ function SelectionToolbar(props: {
 }
 
 function PdfPageRenderer({
+  documentId,
   documentTitle,
   fallbackSrc,
   pageNumber,
   url,
   onDocumentReady,
+  onPdfContextReady,
 }: {
+  documentId: string;
   documentTitle: string;
   fallbackSrc: string;
   pageNumber: number;
   url: string;
   onDocumentReady: (pageCount: number) => void;
+  onPdfContextReady: (context: PdfContextPayload) => void;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
@@ -1812,6 +1942,11 @@ function PdfPageRenderer({
         }
         setPdfDocument(document);
         onDocumentReady(document.numPages);
+        void extractPdfContextFromDocument(document, documentId, documentTitle)
+          .then((context) => {
+            if (!cancelled) onPdfContextReady(context);
+          })
+          .catch(() => undefined);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -1823,7 +1958,7 @@ function PdfPageRenderer({
       cancelled = true;
       void loadingTask.destroy().catch(() => undefined);
     };
-  }, [onDocumentReady, url]);
+  }, [documentId, documentTitle, onDocumentReady, onPdfContextReady, url]);
 
   useEffect(() => {
     if (!pdfDocument || !canvasRef.current || !textLayerRef.current) return undefined;
