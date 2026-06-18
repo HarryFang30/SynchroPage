@@ -1369,6 +1369,7 @@ output {
   --agent-leading-title: 1.26;
   --agent-leading-compact: 1.42;
   grid-template-rows: 52px auto minmax(0, 1fr);
+  min-width: 0;
   background: color-mix(in oklch, var(--background) 94%, white);
   container-type: inline-size;
   font-family: var(--agent-font-ui);
@@ -1540,6 +1541,7 @@ output {
 
 .aui-thread-root {
   min-height: 0;
+  min-width: 0;
   height: 100%;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
@@ -1548,6 +1550,7 @@ output {
 
 .aui-thread-viewport {
   min-height: 0;
+  min-width: 0;
   height: 100%;
   overflow: hidden;
   overflow-x: hidden;
@@ -1555,6 +1558,7 @@ output {
 
 .aui-thread-inner {
   min-height: 0;
+  min-width: 0;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -1632,6 +1636,8 @@ output {
   flex-direction: column;
   gap: 20px;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 2px 1px 4px 0;
@@ -1640,6 +1646,8 @@ output {
 .aui-message {
   display: grid;
   gap: 5px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .user-message {
@@ -1659,6 +1667,8 @@ output {
 }
 
 .message-bubble {
+  min-width: 0;
+  width: fit-content;
   max-width: min(100%, 68ch);
   border: 1px solid color-mix(in oklch, var(--line) 38%, transparent);
   border-radius: 7px;
@@ -1699,6 +1709,8 @@ output {
 }
 
 .assistant-bubble {
+  width: min(100%, 68ch);
+  max-width: 100%;
   border-color: transparent;
   background: transparent;
   padding: 0;
@@ -1828,11 +1840,18 @@ output {
 
 .markdown-body {
   min-width: 0;
+  max-width: 100%;
   color: color-mix(in oklch, var(--text) 94%, var(--text-strong));
   font-family: var(--agent-font-reading, var(--font-ui));
   font-size: var(--agent-text-body, 15.5px);
   line-height: var(--agent-leading-body, 1.66);
   overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-body > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .markdown-body h1,
@@ -1865,6 +1884,8 @@ output {
 
 .markdown-body p {
   margin: 0 0 0.85em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown-body p:last-child,
@@ -1876,12 +1897,14 @@ output {
 .markdown-body ul,
 .markdown-body ol {
   margin: 0.45em 0 0.85em;
-  padding-left: 1.25em;
+  padding-left: clamp(1em, 4cqi, 1.35em);
 }
 
 .markdown-body li {
   margin: 0.22em 0;
   padding-left: 0.12em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown-body strong,
@@ -1901,13 +1924,42 @@ output {
 
 .markdown-body table {
   width: max-content;
+  min-width: 100%;
   max-width: 100%;
   display: block;
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-soft) 58%, transparent) transparent;
   border-collapse: collapse;
   font-family: var(--agent-font-ui, var(--font-ui));
   font-size: var(--agent-text-sm, 13px);
   line-height: 1.45;
+  -webkit-overflow-scrolling: touch;
+}
+
+.markdown-body table::-webkit-scrollbar,
+.markdown-body pre::-webkit-scrollbar,
+.markdown-body .katex-display::-webkit-scrollbar {
+  height: 9px;
+}
+
+.markdown-body table::-webkit-scrollbar-thumb,
+.markdown-body pre::-webkit-scrollbar-thumb,
+.markdown-body .katex-display::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted-soft) 58%, transparent);
+  background-clip: padding-box;
+}
+
+.markdown-body table::-webkit-scrollbar-track,
+.markdown-body pre::-webkit-scrollbar-track,
+.markdown-body .katex-display::-webkit-scrollbar-track {
+  background: color-mix(in oklch, var(--line) 28%, transparent);
+  border-radius: 999px;
 }
 
 .markdown-body th,
@@ -1916,6 +1968,7 @@ output {
   padding: 6px 8px;
   text-align: left;
   vertical-align: top;
+  white-space: nowrap;
 }
 
 .markdown-body th {
@@ -1933,8 +1986,13 @@ output {
 }
 
 .markdown-body pre {
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
   max-width: 100%;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-soft) 58%, transparent) transparent;
   border: 1px solid color-mix(in oklch, var(--line) 62%, transparent);
   border-radius: 7px;
   background: color-mix(in oklch, var(--secondary) 36%, var(--background));
@@ -1943,6 +2001,8 @@ output {
   font-family: var(--agent-font-mono, var(--font-mono));
   font-size: var(--agent-text-sm, 13px);
   line-height: 1.55;
+  white-space: pre;
+  -webkit-overflow-scrolling: touch;
 }
 
 .markdown-body pre code {
@@ -1958,7 +2018,12 @@ output {
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-soft) 58%, transparent) transparent;
   padding: 0.35em 0;
+  -webkit-overflow-scrolling: touch;
 }
 
 .markdown-body .katex {
