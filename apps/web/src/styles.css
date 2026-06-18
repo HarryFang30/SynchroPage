@@ -1,30 +1,55 @@
+@import "@fontsource/geist-sans/latin.css";
+@import "@fontsource-variable/source-serif-4/opsz.css";
+@import "@fontsource-variable/jetbrains-mono/wght.css";
+
 :root {
   color-scheme: light;
-  --bg: #eef3f7;
-  --surface: #f3f6f9;
-  --panel: #f9fbfd;
-  --panel-strong: #ffffff;
-  --line: #dce4ec;
-  --line-strong: #b7c3cf;
-  --text: #15202b;
-  --text-strong: #0d141c;
-  --muted: #697789;
-  --muted-soft: #8d9bad;
-  --soft: #eaf0f5;
-  --soft-strong: #e1e9f0;
-  --teal: #147676;
-  --teal-deep: #0d585b;
-  --teal-soft: #dcefee;
-  --blue: #3e6f9a;
-  --blue-soft: #e6eef7;
-  --coral: #c75d49;
-  --coral-soft: #f4dfd9;
-  --gold: #a17319;
-  --gold-soft: #f2e7cf;
-  --violet: #5d639a;
-  --shadow: 0 16px 34px rgba(25, 36, 49, 0.09);
-  --shadow-soft: 0 1px 2px rgba(25, 36, 49, 0.05), 0 10px 26px rgba(25, 36, 49, 0.07);
-  --shadow-pop: 0 14px 36px rgba(13, 88, 91, 0.18);
+  --background: oklch(0.98 0.01 95.10);
+  --foreground: oklch(0.34 0.03 95.72);
+  --card: oklch(0.98 0.01 95.10);
+  --card-foreground: oklch(0.19 0.00 106.59);
+  --popover: oklch(1.00 0 0);
+  --popover-foreground: oklch(0.27 0.02 98.94);
+  --primary: oklch(0.62 0.14 39.04);
+  --primary-foreground: oklch(1.00 0 0);
+  --secondary: oklch(0.92 0.01 92.99);
+  --secondary-foreground: oklch(0.43 0.02 98.60);
+  --muted-token: oklch(0.955 0.0124 91.52);
+  --muted-foreground: oklch(0.61 0.01 97.42);
+  --accent: oklch(0.92 0.01 92.99);
+  --accent-foreground: oklch(0.27 0.02 98.94);
+  --border: oklch(0.9078 0.0094 106.59);
+  --input: oklch(0.76 0.02 98.35);
+  --ring: oklch(0.59 0.17 253.06);
+  --sidebar: oklch(0.97 0.01 98.88);
+  --sidebar-foreground: oklch(0.36 0.01 106.65);
+  --font-heading: "Geist Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Source Serif 4 Variable", "Source Serif 4", Georgia, "Times New Roman", "PingFang SC", "Microsoft YaHei", serif;
+  --font-ui: "Geist Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono Variable", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --bg: var(--background);
+  --surface: oklch(0.965 0.012 95.10);
+  --panel: var(--card);
+  --panel-strong: var(--popover);
+  --line: var(--border);
+  --line-strong: oklch(0.84 0.018 92.99);
+  --text: var(--foreground);
+  --text-strong: var(--card-foreground);
+  --muted: var(--muted-foreground);
+  --muted-soft: oklch(0.70 0.015 97.42);
+  --soft: var(--secondary);
+  --soft-strong: oklch(0.885 0.018 92.99);
+  --brand: var(--primary);
+  --brand-deep: oklch(0.50 0.12 39.04);
+  --brand-soft: oklch(0.93 0.035 68);
+  --coral: var(--primary);
+  --coral-soft: oklch(0.91 0.045 52);
+  --gold: oklch(0.62 0.10 78);
+  --gold-soft: oklch(0.93 0.04 82);
+  --violet: oklch(0.52 0.07 330);
+  --shadow: 0 1px 3px 0 oklch(0 0 0 / 0.07), 0 1px 2px -1px oklch(0 0 0 / 0.06);
+  --shadow-soft: 0 1px 2px oklch(0 0 0 / 0.04);
+  --shadow-pop: 0 10px 28px oklch(0.38 0.08 48 / 0.18);
 }
 
 * {
@@ -42,11 +67,10 @@ body,
 body {
   overflow: hidden;
   background:
-    linear-gradient(180deg, #f8fafc 0, var(--bg) 168px, #e9eff5 100%);
+    radial-gradient(circle at 12% 0%, oklch(0.965 0.026 72 / 0.72), transparent 26%),
+    linear-gradient(180deg, oklch(0.985 0.012 95.1), var(--bg) 210px, oklch(0.955 0.014 96) 100%);
   color: var(--text);
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-ui);
   letter-spacing: 0;
   text-rendering: geometricPrecision;
 }
@@ -71,7 +95,7 @@ button:disabled {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--teal) 22%, transparent);
+  background: color-mix(in oklch, var(--brand) 22%, transparent);
 }
 
 ::-webkit-scrollbar {
@@ -82,7 +106,7 @@ button:disabled {
 ::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--muted-soft) 52%, transparent);
+  background: color-mix(in oklch, var(--muted-soft) 52%, transparent);
   background-clip: padding-box;
 }
 
@@ -102,7 +126,7 @@ svg {
   min-width: 0;
   height: 100vh;
   display: grid;
-  grid-template-rows: 72px 42px minmax(0, 1fr) 34px;
+  grid-template-rows: 70px 38px minmax(0, 1fr) 32px;
   overflow: hidden;
 }
 
@@ -112,10 +136,9 @@ svg {
   justify-content: space-between;
   gap: 18px;
   padding: 11px 18px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel-strong) 88%, transparent);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.78) inset;
-  backdrop-filter: blur(18px) saturate(1.04);
+  border-bottom: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  background: color-mix(in oklch, var(--background) 84%, transparent);
+  backdrop-filter: blur(18px) saturate(1.02);
 }
 
 .brand {
@@ -130,14 +153,14 @@ svg {
   height: 40px;
   display: grid;
   place-items: center;
-  border: 1px solid color-mix(in srgb, #ffffff 18%, transparent);
+  border: 1px solid color-mix(in oklch, var(--primary) 20%, transparent);
   border-radius: 8px;
   background:
-    linear-gradient(145deg, color-mix(in srgb, var(--teal-deep) 92%, #ffffff), var(--teal));
-  color: white;
+    linear-gradient(145deg, color-mix(in oklch, var(--primary) 82%, white), var(--primary));
+  color: var(--primary-foreground);
   font-size: 13px;
   font-weight: 900;
-  box-shadow: 0 10px 24px rgba(13, 88, 91, 0.2);
+  box-shadow: none;
 }
 
 .brand h1,
@@ -157,6 +180,7 @@ svg {
   margin-top: 4px;
   overflow: hidden;
   color: var(--muted);
+  font-family: var(--font-body);
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -175,11 +199,10 @@ svg {
   align-items: center;
   gap: 3px;
   padding: 3px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in oklch, var(--line) 78%, transparent);
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 82%, var(--soft)), color-mix(in srgb, var(--soft) 72%, white));
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.82) inset;
+  background: color-mix(in oklch, var(--secondary) 72%, transparent);
+  box-shadow: none;
 }
 
 .layout-switcher .mini-button {
@@ -191,24 +214,24 @@ svg {
 }
 
 .layout-switcher .mini-button:hover {
-  border-color: color-mix(in srgb, var(--line-strong) 72%, transparent);
-  background: color-mix(in srgb, var(--panel-strong) 76%, var(--soft));
+  border-color: transparent;
+  background: color-mix(in oklch, var(--primary) 8%, var(--background));
   box-shadow: none;
 }
 
 .layout-switcher .mini-button.active {
-  border-color: color-mix(in srgb, var(--teal) 34%, var(--line));
+  border-color: color-mix(in oklch, var(--primary) 18%, var(--line));
   background: var(--panel-strong);
-  color: var(--teal);
-  box-shadow: 0 1px 7px rgba(25, 36, 49, 0.1);
+  color: var(--brand);
+  box-shadow: var(--shadow-soft);
 }
 
 .mini-button,
 .primary-button,
 .tab-button {
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in oklch, var(--line) 86%, transparent);
   border-radius: 8px;
-  background: var(--panel-strong);
+  background: color-mix(in oklch, var(--background) 88%, white);
   color: var(--text);
 }
 
@@ -218,7 +241,7 @@ svg {
   height: 37px;
   display: grid;
   place-items: center;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.85) inset, 0 1px 2px rgba(25, 36, 49, 0.04);
+  box-shadow: none;
   transition: transform 140ms ease, border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
 }
 
@@ -232,19 +255,19 @@ svg {
 .mini-button:hover,
 .tab-button:hover {
   border-color: var(--line-strong);
-  background: color-mix(in srgb, var(--soft) 72%, var(--panel-strong));
+  background: color-mix(in oklch, var(--primary) 7%, var(--background));
 }
 
 .mini-button:hover {
   transform: translateY(-1px);
-  box-shadow: var(--shadow-soft);
+  box-shadow: none;
 }
 
 .mini-button.active,
 .tab-button.active {
-  border-color: color-mix(in srgb, var(--teal) 42%, var(--line));
-  background: color-mix(in srgb, var(--teal-soft) 78%, white);
-  color: var(--teal);
+  border-color: color-mix(in oklch, var(--brand) 26%, var(--line));
+  background: color-mix(in oklch, var(--brand-soft) 72%, white);
+  color: var(--brand);
 }
 
 .mini-button:focus-visible,
@@ -256,7 +279,7 @@ svg {
 .branch-picker button:focus-visible,
 .composer-tool:focus-visible,
 .composer-send:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--teal) 36%, transparent);
+  outline: 2px solid color-mix(in oklch, var(--brand) 36%, transparent);
   outline-offset: 2px;
 }
 
@@ -266,10 +289,10 @@ svg {
   align-items: center;
   gap: 8px;
   padding: 0 16px;
-  border-color: var(--teal-deep);
+  border-color: var(--brand-deep);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--teal) 94%, white), var(--teal-deep));
-  color: white;
+    linear-gradient(180deg, color-mix(in oklch, var(--brand) 94%, white), var(--brand-deep));
+  color: var(--primary-foreground);
   font-weight: 800;
   box-shadow: var(--shadow-pop);
   transition: transform 140ms ease, filter 140ms ease;
@@ -287,7 +310,7 @@ svg {
   gap: 14px;
   padding: 7px 18px;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  background: color-mix(in oklch, var(--surface) 82%, transparent);
 }
 
 .progress-meta {
@@ -308,7 +331,7 @@ svg {
 
 .progress-meta strong,
 input[type="range"] {
-  accent-color: var(--teal);
+  accent-color: var(--brand);
 }
 
 input[type="range"] {
@@ -324,11 +347,11 @@ input[type="range"] {
   display: grid;
   gap: 14px;
   padding: 17px;
-  border: 1px solid color-mix(in srgb, var(--teal) 28%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--brand) 28%, var(--line));
   border-radius: 8px;
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 94%, var(--teal-soft)), #f5fafb);
-  box-shadow: 0 24px 60px rgba(25, 36, 49, 0.22), 0 0 0 1px rgba(255, 255, 255, 0.78) inset;
+    linear-gradient(180deg, color-mix(in oklch, var(--panel-strong) 94%, var(--brand-soft)), color-mix(in oklch, var(--background) 84%, white));
+  box-shadow: 0 24px 60px oklch(0.34 0.03 95 / 0.16), 0 0 0 1px oklch(1 0 0 / 0.78) inset;
 }
 
 .oauth-device-header {
@@ -344,7 +367,7 @@ input[type="range"] {
 }
 
 .oauth-device-header p {
-  color: var(--teal);
+  color: var(--brand);
   font-size: 12px;
   font-weight: 900;
 }
@@ -394,14 +417,14 @@ input[type="range"] {
   height: 50px;
   display: grid;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--line-strong) 78%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--line-strong) 78%, var(--line));
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--popover);
   color: var(--text-strong);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 24px;
   font-weight: 900;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 8px 18px rgba(25, 36, 49, 0.07);
+  box-shadow: 0 1px 0 oklch(1 0 0 / 0.9) inset, 0 8px 18px oklch(0.34 0.03 95 / 0.07);
 }
 
 .oauth-device-actions {
@@ -424,11 +447,11 @@ input[type="range"] {
 }
 
 .oauth-primary-button {
-  border-color: var(--teal-deep);
+  border-color: var(--brand-deep);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--teal) 96%, white), var(--teal-deep));
+    linear-gradient(180deg, color-mix(in oklch, var(--brand) 96%, white), var(--brand-deep));
   color: white;
-  box-shadow: 0 8px 18px rgba(13, 88, 91, 0.18);
+  box-shadow: 0 8px 18px color-mix(in oklch, var(--brand) 24%, transparent);
 }
 
 .oauth-secondary-button {
@@ -455,28 +478,74 @@ input[type="range"] {
 
 .workspace {
   min-height: 0;
-  display: grid;
-  grid-template-columns: var(--workspace-columns, 232px minmax(296px, 1.04fr) minmax(312px, 0.96fr) minmax(328px, 0.92fr));
-  gap: 11px;
-  padding: 11px;
-  transition: grid-template-columns 180ms ease;
+  padding: 0 12px 12px;
 }
 
-.pdf-focus .workspace {
-  gap: 12px;
+.workspace-panels {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--line) 74%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background) 88%, white);
+  box-shadow: var(--shadow-soft);
+}
+
+.workspace-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-resize-handle {
+  position: relative;
+  width: 9px;
+  flex: 0 0 9px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklch, var(--secondary) 42%, transparent);
+  transition: background 140ms ease;
+}
+
+.workspace-resize-handle::before {
+  width: 1px;
+  height: 100%;
+  background: color-mix(in oklch, var(--line) 72%, transparent);
+  content: "";
+}
+
+.workspace-resize-handle span {
+  position: absolute;
+  width: 3px;
+  height: 32px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--primary) 30%, transparent);
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.workspace-resize-handle:hover,
+.workspace-resize-handle[data-resize-handle-active] {
+  background: color-mix(in oklch, var(--primary) 9%, var(--background));
+}
+
+.workspace-resize-handle:hover span,
+.workspace-resize-handle[data-resize-handle-active] span {
+  opacity: 1;
 }
 
 .page-rail,
 .pdf-pane,
 .notes-pane,
 .agent-panel {
+  height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--panel) 86%, var(--panel-strong));
-  box-shadow: var(--shadow);
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in oklch, var(--background) 92%, white);
+  box-shadow: none;
 }
 
 .page-rail {
@@ -487,27 +556,27 @@ input[type="range"] {
 
 .rail-tools {
   padding: 12px 12px 11px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel-strong) 70%, transparent);
+  border-bottom: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  background: color-mix(in oklch, var(--sidebar) 80%, var(--background));
 }
 
 .search-box input {
   width: 100%;
   height: 38px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in oklch, var(--line) 80%, transparent);
   border-radius: 8px;
   outline: 0;
-  background: color-mix(in srgb, var(--panel-strong) 88%, var(--soft));
+  background: color-mix(in oklch, var(--background) 84%, white);
   color: var(--text);
   padding: 0 11px;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.85) inset;
+  box-shadow: none;
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
 }
 
 .search-box input:focus {
-  border-color: color-mix(in srgb, var(--teal) 42%, var(--line));
+  border-color: color-mix(in oklch, var(--brand) 42%, var(--line));
   background: var(--panel-strong);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 11%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand) 10%, transparent);
 }
 
 .rail-meta {
@@ -541,15 +610,14 @@ input[type="range"] {
 }
 
 .page-item:hover {
-  background: color-mix(in srgb, var(--panel-strong) 62%, var(--soft));
+  background: color-mix(in oklch, var(--primary) 6%, var(--background));
   transform: translateX(1px);
 }
 
 .page-item.active {
-  border-color: color-mix(in srgb, var(--teal) 32%, var(--line));
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--teal-soft) 82%, white), color-mix(in srgb, var(--panel-strong) 74%, var(--teal-soft)));
-  box-shadow: 0 8px 18px rgba(20, 118, 118, 0.1);
+  border-color: color-mix(in oklch, var(--primary) 22%, var(--line));
+  background: color-mix(in oklch, var(--primary) 8%, var(--background));
+  box-shadow: none;
 }
 
 .page-item.active::before {
@@ -557,7 +625,7 @@ input[type="range"] {
   inset: 8px auto 8px 0;
   width: 3px;
   border-radius: 999px;
-  background: var(--teal);
+  background: var(--brand);
   content: "";
 }
 
@@ -566,15 +634,15 @@ input[type="range"] {
   display: grid;
   place-items: center;
   border-radius: 7px;
-  background: var(--soft-strong);
+  background: color-mix(in oklch, var(--secondary) 78%, white);
   color: var(--muted);
   font-size: 12px;
   font-weight: 900;
 }
 
 .page-item.active .page-number {
-  background: var(--teal);
-  color: white;
+  background: var(--brand);
+  color: var(--primary-foreground);
 }
 
 .page-copy {
@@ -602,7 +670,7 @@ input[type="range"] {
 }
 
 .page-score {
-  color: var(--teal);
+  color: var(--brand);
   font-size: 12px;
   font-weight: 900;
 }
@@ -619,7 +687,7 @@ input[type="range"] {
 }
 
 .pdf-focus .pdf-pane {
-  background: color-mix(in srgb, var(--panel-strong) 82%, var(--blue-soft));
+  background: var(--background);
 }
 
 .pdf-focus .pdf-frame {
@@ -639,10 +707,9 @@ input[type="range"] {
   justify-content: space-between;
   gap: 10px;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 84%, var(--soft)), color-mix(in srgb, var(--panel) 88%, var(--panel-strong)));
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72) inset;
+  border-bottom: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  background: color-mix(in oklch, var(--background) 88%, white);
+  box-shadow: none;
 }
 
 .toolbar-title {
@@ -651,8 +718,8 @@ input[type="range"] {
   align-items: center;
   gap: 8px;
   color: var(--text-strong);
-  font-size: 14px;
-  font-weight: 900;
+  font-size: 13px;
+  font-weight: 760;
 }
 
 .toolbar-title span:last-child {
@@ -664,16 +731,16 @@ input[type="range"] {
 
 .status-dot,
 .agent-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 999px;
-  background: var(--teal);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--teal) 11%, transparent);
+  background: var(--brand);
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--brand) 11%, transparent);
 }
 
 .agent-dot {
-  background: var(--blue);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 14%, transparent);
+  background: var(--brand);
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--brand) 11%, transparent);
 }
 
 .confidence-badge {
@@ -682,11 +749,11 @@ input[type="range"] {
   display: inline-grid;
   place-items: center;
   border-radius: 7px;
-  background: color-mix(in srgb, var(--teal-soft) 78%, white);
-  color: var(--teal);
+  background: color-mix(in oklch, var(--brand-soft) 72%, white);
+  color: var(--brand);
   font-size: 12px;
   font-weight: 900;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.86) inset;
+  box-shadow: none;
 }
 
 output {
@@ -702,11 +769,7 @@ output {
   display: grid;
   place-items: center;
   padding: 18px 17px;
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--blue) 8%, transparent) 1px, transparent 1px),
-    linear-gradient(color-mix(in srgb, var(--blue) 7%, transparent) 1px, transparent 1px),
-    linear-gradient(180deg, #f6f9fb, #eef4f8);
-  background-size: 24px 24px, 24px 24px, auto;
+  background: linear-gradient(180deg, color-mix(in oklch, var(--background) 92%, white), color-mix(in oklch, var(--secondary) 42%, var(--background)));
 }
 
 .pdf-frame iframe {
@@ -715,7 +778,7 @@ output {
   border: 0;
   border-radius: 8px;
   background: white;
-  box-shadow: var(--shadow-soft);
+  box-shadow: 0 1px 3px oklch(0 0 0 / 0.06);
 }
 
 .pdf-source-strip {
@@ -726,9 +789,8 @@ output {
   gap: 9px;
   overflow: auto;
   padding: 10px 13px;
-  border-top: 1px solid var(--line);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 80%, var(--blue-soft)), color-mix(in srgb, var(--blue-soft) 52%, var(--panel-strong)));
+  border-top: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  background: color-mix(in oklch, var(--secondary) 52%, var(--background));
   color: var(--muted);
   font-size: 12px;
   line-height: 1.58;
@@ -736,7 +798,7 @@ output {
 
 .pdf-source-strip svg {
   margin-top: 2px;
-  color: var(--violet);
+  color: var(--primary);
 }
 
 .pdf-source-strip p {
@@ -750,11 +812,10 @@ output {
   width: min(100%, 720px);
   aspect-ratio: 16 / 10;
   padding: 36px;
-  border: 1px solid color-mix(in srgb, var(--line) 86%, white);
+  border: 1px solid color-mix(in oklch, var(--line) 78%, white);
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, #ffffff, #fbfcfd 58%, #f6f9fb);
-  box-shadow: 0 24px 54px rgba(25, 36, 49, 0.14), 0 1px 0 rgba(255, 255, 255, 0.92) inset;
+  background: linear-gradient(180deg, color-mix(in oklch, var(--background) 76%, white), color-mix(in oklch, var(--background) 86%, white));
+  box-shadow: 0 18px 42px oklch(0.34 0.03 95 / 0.10);
 }
 
 .slide-kicker {
@@ -786,17 +847,17 @@ output {
 .slide-lines span {
   height: 12px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--soft-strong) 74%, white);
+  background: color-mix(in oklch, var(--soft-strong) 74%, white);
 }
 
 .slide-lines span:nth-child(2) {
   width: 82%;
-  background: color-mix(in srgb, var(--teal-soft) 82%, white);
+  background: color-mix(in oklch, var(--brand-soft) 82%, white);
 }
 
 .slide-lines span:nth-child(3) {
   width: 68%;
-  background: color-mix(in srgb, var(--coral-soft) 76%, white);
+  background: color-mix(in oklch, var(--coral-soft) 76%, white);
 }
 
 .slide-figure {
@@ -808,15 +869,14 @@ output {
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--blue-soft) 74%, white), color-mix(in srgb, var(--soft) 80%, white));
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.84) inset;
+  background: color-mix(in oklch, var(--secondary) 70%, white);
+  box-shadow: none;
 }
 
 .slide-figure span {
   border-radius: 6px 6px 0 0;
-  background: var(--teal);
-  box-shadow: 0 6px 14px rgba(25, 36, 49, 0.1);
+  background: var(--brand);
+  box-shadow: 0 6px 14px oklch(0.34 0.03 95 / 0.10);
 }
 
 .slide-figure span:nth-child(1) { height: 48%; }
@@ -829,10 +889,10 @@ output {
   display: flex;
   gap: 4px;
   padding: 3px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--soft) 78%, white);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+  background: color-mix(in oklch, var(--secondary) 74%, white);
+  box-shadow: none;
 }
 
 .tab-button {
@@ -843,27 +903,29 @@ output {
   background: transparent;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 760;
 }
 
 .tab-button.active {
   background: var(--panel-strong);
   color: var(--text);
-  box-shadow: 0 1px 5px rgba(25, 36, 49, 0.1);
+  box-shadow: var(--shadow-soft);
 }
 
 .notes-content {
   min-height: 0;
   overflow: auto;
-  padding: 21px 20px 24px;
+  padding: 24px 24px 28px;
 }
 
 .note-markdown {
   max-width: 76ch;
+  font-family: var(--font-body);
 }
 
 .note-markdown h2 {
   margin: 0 0 14px;
+  font-family: var(--font-heading);
   color: var(--text-strong);
   font-size: 24px;
   line-height: 1.16;
@@ -871,16 +933,17 @@ output {
 
 .note-markdown h3 {
   margin: 22px 0 10px;
-  color: color-mix(in srgb, var(--text-strong) 84%, var(--teal));
+  font-family: var(--font-heading);
+  color: color-mix(in oklch, var(--text-strong) 84%, var(--brand));
   font-size: 15px;
   letter-spacing: 0;
 }
 
 .note-markdown p {
   margin: 0 0 14px;
-  color: color-mix(in srgb, var(--text) 92%, #000);
-  font-size: 15px;
-  line-height: 1.76;
+  color: color-mix(in oklch, var(--text) 92%, black);
+  font-size: 16px;
+  line-height: 1.72;
 }
 
 .note-markdown .bullet {
@@ -900,29 +963,31 @@ output {
   display: inline-flex;
   align-items: center;
   padding: 5px 10px;
-  border: 1px solid color-mix(in srgb, var(--teal) 18%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--brand) 16%, var(--line));
   border-radius: 7px;
-  background: color-mix(in srgb, var(--teal-soft) 64%, white);
-  color: var(--teal);
+  background: color-mix(in oklch, var(--brand-soft) 58%, white);
+  color: var(--brand);
   font-size: 12px;
-  font-weight: 900;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+  font-weight: 760;
+  box-shadow: none;
 }
 
 .structure-grid {
   display: grid;
-  gap: 12px;
+  gap: 0;
+  border-top: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
 }
 
 .structure-row {
   display: grid;
   grid-template-columns: 116px minmax(0, 1fr);
   gap: 14px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--panel-strong) 84%, var(--soft));
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.82) inset;
+  padding: 13px 0;
+  border: 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .structure-label {
@@ -940,22 +1005,20 @@ output {
   margin: 0;
   overflow: auto;
   padding: 16px;
-  border: 1px solid #2d3744;
+  border: 1px solid color-mix(in oklch, var(--line) 78%, transparent);
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, #1d2530, #171e27);
-  color: #ecf5f7;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  background: color-mix(in oklch, var(--secondary) 58%, white);
+  color: var(--text);
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 24px rgba(25, 36, 49, 0.1);
+  box-shadow: none;
 }
 
 .agent-panel {
   grid-template-rows: 52px auto minmax(0, 1fr);
-  background:
-    linear-gradient(180deg, #fbfcfd, #f3f7fa);
+  background: color-mix(in oklch, var(--background) 90%, white);
   transition: opacity 180ms ease, transform 180ms ease;
 }
 
@@ -964,10 +1027,10 @@ output {
   display: inline-flex;
   align-items: center;
   padding: 0 6px;
-  border: 1px solid color-mix(in srgb, var(--blue) 16%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--primary) 16%, var(--line));
   border-radius: 6px;
-  background: color-mix(in srgb, var(--blue-soft) 56%, white);
-  color: color-mix(in srgb, var(--blue) 88%, var(--text));
+  background: color-mix(in oklch, var(--brand-soft) 56%, white);
+  color: color-mix(in oklch, var(--primary) 88%, var(--text));
   font-size: 11px;
   font-weight: 900;
   text-transform: uppercase;
@@ -996,15 +1059,14 @@ output {
 }
 
 .agent-context-strip {
-  max-height: 132px;
+  max-height: 116px;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   overflow: auto;
-  padding: 10px 12px 11px;
-  border-bottom: 1px solid var(--line);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--blue-soft) 62%, white), color-mix(in srgb, var(--panel-strong) 78%, var(--blue-soft)));
+  padding: 9px 12px;
+  border-bottom: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  background: color-mix(in oklch, var(--background) 86%, white);
 }
 
 .agent-context-strip:empty {
@@ -1020,23 +1082,29 @@ output {
   display: inline-grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 7px;
-  padding: 6px 7px 6px 10px;
-  border: 1px solid color-mix(in srgb, var(--blue) 24%, var(--line));
+  gap: 6px;
+  padding: 5px 6px 5px 9px;
+  border: 1px solid color-mix(in oklch, var(--primary) 14%, var(--line));
   border-radius: 999px;
-  background: var(--panel-strong);
+  background: color-mix(in oklch, var(--secondary) 54%, white);
   color: var(--text);
-  font-size: 12px;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.88) inset, 0 3px 10px rgba(25, 36, 49, 0.05);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  box-shadow: none;
 }
 
 .context-pill strong {
-  color: var(--blue);
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
   font-size: 11px;
-  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
 }
 
 .context-pill span {
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1054,7 +1122,7 @@ output {
 }
 
 .context-pill button:hover {
-  background: var(--soft);
+  background: color-mix(in oklch, var(--primary) 8%, white);
   color: var(--text);
 }
 
@@ -1075,8 +1143,7 @@ output {
   height: 100%;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, white), #f2f6f9);
+  background: color-mix(in oklch, var(--background) 90%, white);
 }
 
 .aui-thread-viewport {
@@ -1098,23 +1165,12 @@ output {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  place-items: center;
+  place-items: start;
   align-content: center;
-  gap: 12px;
+  gap: 14px;
   padding: 20px 8px 16px;
   color: var(--muted);
-  text-align: center;
-}
-
-.aui-welcome svg {
-  width: 42px;
-  height: 42px;
-  padding: 9px;
-  border: 1px solid color-mix(in srgb, var(--blue) 18%, var(--line));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--blue-soft) 66%, white);
-  color: var(--blue);
-  box-shadow: var(--shadow-soft);
+  text-align: left;
 }
 
 .aui-welcome h2,
@@ -1123,9 +1179,27 @@ output {
 }
 
 .aui-welcome h2 {
-  color: var(--text);
-  font-size: 19px;
+  color: var(--text-strong);
+  font-size: 17px;
   letter-spacing: 0;
+  font-weight: 650;
+}
+
+.prompt-suggestions {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+}
+
+.prompt-suggestions span {
+  display: block;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background) 78%, white);
+  color: color-mix(in oklch, var(--text) 84%, var(--muted));
+  font-family: var(--font-ui);
+  font-size: 12px;
 }
 
 .aui-message-list {
@@ -1162,21 +1236,20 @@ output {
 
 .message-bubble {
   max-width: 95%;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in oklch, var(--line) 76%, transparent);
   border-radius: 8px;
   line-height: 1.6;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset, 0 6px 16px rgba(25, 36, 49, 0.05);
+  box-shadow: none;
 }
 
 .user-bubble {
-  border-color: color-mix(in srgb, var(--teal) 22%, var(--line));
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--teal-soft) 70%, white), color-mix(in srgb, var(--blue-soft) 56%, white));
+  border-color: color-mix(in oklch, var(--primary) 18%, var(--line));
+  background: color-mix(in oklch, var(--primary) 8%, white);
   padding: 10px 12px;
 }
 
 .assistant-bubble {
-  background: color-mix(in srgb, var(--panel-strong) 92%, var(--soft));
+  background: color-mix(in oklch, var(--background) 82%, white);
   padding: 11px 12px;
 }
 
@@ -1208,7 +1281,7 @@ output {
 .message-actions button:hover,
 .branch-picker button:hover {
   border-color: var(--line);
-  background: var(--soft);
+  background: color-mix(in oklch, var(--secondary) 70%, white);
   color: var(--text);
 }
 
@@ -1227,9 +1300,9 @@ output {
 
 .message-error {
   margin-top: 8px;
-  border: 1px solid color-mix(in srgb, var(--coral) 48%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--coral) 48%, var(--line));
   border-radius: 8px;
-  background: color-mix(in srgb, var(--coral-soft) 58%, var(--panel-strong));
+  background: color-mix(in oklch, var(--coral-soft) 58%, var(--panel-strong));
   color: var(--coral);
   padding: 8px 9px;
 }
@@ -1252,7 +1325,7 @@ output {
 
 .markdown-body code {
   border-radius: 5px;
-  background: color-mix(in srgb, var(--soft-strong) 76%, white);
+  background: color-mix(in oklch, var(--soft-strong) 76%, white);
   padding: 1px 4px;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 0.92em;
@@ -1261,8 +1334,8 @@ output {
 .markdown-body pre {
   overflow: auto;
   border-radius: 8px;
-  background: #1d2530;
-  color: #edf5f6;
+  background: oklch(0.25 0.02 95);
+  color: color-mix(in oklch, var(--background) 88%, white);
   padding: 12px;
 }
 
@@ -1274,7 +1347,7 @@ output {
   gap: 8px;
   margin-top: auto;
   padding-top: 12px;
-  background: linear-gradient(180deg, transparent, #f2f6f9 22%);
+  background: linear-gradient(180deg, transparent, color-mix(in oklch, var(--background) 92%, white) 24%);
 }
 
 .scroll-bottom {
@@ -1295,18 +1368,17 @@ output {
 .aui-composer-root {
   display: grid;
   gap: 8px;
-  padding: 9px;
-  border: 1px solid color-mix(in srgb, var(--blue) 20%, var(--line));
+  padding: 10px;
+  border: 1px solid color-mix(in oklch, var(--primary) 18%, var(--line));
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, #ffffff, color-mix(in srgb, var(--panel-strong) 84%, var(--blue-soft)));
-  box-shadow: 0 16px 32px rgba(25, 36, 49, 0.1), 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+  background: color-mix(in oklch, var(--popover) 94%, var(--background));
+  box-shadow: 0 12px 34px oklch(0.34 0.03 95 / 0.10);
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
 .aui-composer-root:focus-within {
-  border-color: color-mix(in srgb, var(--teal) 42%, var(--line));
-  box-shadow: 0 18px 38px rgba(20, 118, 118, 0.13), 0 0 0 3px color-mix(in srgb, var(--teal) 10%, transparent);
+  border-color: color-mix(in oklch, var(--brand) 42%, var(--line));
+  box-shadow: 0 14px 38px oklch(0.34 0.03 95 / 0.12), 0 0 0 3px color-mix(in oklch, var(--brand) 10%, transparent);
 }
 
 .aui-composer-input {
@@ -1337,22 +1409,22 @@ output {
   place-items: center;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--panel) 82%, white);
+  background: color-mix(in oklch, var(--panel) 82%, white);
   color: var(--muted);
   transition: transform 140ms ease, filter 140ms ease, border-color 140ms ease, background 140ms ease;
 }
 
 .composer-send {
-  border-color: var(--teal-deep);
+  border-color: var(--brand-deep);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--teal) 96%, white), var(--teal-deep));
-  color: white;
-  box-shadow: 0 8px 18px rgba(13, 88, 91, 0.22);
+    linear-gradient(180deg, color-mix(in oklch, var(--brand) 96%, white), var(--brand-deep));
+  color: var(--primary-foreground);
+  box-shadow: 0 8px 18px color-mix(in oklch, var(--primary) 26%, transparent);
 }
 
 .composer-send[aria-label="停止"] {
   border-color: var(--line);
-  background: color-mix(in srgb, var(--panel) 82%, white);
+  background: color-mix(in oklch, var(--panel) 82%, white);
   box-shadow: none;
   color: var(--muted);
 }
@@ -1369,8 +1441,8 @@ output {
   justify-content: space-between;
   gap: 16px;
   padding: 0 14px;
-  border-top: 1px solid var(--line);
-  background: var(--panel);
+  border-top: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  background: color-mix(in oklch, var(--background) 88%, white);
   color: var(--muted);
   font-size: 12px;
 }
@@ -1386,8 +1458,43 @@ output {
   }
 
   .workspace {
+    height: auto;
+    min-height: 0;
+    padding: 0 12px 12px;
+  }
+
+  .workspace-panels {
+    height: auto;
+    min-height: 0;
+    display: grid !important;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: var(--workspace-rows, auto minmax(420px, 55vh) minmax(420px, auto) minmax(520px, auto));
+    gap: 10px;
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .workspace-panel {
+    width: 100% !important;
+    min-height: 420px;
+    flex: none !important;
+    overflow: hidden;
+    border: 1px solid color-mix(in oklch, var(--line) 74%, transparent);
+    border-radius: 8px;
+    background: color-mix(in oklch, var(--background) 88%, white);
+  }
+
+  .workspace-panel[hidden] {
+    display: none !important;
+  }
+
+  .workspace-resize-handle {
+    display: none;
+  }
+
+  .pdf-focus .workspace-panel {
+    min-height: calc(100vh - 170px);
   }
 }
 

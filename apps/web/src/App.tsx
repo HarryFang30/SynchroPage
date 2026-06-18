@@ -44,7 +44,6 @@ import {
 } from "lucide-react";
 import {
   type ChangeEvent,
-  type CSSProperties,
   type ReactNode,
   useCallback,
   useEffect,
@@ -52,6 +51,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 
 type PagePack = {
   schema: string;
@@ -458,28 +458,7 @@ export default function App() {
   const filteredPages = pack.pages.filter((item) =>
     query ? item.teaching.slide_title.toLowerCase().includes(query.toLowerCase()) : true,
   );
-  const workspaceColumns = useMemo(() => {
-    const columns = [
-      panels.rail ? "232px" : null,
-      pdfOnly ? "minmax(0, 1fr)" : "minmax(296px, 1.04fr)",
-      panels.notes ? "minmax(312px, 0.96fr)" : null,
-      panels.agent ? "minmax(328px, 0.92fr)" : null,
-    ];
-    return columns.filter(Boolean).join(" ");
-  }, [panels.agent, panels.notes, panels.rail, pdfOnly]);
-  const workspaceRows = useMemo(() => {
-    const rows = [
-      panels.rail ? "auto" : null,
-      pdfOnly ? "minmax(620px, calc(100vh - 170px))" : "minmax(420px, 55vh)",
-      panels.notes ? "minmax(420px, auto)" : null,
-      panels.agent ? "minmax(520px, auto)" : null,
-    ];
-    return rows.filter(Boolean).join(" ");
-  }, [panels.agent, panels.notes, panels.rail, pdfOnly]);
-  const workspaceStyle = {
-    "--workspace-columns": workspaceColumns,
-    "--workspace-rows": workspaceRows,
-  } as CSSProperties;
+  const visiblePaneCount = 1 + Number(panels.rail) + Number(panels.notes) + Number(panels.agent);
 
   const togglePanel = useCallback((key: PanelKey) => {
     setPanels((current) => ({ ...current, [key]: !current[key] }));
@@ -839,111 +818,126 @@ export default function App() {
         />
       )}
 
-      <main className="workspace" style={workspaceStyle}>
-        <aside className="page-rail" hidden={!panels.rail}>
-          <div className="rail-tools">
-            <div className="search-box">
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索页标题" />
-            </div>
-            <div className="rail-meta">
-              <span>{pack.pages.length} 页</span>
-              <span>{pack.pages.filter((item) => item.status === "ready").length} ready</span>
-            </div>
-          </div>
-          <div className="page-list">
-            {filteredPages.map((item) => (
-              <button
-                className={`page-item ${item.page_no === page.page_no ? "active" : ""}`}
-                key={item.page_no}
-                type="button"
-                onClick={() => setCurrentPageNo(item.page_no)}
-              >
-                <span className="page-number">{item.page_no}</span>
-                <span className="page-copy">
-                  <strong>{item.teaching.slide_title}</strong>
-                  <span>
-                    {item.status} · {item.source.parser}
-                  </span>
-                </span>
-                <span className="page-score">{Math.round(item.teaching.confidence * 100)}%</span>
-              </button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="pdf-pane">
-          <PaneToolbar
-            title={pdfUrl ? "PDF 预览" : "示例预览"}
-            right={
-              <div className="toolbar-actions">
-                <IconButton label="上一页" onClick={() => movePage(-1)}>
-                  <ChevronLeft />
-                </IconButton>
-                <output>{page.page_no} / {pack.pages.length}</output>
-                <IconButton label="下一页" onClick={() => movePage(1)}>
-                  <ChevronRight />
-                </IconButton>
+      <main className="workspace" data-pane-count={visiblePaneCount}>
+        <PanelGroup orientation="horizontal" className="workspace-panels">
+          <Panel className="workspace-panel" hidden={!panels.rail} defaultSize={18} minSize={12}>
+            <aside className="page-rail">
+              <div className="rail-tools">
+                <div className="search-box">
+                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索页标题" />
+                </div>
+                <div className="rail-meta">
+                  <span>{pack.pages.length} 页</span>
+                  <span>{pack.pages.filter((item) => item.status === "ready").length} ready</span>
+                </div>
               </div>
-            }
-          />
-          <div className={`pdf-frame ${pdfUrl ? "has-pdf" : ""}`}>
-            {pdfUrl ? (
-              <iframe title="PDF 预览" src={`${pdfUrl}#page=${page.page_no}`} />
-            ) : (
-              <SlidePreview page={page} />
-            )}
-          </div>
-          {page.source.text_md && (
-            <div className="pdf-source-strip">
-              <Sigma />
-              <p>{page.source.text_md}</p>
-            </div>
-          )}
-        </section>
-
-        <section className="notes-pane" hidden={!panels.notes}>
-          <PaneToolbar
-            title={page.teaching.slide_title}
-            badge={`${Math.round(page.teaching.confidence * 100)}%`}
-            right={
-              <div className="tab-group">
-                {(["notes", "structure", "json"] as const).map((tab) => (
+              <div className="page-list">
+                {filteredPages.map((item) => (
                   <button
-                    key={tab}
+                    className={`page-item ${item.page_no === page.page_no ? "active" : ""}`}
+                    key={item.page_no}
                     type="button"
-                    className={`tab-button ${activeTab === tab ? "active" : ""}`}
-                    onClick={() => setActiveTab(tab)}
+                    onClick={() => setCurrentPageNo(item.page_no)}
                   >
-                    {tab === "notes" ? "讲解" : tab === "structure" ? "结构" : "JSON"}
+                    <span className="page-number">{item.page_no}</span>
+                    <span className="page-copy">
+                      <strong>{item.teaching.slide_title}</strong>
+                      <span>
+                        {item.status} · {item.source.parser}
+                      </span>
+                    </span>
+                    <span className="page-score">{Math.round(item.teaching.confidence * 100)}%</span>
                   </button>
                 ))}
               </div>
-            }
-          />
-          <div className="notes-content">
-            {activeTab === "notes" && <MarkdownBlock markdown={page.teaching.speaker_notes_md} concepts={page.teaching.concepts} />}
-            {activeTab === "structure" && <StructurePanel page={page} />}
-            {activeTab === "json" && <pre className="json-panel">{JSON.stringify(page, null, 2)}</pre>}
-          </div>
-        </section>
+            </aside>
+          </Panel>
 
-        <AgentPanel
-          hidden={!panels.agent}
-          contexts={contexts}
-          attachments={attachments}
-          setContexts={setContexts}
-          setAttachments={setAttachments}
-          addCurrentPage={() => {
-            addContext(pageContext(pack, page));
-            setJobStatus("当前页已加入 Agent");
-          }}
-          captureSelection={captureSelection}
-          getSnapshot={getSnapshot}
-          getPack={getPack}
-          getPage={getPage}
-          backendOffline={oauthMode === "offline" || oauthMode === "mock"}
-          oauthMode={oauthMode}
-        />
+          {panels.rail && <WorkspaceResizeHandle />}
+
+          <Panel className="workspace-panel" defaultSize={pdfOnly ? 100 : 30} minSize={24}>
+            <section className="pdf-pane">
+              <PaneToolbar
+                title={pdfUrl ? "PDF 预览" : "示例预览"}
+                right={
+                  <div className="toolbar-actions">
+                    <IconButton label="上一页" onClick={() => movePage(-1)}>
+                      <ChevronLeft />
+                    </IconButton>
+                    <output>{page.page_no} / {pack.pages.length}</output>
+                    <IconButton label="下一页" onClick={() => movePage(1)}>
+                      <ChevronRight />
+                    </IconButton>
+                  </div>
+                }
+              />
+              <div className={`pdf-frame ${pdfUrl ? "has-pdf" : ""}`}>
+                {pdfUrl ? (
+                  <iframe title="PDF 预览" src={`${pdfUrl}#page=${page.page_no}`} />
+                ) : (
+                  <SlidePreview page={page} />
+                )}
+              </div>
+              {page.source.text_md && (
+                <div className="pdf-source-strip">
+                  <Sigma />
+                  <p>{page.source.text_md}</p>
+                </div>
+              )}
+            </section>
+          </Panel>
+
+          {(panels.notes || panels.agent) && <WorkspaceResizeHandle />}
+
+          <Panel className="workspace-panel" hidden={!panels.notes} defaultSize={27} minSize={22}>
+            <section className="notes-pane">
+              <PaneToolbar
+                title={page.teaching.slide_title}
+                badge={`${Math.round(page.teaching.confidence * 100)}%`}
+                right={
+                  <div className="tab-group">
+                    {(["notes", "structure", "json"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        className={`tab-button ${activeTab === tab ? "active" : ""}`}
+                        onClick={() => setActiveTab(tab)}
+                      >
+                        {tab === "notes" ? "讲解" : tab === "structure" ? "结构" : "JSON"}
+                      </button>
+                    ))}
+                  </div>
+                }
+              />
+              <div className="notes-content">
+                {activeTab === "notes" && <MarkdownBlock markdown={page.teaching.speaker_notes_md} concepts={page.teaching.concepts} />}
+                {activeTab === "structure" && <StructurePanel page={page} />}
+                {activeTab === "json" && <pre className="json-panel">{JSON.stringify(page, null, 2)}</pre>}
+              </div>
+            </section>
+          </Panel>
+
+          {panels.notes && panels.agent && <WorkspaceResizeHandle />}
+
+          <Panel className="workspace-panel" hidden={!panels.agent} defaultSize={25} minSize={22}>
+            <AgentPanel
+              contexts={contexts}
+              attachments={attachments}
+              setContexts={setContexts}
+              setAttachments={setAttachments}
+              addCurrentPage={() => {
+                addContext(pageContext(pack, page));
+                setJobStatus("当前页已加入 Agent");
+              }}
+              captureSelection={captureSelection}
+              getSnapshot={getSnapshot}
+              getPack={getPack}
+              getPage={getPage}
+              backendOffline={oauthMode === "offline" || oauthMode === "mock"}
+              oauthMode={oauthMode}
+            />
+          </Panel>
+        </PanelGroup>
       </main>
 
       <footer className="statusbar">
@@ -954,8 +948,15 @@ export default function App() {
   );
 }
 
+function WorkspaceResizeHandle() {
+  return (
+    <PanelResizeHandle className="workspace-resize-handle" aria-label="调整面板宽度">
+      <span />
+    </PanelResizeHandle>
+  );
+}
+
 function AgentPanel(props: {
-  hidden: boolean;
   contexts: AgentContextItem[];
   attachments: AgentAttachment[];
   setContexts: (fn: AgentContextItem[] | ((items: AgentContextItem[]) => AgentContextItem[])) => void;
@@ -986,7 +987,7 @@ function AgentPanel(props: {
   };
 
   return (
-    <aside className="agent-panel" hidden={props.hidden}>
+    <aside className="agent-panel">
       <div className="agent-toolbar">
         <div className="toolbar-title">
           <span className="agent-dot" />
@@ -1014,8 +1015,8 @@ function AgentPanel(props: {
       <div className="agent-context-strip">
         {props.contexts.map((context) => (
           <span className="context-pill" key={context.id}>
-            <strong>{context.type === "formula" ? "Math" : context.type === "page" ? "Page" : "Quote"}</strong>
-            <span>{compactText(context.text, 80)}</span>
+            <span>{context.type === "formula" ? "Using formula" : `Using page ${context.page_no}`}</span>
+            <strong>{compactText(context.source || context.title, 36)}</strong>
             <button type="button" onClick={() => props.setContexts((items) => items.filter((item) => item.id !== context.id))} aria-label="移除上下文">
               <X />
             </button>
@@ -1024,7 +1025,8 @@ function AgentPanel(props: {
         {props.attachments.map((attachment) => (
           <span className="context-pill image-pill" key={attachment.id}>
             <img src={attachment.data_url} alt="" />
-            <span>{attachment.name}</span>
+            <span>Using image</span>
+            <strong>{compactText(attachment.name, 32)}</strong>
             <button type="button" onClick={() => props.setAttachments((items) => items.filter((item) => item.id !== attachment.id))} aria-label="移除图片">
               <X />
             </button>
@@ -1097,8 +1099,12 @@ function AssistantThread() {
         <div className="aui-thread-inner">
           <ThreadPrimitive.Empty>
             <div className="aui-welcome">
-              <Bot />
-              <h2>PagePair Agent</h2>
+              <h2>What should we look at?</h2>
+              <div className="prompt-suggestions" aria-label="Prompt suggestions">
+                <span>Explain the selected passage</span>
+                <span>Compare this page with the notes</span>
+                <span>Find missing assumptions</span>
+              </div>
             </div>
           </ThreadPrimitive.Empty>
           <div className="aui-message-list">
