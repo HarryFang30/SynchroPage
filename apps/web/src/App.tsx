@@ -131,7 +131,10 @@ type PdfContextPayload = {
   documentTitle: string;
   pageCount: number;
   truncated: boolean;
-  truncationPolicy: "all-pages" | "first-last-10";
+  truncationPolicy: "all-pages" | "first-last-edge";
+  fullPageLimit: number;
+  edgePageCount: number;
+  includedPageNumbers: number[];
   pages: PdfContextPage[];
 };
 
@@ -223,9 +226,6 @@ const fullPanelVisibility: PanelVisibility = {
   notes: true,
   agent: true,
 };
-
-const PDF_CONTEXT_FULL_PAGE_LIMIT = 50;
-const PDF_CONTEXT_EDGE_PAGE_COUNT = 10;
 
 const samplePack: PagePack = {
   schema: "lecture_pairpack.v1",
@@ -499,10 +499,58 @@ function selectedContextPayload(context: SelectedContext) {
   };
 }
 
-function buildSelectedQuestionPrompt(question: string, selectedContext: SelectedContext | null, copy: AppCopy) {
+function selectedContextPageNumber(context: SelectedContext | null) {
+  if (!context) return null;
+  const pageNo = context.pdfPageNumber || context.generatedPageNumber || context.pageNumber;
+  return typeof pageNo === "number" && Number.isFinite(pageNo) ? pageNo : null;
+}
+
+function formatPageRanges(pages: number[]) {
+  const sorted = Array.from(new Set(pages)).sort((left, right) => left - right);
+  const ranges: string[] = [];
+  let start: number | null = null;
+  let previous: number | null = null;
+  for (const pageNo of sorted) {
+    if (start === null || previous === null || pageNo !== previous + 1) {
+      if (start !== null && previous !== null) ranges.push(start === previous ? `${start}` : `${start}-${previous}`);
+      start = pageNo;
+    }
+    previous = pageNo;
+  }
+  if (start !== null && previous !== null) ranges.push(start === previous ? `${start}` : `${start}-${previous}`);
+  return ranges.join(", ");
+}
+
+function buildSelectedQuestionPrompt(
+  question: string,
+  selectedContext: SelectedContext | null,
+  pdfContext: PdfContextPayload | null,
+  copy: AppCopy,
+) {
   const userQuestion = question.trim() || copy.agent.continuePrompt;
   if (!selectedContext?.text.trim()) return userQuestion;
+  const selectedPage = selectedContextPageNumber(selectedContext);
+  const sourceLines = [
+    selectedPage ? `PDF page: ${selectedPage}` : null,
+    selectedContext.sectionTitle ? `Source: ${selectedContext.sectionTitle}` : null,
+  ].filter((line): line is string => Boolean(line));
+  if (pdfContext?.truncated) {
+    const includedPages = formatPageRanges(pdfContext.includedPageNumbers);
+    const selectedIncluded = selectedPage ? pdfContext.includedPageNumbers.includes(selectedPage) : false;
+    sourceLines.push(
+      `PDF context is truncated: original PDF has ${pdfContext.pageCount} pages, configured full-context limit is ${pdfContext.fullPageLimit} pages, and the model received pages ${includedPages || "none"} (${pdfContext.edgePageCount} pages from each edge).`,
+    );
+    if (selectedPage) {
+      sourceLines.push(
+        selectedIncluded
+          ? `The selected text is on PDF page ${selectedPage}, which is included in the truncated PDF context.`
+          : `The selected text is on PDF page ${selectedPage}, which is outside the truncated PDF context; use the selected text as the exact evidence for that page.`,
+      );
+    }
+  }
   return [
+    "Selected source:",
+    ...sourceLines,
     "Selected text:",
     selectedContext.text.trim(),
     "User question:",
@@ -510,16 +558,23 @@ function buildSelectedQuestionPrompt(question: string, selectedContext: Selected
   ].join("\n\n");
 }
 
-function pdfContextPageNumbers(pageCount: number) {
+function sanitizePdfContextSettings(settings: Pick<UiPreferences, "pdfContextFullPageLimit" | "pdfContextEdgePageCount">) {
+  const fullPageLimit = Math.min(Math.max(Math.floor(Number(settings.pdfContextFullPageLimit) || 50), 1), 500);
+  const edgePageCount = Math.min(Math.max(Math.floor(Number(settings.pdfContextEdgePageCount) || 10), 1), 100);
+  return { fullPageLimit, edgePageCount };
+}
+
+function pdfContextPageNumbers(pageCount: number, settings: Pick<UiPreferences, "pdfContextFullPageLimit" | "pdfContextEdgePageCount">) {
+  const { fullPageLimit, edgePageCount } = sanitizePdfContextSettings(settings);
   const total = Math.max(0, Math.floor(pageCount));
-  if (total <= PDF_CONTEXT_FULL_PAGE_LIMIT) {
+  if (total <= fullPageLimit) {
     return Array.from({ length: total }, (_, index) => index + 1);
   }
   const pages = new Set<number>();
-  for (let pageNo = 1; pageNo <= Math.min(PDF_CONTEXT_EDGE_PAGE_COUNT, total); pageNo += 1) {
+  for (let pageNo = 1; pageNo <= Math.min(edgePageCount, total); pageNo += 1) {
     pages.add(pageNo);
   }
-  for (let pageNo = Math.max(1, total - PDF_CONTEXT_EDGE_PAGE_COUNT + 1); pageNo <= total; pageNo += 1) {
+  for (let pageNo = Math.max(1, total - edgePageCount + 1); pageNo <= total; pageNo += 1) {
     pages.add(pageNo);
   }
   return Array.from(pages).sort((left, right) => left - right);
@@ -548,10 +603,14 @@ async function extractPdfContextFromDocument(
   document: PDFDocumentProxy,
   documentId: string,
   documentTitle: string,
+  settings: Pick<UiPreferences, "pdfContextFullPageLimit" | "pdfContextEdgePageCount">,
 ): Promise<PdfContextPayload> {
   const pageCount = document.numPages;
+  const { fullPageLimit, edgePageCount } = sanitizePdfContextSettings(settings);
+  const includedPageNumbers = pdfContextPageNumbers(pageCount, settings);
+  const truncated = includedPageNumbers.length < pageCount;
   const pages: PdfContextPage[] = [];
-  for (const pageNo of pdfContextPageNumbers(pageCount)) {
+  for (const pageNo of includedPageNumbers) {
     const page = await document.getPage(pageNo);
     const textContent = await page.getTextContent();
     pages.push({
@@ -564,15 +623,24 @@ async function extractPdfContextFromDocument(
     documentId,
     documentTitle,
     pageCount,
-    truncated: pageCount > PDF_CONTEXT_FULL_PAGE_LIMIT,
-    truncationPolicy: pageCount > PDF_CONTEXT_FULL_PAGE_LIMIT ? "first-last-10" : "all-pages",
+    truncated,
+    truncationPolicy: truncated ? "first-last-edge" : "all-pages",
+    fullPageLimit,
+    edgePageCount,
+    includedPageNumbers,
     pages,
   };
 }
 
-function buildPdfContextFromPack(pack: PagePack): PdfContextPayload {
+function buildPdfContextFromPack(
+  pack: PagePack,
+  settings: Pick<UiPreferences, "pdfContextFullPageLimit" | "pdfContextEdgePageCount">,
+): PdfContextPayload {
   const pageCount = Math.max(pack.document.page_count || pack.pages.length, pack.pages.length);
-  const wantedPages = new Set(pdfContextPageNumbers(pageCount));
+  const { fullPageLimit, edgePageCount } = sanitizePdfContextSettings(settings);
+  const includedPageNumbers = pdfContextPageNumbers(pageCount, settings);
+  const truncated = includedPageNumbers.length < pageCount;
+  const wantedPages = new Set(includedPageNumbers);
   const pages = pack.pages
     .filter((page) => wantedPages.has(page.page_no))
     .map((page) => ({
@@ -584,8 +652,11 @@ function buildPdfContextFromPack(pack: PagePack): PdfContextPayload {
     documentId: pack.document.id,
     documentTitle: pack.document.title,
     pageCount,
-    truncated: pageCount > PDF_CONTEXT_FULL_PAGE_LIMIT,
-    truncationPolicy: pageCount > PDF_CONTEXT_FULL_PAGE_LIMIT ? "first-last-10" : "all-pages",
+    truncated,
+    truncationPolicy: truncated ? "first-last-edge" : "all-pages",
+    fullPageLimit,
+    edgePageCount,
+    includedPageNumbers,
     pages,
   };
 }
@@ -851,7 +922,7 @@ function createPdfAgentAdapter(args: {
         : null;
       const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
       const latestUserText = latestUser ? messageText(latestUser) : "";
-      const promptInput = buildSelectedQuestionPrompt(latestUserText, snapshot.selectedContext, args.copy);
+      const promptInput = buildSelectedQuestionPrompt(latestUserText, snapshot.selectedContext, snapshot.pdfContext, args.copy);
 
       const parts = [
         promptInput ? { type: "text", text: promptInput } : null,
@@ -1105,9 +1176,9 @@ export default function App() {
       contexts,
       attachments,
       selectedContext,
-      pdfContext: pdfUrl ? pdfTextContext : buildPdfContextFromPack(pack),
+      pdfContext: pdfUrl ? pdfTextContext : buildPdfContextFromPack(pack, uiPreferences),
     }),
-    [attachments, contexts, pack, pdfTextContext, pdfUrl, selectedContext],
+    [attachments, contexts, pack, pdfTextContext, pdfUrl, selectedContext, uiPreferences],
   );
   const getPack = useCallback(() => pack, [pack]);
   const getPage = useCallback(() => page, [page]);
@@ -1204,6 +1275,10 @@ export default function App() {
     document.documentElement.lang = uiPreferences.language === "en-US" ? "en" : "zh-CN";
     document.documentElement.dataset.pagepairLanguage = uiPreferences.language;
   }, [uiPreferences.language]);
+
+  useEffect(() => {
+    if (pdfUrl) setPdfTextContext(null);
+  }, [pdfUrl, uiPreferences.pdfContextEdgePageCount, uiPreferences.pdfContextFullPageLimit]);
 
   useEffect(() => {
     setPack((current) => {
@@ -1647,6 +1722,8 @@ export default function App() {
                     fallbackSrc={pdfViewerSrc}
                     pageNumber={currentPdfPageNo}
                     url={pdfUrl}
+                    pdfContextFullPageLimit={uiPreferences.pdfContextFullPageLimit}
+                    pdfContextEdgePageCount={uiPreferences.pdfContextEdgePageCount}
                     onDocumentReady={handlePdfDocumentReady}
                     onPdfContextReady={handlePdfContextReady}
                   />
@@ -1898,6 +1975,8 @@ function PdfPageRenderer({
   fallbackSrc,
   pageNumber,
   url,
+  pdfContextFullPageLimit,
+  pdfContextEdgePageCount,
   onDocumentReady,
   onPdfContextReady,
 }: {
@@ -1906,6 +1985,8 @@ function PdfPageRenderer({
   fallbackSrc: string;
   pageNumber: number;
   url: string;
+  pdfContextFullPageLimit: number;
+  pdfContextEdgePageCount: number;
   onDocumentReady: (pageCount: number) => void;
   onPdfContextReady: (context: PdfContextPayload) => void;
 }) {
@@ -1942,7 +2023,10 @@ function PdfPageRenderer({
         }
         setPdfDocument(document);
         onDocumentReady(document.numPages);
-        void extractPdfContextFromDocument(document, documentId, documentTitle)
+        void extractPdfContextFromDocument(document, documentId, documentTitle, {
+          pdfContextFullPageLimit,
+          pdfContextEdgePageCount,
+        })
           .then((context) => {
             if (!cancelled) onPdfContextReady(context);
           })
@@ -1958,7 +2042,7 @@ function PdfPageRenderer({
       cancelled = true;
       void loadingTask.destroy().catch(() => undefined);
     };
-  }, [documentId, documentTitle, onDocumentReady, onPdfContextReady, url]);
+  }, [documentId, documentTitle, onDocumentReady, onPdfContextReady, pdfContextEdgePageCount, pdfContextFullPageLimit, url]);
 
   useEffect(() => {
     if (!pdfDocument || !canvasRef.current || !textLayerRef.current) return undefined;

@@ -321,7 +321,7 @@ def _build_agent_prompt(body: Mapping[str, Any]) -> str:
     selected_context = _selected_context(selected_context_value)
     contexts = [*_context_items(body.get("context")), *_context_parts(body.get("parts"))]
     raw_input = str(body.get("input") or "").strip() or _text_from_parts(body.get("parts"))
-    input_text = _build_user_request(raw_input, selected_context_value)
+    input_text = _build_user_request(raw_input, selected_context_value, body.get("pdfContext"))
     pdf_context = _pdf_document_context(body.get("pdfContext"))
 
     sections = [
@@ -359,22 +359,65 @@ def _build_agent_prompt(body: Mapping[str, Any]) -> str:
     return "\n\n".join(section for section in sections if section)
 
 
-def _build_user_request(input_text: str, selected_context: Any) -> str:
+def _build_user_request(input_text: str, selected_context: Any, pdf_context: Any = None) -> str:
     cleaned_input = _truncate(input_text.strip(), MAX_CONTEXT_CHARS)
     selected_text = _selected_context_text(selected_context)
     if not selected_text:
         return cleaned_input
-    if cleaned_input.lstrip().lower().startswith("selected text:"):
+    normalized_input = cleaned_input.lstrip().lower()
+    if normalized_input.startswith("selected source:") or normalized_input.startswith("selected text:"):
         return cleaned_input
     user_question = cleaned_input or "Please answer using the selected text."
+    source_lines = _selected_source_lines(selected_context, pdf_context)
     return "\n\n".join(
         [
+            "Selected source:",
+            *source_lines,
             "Selected text:",
             selected_text,
             "User question:",
             user_question,
         ]
     )
+
+
+def _selected_source_lines(selected_context: Any, pdf_context: Any) -> list[str]:
+    if not isinstance(selected_context, Mapping):
+        return []
+    page_no = _int_value(
+        selected_context.get("pdfPageNumber")
+        or selected_context.get("generatedPageNumber")
+        or selected_context.get("pageNumber"),
+        0,
+    )
+    lines: list[str] = []
+    if page_no:
+        lines.append(f"PDF page: {page_no}")
+    section = _string_value(selected_context.get("sectionTitle"), "")
+    if section:
+        lines.append(f"Source: {section}")
+    if not isinstance(pdf_context, Mapping):
+        return lines
+
+    page_count = _int_value(pdf_context.get("pageCount"), 0)
+    full_page_limit = _int_value(pdf_context.get("fullPageLimit"), PDF_CONTEXT_FULL_PAGE_LIMIT)
+    edge_page_count = _int_value(pdf_context.get("edgePageCount"), PDF_CONTEXT_EDGE_PAGE_COUNT)
+    included_pages = _pdf_included_page_numbers(pdf_context, page_count, full_page_limit, edge_page_count)
+    explicit_truncated = pdf_context.get("truncated")
+    truncated = bool(explicit_truncated) if explicit_truncated is not None else (len(included_pages) < page_count if page_count else False)
+    if truncated:
+        included = _format_page_ranges(included_pages)
+        lines.append(
+            f"PDF context is truncated: original PDF has {page_count} pages, configured full-context limit is {full_page_limit} pages, and the model received pages {included or 'none'} ({edge_page_count} pages from each edge)."
+        )
+        if page_no:
+            if page_no in set(included_pages):
+                lines.append(f"The selected text is on PDF page {page_no}, which is included in the truncated PDF context.")
+            else:
+                lines.append(
+                    f"The selected text is on PDF page {page_no}, which is outside the truncated PDF context; use the selected text as the exact evidence for that page."
+                )
+    return lines
 
 
 def _selected_context_text(value: Any) -> str:
@@ -391,14 +434,22 @@ def _pdf_document_context(value: Any) -> str:
         return ""
 
     page_count = _int_value(value.get("pageCount"), len(pages))
-    allowed_pages = set(_pdf_context_page_numbers(page_count))
-    truncated = bool(value.get("truncated")) or page_count > PDF_CONTEXT_FULL_PAGE_LIMIT
-    policy = "first 10 and last 10 pages" if truncated else "all pages"
+    full_page_limit = _int_value(value.get("fullPageLimit"), PDF_CONTEXT_FULL_PAGE_LIMIT)
+    edge_page_count = _int_value(value.get("edgePageCount"), PDF_CONTEXT_EDGE_PAGE_COUNT)
+    included_pages = _pdf_included_page_numbers(value, page_count, full_page_limit, edge_page_count)
+    allowed_pages = set(included_pages)
+    explicit_truncated = value.get("truncated")
+    truncated = bool(explicit_truncated) if explicit_truncated is not None else len(included_pages) < page_count
+    policy = f"first {edge_page_count} and last {edge_page_count} pages" if truncated else "all pages"
 
     chunks = [
         f"Document title: {_string_value(value.get('documentTitle'), 'Untitled')}",
         f"Page count: {page_count}",
+        f"Full-context page limit: {full_page_limit}",
+        f"Edge pages per side when truncated: {edge_page_count}",
+        f"Truncated PDF context: {'yes' if truncated else 'no'}",
         f"Included pages: {policy}",
+        f"Included original PDF page numbers: {_format_page_ranges(included_pages) or 'none'}",
     ]
     remaining = MAX_PDF_CONTEXT_CHARS - sum(len(chunk) for chunk in chunks)
     included = 0
@@ -428,18 +479,51 @@ def _pdf_document_context(value: Any) -> str:
         chunks.append(block)
         remaining -= len(block)
         included += 1
-        if not truncated and included >= PDF_CONTEXT_FULL_PAGE_LIMIT:
+        if not truncated and included >= full_page_limit:
             break
     return "\n\n".join(chunks if included else [])
 
 
-def _pdf_context_page_numbers(page_count: int) -> list[int]:
+def _pdf_included_page_numbers(value: Mapping[str, Any], page_count: int, full_page_limit: int, edge_page_count: int) -> list[int]:
+    included = value.get("includedPageNumbers")
+    if isinstance(included, list):
+        page_numbers = sorted(
+            {
+                page_no
+                for page_no in (_int_value(item, 0) for item in included)
+                if 1 <= page_no <= max(page_count, 1)
+            }
+        )
+        if page_numbers:
+            return page_numbers
+    return _pdf_context_page_numbers(page_count, full_page_limit, edge_page_count)
+
+
+def _pdf_context_page_numbers(page_count: int, full_page_limit: int = PDF_CONTEXT_FULL_PAGE_LIMIT, edge_page_count: int = PDF_CONTEXT_EDGE_PAGE_COUNT) -> list[int]:
     total = max(0, page_count)
-    if total <= PDF_CONTEXT_FULL_PAGE_LIMIT:
+    limit = max(1, full_page_limit)
+    edge = max(1, edge_page_count)
+    if total <= limit:
         return list(range(1, total + 1))
-    pages = set(range(1, min(PDF_CONTEXT_EDGE_PAGE_COUNT, total) + 1))
-    pages.update(range(max(1, total - PDF_CONTEXT_EDGE_PAGE_COUNT + 1), total + 1))
+    pages = set(range(1, min(edge, total) + 1))
+    pages.update(range(max(1, total - edge + 1), total + 1))
     return sorted(pages)
+
+
+def _format_page_ranges(pages: list[int]) -> str:
+    if not pages:
+        return ""
+    ranges: list[str] = []
+    start = pages[0]
+    previous = pages[0]
+    for page_no in pages[1:]:
+        if page_no == previous + 1:
+            previous = page_no
+            continue
+        ranges.append(f"{start}" if start == previous else f"{start}-{previous}")
+        start = previous = page_no
+    ranges.append(f"{start}" if start == previous else f"{start}-{previous}")
+    return ", ".join(ranges)
 
 
 def _selected_context(value: Any) -> str:

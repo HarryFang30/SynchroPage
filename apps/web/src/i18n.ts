@@ -68,6 +68,10 @@ export type AppCopy = {
       sourcePillsDescription: string;
       pageSuggestionsLabel: string;
       pageSuggestionsDescription: string;
+      pdfContextFullPageLimitLabel: string;
+      pdfContextFullPageLimitDescription: string;
+      pdfContextEdgePageCountLabel: string;
+      pdfContextEdgePageCountDescription: string;
     };
     pdf: {
       scrollbarLabel: string;
@@ -334,6 +338,10 @@ const zhCN: AppCopy = {
       sourcePillsDescription: "在对话上方显示紧凑来源上下文。",
       pageSuggestionsLabel: "页面感知建议",
       pageSuggestionsDescription: "根据当前页标题和概念生成空状态提示。",
+      pdfContextFullPageLimitLabel: "全文上下文页数阈值",
+      pdfContextFullPageLimitDescription: "PDF 页数不超过这个值时，发送全部可提取文本给模型。",
+      pdfContextEdgePageCountLabel: "长 PDF 前后截取页数",
+      pdfContextEdgePageCountDescription: "超过阈值时，分别截取开头和结尾的页数作为 PDF 上下文。",
     },
     pdf: {
       scrollbarLabel: "滚动条样式",
@@ -600,6 +608,10 @@ const enUS: AppCopy = {
       sourcePillsDescription: "Show compact source context above the conversation.",
       pageSuggestionsLabel: "Page-aware suggestions",
       pageSuggestionsDescription: "Generate empty-state prompts from the current page title and concepts.",
+      pdfContextFullPageLimitLabel: "Full-context page limit",
+      pdfContextFullPageLimitDescription: "When the PDF is at or below this page count, send all extractable page text to the model.",
+      pdfContextEdgePageCountLabel: "Long-PDF edge pages",
+      pdfContextEdgePageCountDescription: "When the PDF exceeds the limit, include this many pages from both the beginning and the end.",
     },
     pdf: {
       scrollbarLabel: "Scrollbar style",

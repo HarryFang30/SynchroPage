@@ -72,9 +72,12 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(payload["model"], "gpt-5.5")
         content = payload["input"][0]["content"]
         self.assertEqual(content[0]["type"], "input_text")
+        self.assertIn("Selected source:", content[0]["text"])
+        self.assertIn("PDF page: 7", content[0]["text"])
         self.assertIn("Selected text:\n\nD_i = Q_i^+", content[0]["text"])
         self.assertIn("User question:\n\n解释这个公式", content[0]["text"])
         self.assertIn("# PDF document context", content[0]["text"])
+        self.assertIn("Truncated PDF context: no", content[0]["text"])
         self.assertIn("[p.1] Intro", content[0]["text"])
         self.assertIn("[p.3] Eigenvectors", content[0]["text"])
         self.assertIn("# User selected source material", content[0]["text"])
@@ -100,6 +103,9 @@ class WebAppTest(unittest.TestCase):
                     "pageCount": 60,
                     "truncated": True,
                     "truncationPolicy": "first-last-10",
+                    "fullPageLimit": 50,
+                    "edgePageCount": 10,
+                    "includedPageNumbers": [*range(1, 11), *range(51, 61)],
                     "pages": [
                         {"page_no": page_no, "title": f"Page {page_no}", "text_md": f"Body {page_no}"}
                         for page_no in range(1, 61)
@@ -111,10 +117,14 @@ class WebAppTest(unittest.TestCase):
 
         prompt = payload["input"][0]["content"][0]["text"]
         self.assertIn("Included pages: first 10 and last 10 pages", prompt)
+        self.assertIn("Included original PDF page numbers: 1-10, 51-60", prompt)
+        self.assertIn("PDF context is truncated: original PDF has 60 pages", prompt)
         self.assertIn("[p.1] Page 1", prompt)
         self.assertIn("[p.10] Page 10", prompt)
         self.assertIn("[p.51] Page 51", prompt)
         self.assertIn("[p.60] Page 60", prompt)
+        self.assertIn("PDF page: 30", prompt)
+        self.assertIn("outside the truncated PDF context", prompt)
         self.assertIn("Selected text:\n\nselected middle text", prompt)
         self.assertIn("User question:\n\n解释这段", prompt)
         self.assertNotIn("[p.11] Page 11", prompt)

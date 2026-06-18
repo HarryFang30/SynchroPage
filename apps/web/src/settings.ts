@@ -15,6 +15,8 @@ export type UiPreferences = {
   compactMode: boolean;
   showSourcePills: boolean;
   pageAwareSuggestions: boolean;
+  pdfContextFullPageLimit: number;
+  pdfContextEdgePageCount: number;
   scrollbarStyle: ScrollbarStyle;
   showPageSummaryHint: boolean;
   debugMode: boolean;
@@ -32,6 +34,8 @@ export const defaultUiPreferences: UiPreferences = {
   compactMode: false,
   showSourcePills: true,
   pageAwareSuggestions: true,
+  pdfContextFullPageLimit: 50,
+  pdfContextEdgePageCount: 10,
   scrollbarStyle: "thin",
   showPageSummaryHint: true,
   debugMode: false,
@@ -42,8 +46,19 @@ export function loadUiPreferences() {
   try {
     const stored = window.localStorage.getItem(uiPreferencesStorageKey);
     if (!stored) return defaultUiPreferences;
-    return { ...defaultUiPreferences, ...(JSON.parse(stored) as Partial<UiPreferences>) };
+    const merged = { ...defaultUiPreferences, ...(JSON.parse(stored) as Partial<UiPreferences>) };
+    return {
+      ...merged,
+      pdfContextFullPageLimit: clampNumber(merged.pdfContextFullPageLimit, defaultUiPreferences.pdfContextFullPageLimit, 1, 500),
+      pdfContextEdgePageCount: clampNumber(merged.pdfContextEdgePageCount, defaultUiPreferences.pdfContextEdgePageCount, 1, 100),
+    };
   } catch {
     return defaultUiPreferences;
   }
+}
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number) {
+  const numeric = Math.floor(Number(value));
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(Math.max(numeric, min), max);
 }

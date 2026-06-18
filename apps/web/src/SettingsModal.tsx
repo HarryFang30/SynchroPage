@@ -175,6 +175,22 @@ export function SettingsModal(props: SettingsModalProps) {
                       onCheckedChange={(checked) => props.onPreferenceChange("pageAwareSuggestions", checked)}
                     />
                   </SettingsRow>
+                  <SettingsRow label={copy.settings.agent.pdfContextFullPageLimitLabel} description={copy.settings.agent.pdfContextFullPageLimitDescription}>
+                    <SettingsNumberInput
+                      value={props.preferences.pdfContextFullPageLimit}
+                      min={1}
+                      max={500}
+                      onChange={(value) => props.onPreferenceChange("pdfContextFullPageLimit", value)}
+                    />
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.agent.pdfContextEdgePageCountLabel} description={copy.settings.agent.pdfContextEdgePageCountDescription}>
+                    <SettingsNumberInput
+                      value={props.preferences.pdfContextEdgePageCount}
+                      min={1}
+                      max={100}
+                      onChange={(value) => props.onPreferenceChange("pdfContextEdgePageCount", value)}
+                    />
+                  </SettingsRow>
                 </SettingsGroup>
               )}
 
@@ -268,6 +284,21 @@ function SettingsSelect(props: { value: string; options: Array<[string, string]>
         </option>
       ))}
     </select>
+  );
+}
+
+function SettingsNumberInput(props: { value: number; min: number; max: number; onChange: (value: number) => void }) {
+  const clamp = (value: number) => Math.min(Math.max(value, props.min), props.max);
+  return (
+    <input
+      className="settings-number-input"
+      type="number"
+      min={props.min}
+      max={props.max}
+      step={1}
+      value={Number.isFinite(props.value) ? props.value : props.min}
+      onChange={(event) => props.onChange(clamp(Number(event.target.value) || props.min))}
+    />
   );
 }
 
