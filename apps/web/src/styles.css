@@ -1537,8 +1537,9 @@ output {
   border-top: 1px solid color-mix(in oklch, var(--line) 58%, transparent);
 }
 
-.prompt-suggestions span {
+.prompt-suggestions button {
   display: block;
+  width: 100%;
   padding: 10px 0;
   border: 0;
   border-bottom: 1px solid color-mix(in oklch, var(--line) 58%, transparent);
@@ -1547,6 +1548,17 @@ output {
   color: color-mix(in oklch, var(--text) 84%, var(--muted));
   font-family: var(--font-ui);
   font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.prompt-suggestions button:hover {
+  color: var(--text-strong);
+}
+
+.prompt-suggestions button:focus-visible {
+  outline: 2px solid color-mix(in oklch, var(--brand) 32%, transparent);
+  outline-offset: 2px;
 }
 
 .aui-message-list {

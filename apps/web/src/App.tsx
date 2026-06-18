@@ -709,9 +709,7 @@ function pageSuggestions(page: PageData, pageAware: boolean, copy: AppCopy) {
   if (!pageAware) {
     return copy.agent.selectedFallbackSuggestions;
   }
-  const title = compactText(page.teaching.slide_title, 42);
-  const concept = page.teaching.concepts[0] || "this page";
-  return copy.agent.pageSuggestions(title, concept);
+  return copy.agent.pageSuggestions(compactText(page.teaching.slide_title, 42), page.teaching.concepts[0] || "this page");
 }
 
 function splitOAuthUserCode(value: string) {
@@ -2278,6 +2276,14 @@ function AssistantThread({
   composerInputRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   const copy = useAppCopy();
+  const thread = useThreadRuntime();
+  const sendSuggestion = useCallback((suggestion: string) => {
+    thread.append({
+      role: "user",
+      content: [{ type: "text", text: suggestion }],
+    });
+  }, [thread]);
+
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
       <ThreadPrimitive.Viewport className="aui-thread-viewport">
@@ -2288,7 +2294,9 @@ function AssistantThread({
               <h2>{copy.agent.askCurrentPage}</h2>
               <div className="prompt-suggestions" aria-label="Prompt suggestions">
                 {suggestions.map((suggestion) => (
-                  <span key={suggestion}>{suggestion}</span>
+                  <button key={suggestion} type="button" onClick={() => sendSuggestion(suggestion)}>
+                    {suggestion}
+                  </button>
                 ))}
               </div>
             </div>
