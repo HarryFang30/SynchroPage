@@ -1,0 +1,89 @@
+{
+  "model": "gpt-5.5",
+  "input": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "你是 Course PDF Teaching Agent。必须保持源 PDF 页码，输出严格 JSON，不要输出 schema 之外的解释。"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "input_file",
+          "file_id": "file_abc123"
+        },
+        {
+          "type": "input_text",
+          "text": "请先为这份 PDF 生成 document_planner_prompt 要求的课程级规划。只输出 JSON。"
+        }
+      ]
+    }
+  ],
+  "text": {
+    "format": {
+      "type": "json_schema",
+      "name": "document_plan",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["document_id", "title", "page_count", "course_summary", "sections", "page_inventory", "generation_strategy"],
+        "properties": {
+          "document_id": { "type": "string" },
+          "title": { "type": "string" },
+          "page_count": { "type": "integer" },
+          "course_summary": { "type": "string" },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["title", "page_start", "page_end", "summary"],
+              "properties": {
+                "title": { "type": "string" },
+                "page_start": { "type": "integer" },
+                "page_end": { "type": "integer" },
+                "summary": { "type": "string" }
+              }
+            }
+          },
+          "page_inventory": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["page_no", "page_type", "probable_title", "one_sentence_summary", "risk_flags"],
+              "properties": {
+                "page_no": { "type": "integer" },
+                "page_type": { "type": "string" },
+                "probable_title": { "type": "string" },
+                "one_sentence_summary": { "type": "string" },
+                "risk_flags": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          },
+          "generation_strategy": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["recommended_batch_size", "needs_parser_fallback_pages", "notes"],
+            "properties": {
+              "recommended_batch_size": { "type": "integer" },
+              "needs_parser_fallback_pages": {
+                "type": "array",
+                "items": { "type": "integer" }
+              },
+              "notes": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
