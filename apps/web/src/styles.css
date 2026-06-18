@@ -193,6 +193,43 @@ svg {
   grid-template-rows: 70px 38px minmax(0, 1fr) 32px;
 }
 
+.app-shell[data-fullscreen-mode="true"] {
+  height: 100dvh;
+  grid-template-rows: minmax(0, 1fr);
+  background: var(--background);
+}
+
+.app-shell[data-fullscreen-mode="true"] .topbar,
+.app-shell[data-fullscreen-mode="true"] .reader-progress,
+.app-shell[data-fullscreen-mode="true"] .statusbar {
+  display: none;
+}
+
+.app-shell[data-fullscreen-mode="true"] .workspace {
+  padding: 0;
+}
+
+.app-shell[data-fullscreen-mode="true"] .workspace-panels {
+  height: 100dvh;
+  border: 0;
+  border-radius: 0;
+  background: var(--background);
+  box-shadow: none;
+}
+
+.app-shell[data-fullscreen-mode="true"] .workspace-panel {
+  border: 0;
+  border-radius: 0;
+}
+
+.app-shell[data-fullscreen-mode="true"] .pdf-pane {
+  background: var(--background);
+}
+
+.app-shell[data-fullscreen-mode="true"] .pdf-frame {
+  padding: 10px;
+}
+
 .app-shell[data-accent="graphite"] {
   --primary: oklch(0.44 0.018 95);
   --brand-deep: oklch(0.32 0.014 95);
@@ -243,6 +280,10 @@ svg {
 
 .compact-mode[data-debug-mode="true"] {
   grid-template-rows: 62px 32px minmax(0, 1fr) 26px;
+}
+
+.compact-mode[data-fullscreen-mode="true"] {
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .topbar {
@@ -2542,6 +2583,10 @@ output {
 
   .app-shell[data-debug-mode="true"] {
     grid-template-rows: auto auto minmax(0, 1fr) 34px;
+  }
+
+  .app-shell[data-fullscreen-mode="true"] {
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .topbar {

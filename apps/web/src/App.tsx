@@ -41,6 +41,7 @@ import {
   Image,
   Lock,
   Maximize2,
+  Minimize2,
   MoreHorizontal,
   NotebookText,
   PanelLeftClose,
@@ -885,11 +886,14 @@ export default function App() {
   const [selectedContext, setSelectedContext] = useState<SelectedContext | null>(null);
   const [pendingSelectionPrompt, setPendingSelectionPrompt] = useState<QuickSelectionPrompt | null>(null);
   const lastSelectionRef = useRef<SelectedContext | null>(null);
+  const appShellRef = useRef<HTMLDivElement>(null);
   const commandMenuRef = useRef<HTMLDivElement>(null);
   const jsonImportInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const oauthPollTimerRef = useRef<number | null>(null);
   const oauthCountdownTimerRef = useRef<number | null>(null);
+  const fullscreenIntentRef = useRef(false);
+  const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false);
 
   const pdfNavigationPageCount = Math.max(pdfUrl ? pdfPageCount || pack.document.page_count || pack.pages.length : pack.pages.length, 1);
   const currentPdfPageNo = Math.min(Math.max(currentPageNo, 1), pdfNavigationPageCount);
@@ -920,12 +924,40 @@ export default function App() {
     setPanels((current) => ({ ...current, [key]: !current[key] }));
   }, []);
 
-  const togglePdfOnly = useCallback(() => {
-    setPanels((current) => {
-      const currentPdfOnly = !current.rail && !current.notes && !current.agent;
-      return currentPdfOnly ? fullPanelVisibility : { rail: false, notes: false, agent: false };
-    });
+  const exitPdfFullscreen = useCallback(async () => {
+    fullscreenIntentRef.current = false;
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => undefined);
+    }
+    setPanels(fullPanelVisibility);
   }, []);
+
+  const enterPdfFullscreen = useCallback(async () => {
+    setPanels({ rail: false, notes: false, agent: false });
+    fullscreenIntentRef.current = true;
+
+    const target = appShellRef.current;
+    if (!target?.requestFullscreen) {
+      fullscreenIntentRef.current = false;
+      setJobStatus("当前浏览器不支持全屏，已切换到 PDF 专注模式");
+      return;
+    }
+
+    if (!document.fullscreenElement) {
+      await target.requestFullscreen().catch(() => {
+        fullscreenIntentRef.current = false;
+        setJobStatus("浏览器未允许全屏，已切换到 PDF 专注模式");
+      });
+    }
+  }, []);
+
+  const togglePdfOnly = useCallback(() => {
+    if (isBrowserFullscreen || pdfOnly) {
+      void exitPdfFullscreen();
+      return;
+    }
+    void enterPdfFullscreen();
+  }, [enterPdfFullscreen, exitPdfFullscreen, isBrowserFullscreen, pdfOnly]);
 
   const openSettings = useCallback((section: SettingsSection = "general") => {
     setSettingsSection(section);
@@ -1022,6 +1054,21 @@ export default function App() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [commandMenuOpen]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isFullscreen = document.fullscreenElement === appShellRef.current;
+      setIsBrowserFullscreen(isFullscreen);
+
+      if (!document.fullscreenElement && fullscreenIntentRef.current) {
+        fullscreenIntentRef.current = false;
+        setPanels(fullPanelVisibility);
+      }
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -1269,6 +1316,7 @@ export default function App() {
   return (
     <AppCopyContext.Provider value={copy}>
       <div
+        ref={appShellRef}
         className={`app-shell ${pdfOnly ? "pdf-focus" : ""} ${uiPreferences.compactMode ? "compact-mode" : ""}`}
         data-accent={uiPreferences.accentColor}
         data-font-scale={uiPreferences.fontScale}
@@ -1276,6 +1324,7 @@ export default function App() {
         data-scrollbar-style={uiPreferences.scrollbarStyle}
         data-theme-mode={uiPreferences.theme}
         data-debug-mode={uiPreferences.debugMode}
+        data-fullscreen-mode={isBrowserFullscreen}
         lang={uiPreferences.language === "en-US" ? "en" : "zh-CN"}
       >
       <header className="topbar">
@@ -1300,8 +1349,8 @@ export default function App() {
             <IconButton label={panels.agent ? copy.topbar.hideAgent : copy.topbar.showAgent} active={panels.agent} onClick={() => togglePanel("agent")}>
               {panels.agent ? <PanelRightClose /> : <PanelRightOpen />}
             </IconButton>
-            <IconButton label={pdfOnly ? copy.topbar.exitPdfFocus : copy.topbar.pdfOnly} active={pdfOnly} onClick={togglePdfOnly}>
-              <Maximize2 />
+            <IconButton label={pdfOnly ? copy.topbar.exitPdfFocus : copy.topbar.pdfOnly} active={pdfOnly || isBrowserFullscreen} onClick={togglePdfOnly}>
+              {isBrowserFullscreen ? <Minimize2 /> : <Maximize2 />}
             </IconButton>
           </div>
           <FileButton label={copy.topbar.uploadPdf} accept="application/pdf" onFile={loadPdf}>
@@ -1475,6 +1524,11 @@ export default function App() {
                     <IconButton label={copy.pdf.nextPage} onClick={() => movePage(1)}>
                       <ChevronRight />
                     </IconButton>
+                    {isBrowserFullscreen && (
+                      <IconButton label={copy.topbar.exitPdfFocus} onClick={togglePdfOnly}>
+                        <Minimize2 />
+                      </IconButton>
+                    )}
                   </div>
                 }
               />
