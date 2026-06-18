@@ -16,11 +16,14 @@
     "@fontsource-variable/source-serif-4": "^5.2.9",
     "@fontsource/geist-sans": "^5.2.5",
     "@radix-ui/react-dialog": "^1.1.17",
+    "katex": "^0.17.0",
     "lucide-react": "^1.18.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-resizable-panels": "^4.11.2",
-    "remark-gfm": "^4.0.1"
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

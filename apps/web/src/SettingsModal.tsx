@@ -2,13 +2,11 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Bot,
   FileText,
-  Keyboard,
   Palette,
   Settings2,
   UserCircle,
   Wrench,
   X,
-  Zap,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { UiPreferences } from "./settings";
@@ -20,8 +18,6 @@ export type SettingsSection =
   | "appearance"
   | "agent"
   | "pdf"
-  | "generation"
-  | "shortcuts"
   | "account"
   | "advanced";
 
@@ -43,14 +39,12 @@ type SettingsModalProps = {
 };
 
 const sections: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
-  { id: "general", label: "General", icon: <Settings2 /> },
-  { id: "appearance", label: "Appearance", icon: <Palette /> },
-  { id: "agent", label: "Agent", icon: <Bot /> },
-  { id: "pdf", label: "PDF Reader", icon: <FileText /> },
-  { id: "generation", label: "Generation", icon: <Zap /> },
-  { id: "shortcuts", label: "Shortcuts", icon: <Keyboard /> },
-  { id: "account", label: "Account / Gateway", icon: <UserCircle /> },
-  { id: "advanced", label: "Advanced", icon: <Wrench /> },
+  { id: "general", label: "通用", icon: <Settings2 /> },
+  { id: "appearance", label: "外观", icon: <Palette /> },
+  { id: "agent", label: "助手", icon: <Bot /> },
+  { id: "pdf", label: "PDF 阅读器", icon: <FileText /> },
+  { id: "account", label: "账户 / 网关", icon: <UserCircle /> },
+  { id: "advanced", label: "高级", icon: <Wrench /> },
 ];
 
 export function SettingsModal(props: SettingsModalProps) {
@@ -83,93 +77,71 @@ export function SettingsModal(props: SettingsModalProps) {
             <div className="settings-content-header">
               <Dialog.Title>{sections.find((item) => item.id === section)?.label}</Dialog.Title>
               <Dialog.Description id="settings-description">
-                Configure workspace preferences without cluttering the reader.
+                管理低频配置，保持阅读工作区干净。
               </Dialog.Description>
             </div>
             <div className="settings-panel">
               {section === "general" && (
                 <SettingsGroup>
-                  <SettingsRow label="Language" description="Controls interface copy where localization is available.">
-                    <SettingsSelect
-                      value={props.preferences.language}
-                      onChange={(value) => props.onPreferenceChange("language", value as UiPreferences["language"])}
-                      options={[
-                        ["auto", "Auto-detect"],
-                        ["zh-CN", "中文"],
-                        ["en", "English"],
-                      ]}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label="Default workspace mode" description="Saved as a preference for future workspace restore.">
-                    <SettingsSelect
-                      value={props.preferences.workspaceMode}
-                      onChange={(value) => props.onPreferenceChange("workspaceMode", value as UiPreferences["workspaceMode"])}
-                      options={[
-                        ["full", "Full workspace"],
-                        ["pdf-agent", "PDF + Agent"],
-                        ["pdf-only", "PDF only"],
-                      ]}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label="Auto-save session" description="Keep local UI preferences and workspace state on this device.">
+                  <SettingsRow label="保存界面偏好" description="在本机保存主题、密度和面板显示相关偏好。关闭后，本页修改只在当前会话生效。">
                     <SettingsSwitch
                       checked={props.preferences.autoSaveSession}
                       onCheckedChange={(checked) => props.onPreferenceChange("autoSaveSession", checked)}
                     />
                   </SettingsRow>
-                  <SettingsRow label="Reset UI layout" description="Restore rail, notes, and agent panes.">
-                    <SettingsButton onClick={props.onResetLayout}>Reset layout</SettingsButton>
+                  <SettingsRow label="重置界面布局" description="恢复目录、讲解和助手面板。">
+                    <SettingsButton onClick={props.onResetLayout}>重置布局</SettingsButton>
                   </SettingsRow>
                 </SettingsGroup>
               )}
 
               {section === "appearance" && (
                 <SettingsGroup>
-                  <SettingsRow label="Theme" description="Stored now; full dark mode is intentionally not enabled yet.">
+                  <SettingsRow label="主题" description="切换 Claude-like 浅色、深色，或跟随系统外观。">
                     <SettingsSelect
                       value={props.preferences.theme}
                       onChange={(value) => props.onPreferenceChange("theme", value as UiPreferences["theme"])}
                       options={[
-                        ["system", "System"],
-                        ["light", "Light"],
-                        ["dark", "Dark"],
+                        ["system", "跟随系统"],
+                        ["light", "浅色"],
+                        ["dark", "深色"],
                       ]}
                     />
                   </SettingsRow>
-                  <SettingsRow label="Accent color" description="Changes the workspace accent token.">
+                  <SettingsRow label="强调色" description="切换工作区的强调色 token。">
                     <SettingsSelect
                       value={props.preferences.accentColor}
                       onChange={(value) => props.onPreferenceChange("accentColor", value as UiPreferences["accentColor"])}
                       options={[
-                        ["clay", "Claude clay"],
-                        ["graphite", "Graphite"],
-                        ["sage", "Sage"],
+                        ["clay", "陶土色"],
+                        ["graphite", "石墨灰"],
+                        ["sage", "鼠尾草绿"],
                       ]}
                     />
                   </SettingsRow>
-                  <SettingsRow label="PDF background style" description="Changes the quiet surface behind the document.">
+                  <SettingsRow label="PDF 背景" description="调整文档背后的低噪声底色。">
                     <SettingsSelect
                       value={props.preferences.pdfBackground}
                       onChange={(value) => props.onPreferenceChange("pdfBackground", value as UiPreferences["pdfBackground"])}
                       options={[
-                        ["paper", "Paper"],
-                        ["plain", "Plain"],
-                        ["soft", "Soft wash"],
+                        ["paper", "纸张"],
+                        ["plain", "纯净"],
+                        ["soft", "柔和"],
                       ]}
                     />
                   </SettingsRow>
-                  <SettingsRow label="Font scale" description="Applies to notes, assistant output, and reader copy.">
+                  <SettingsRow label="字体大小" description="应用于讲解、助手输出和阅读文本。">
                     <SettingsSelect
                       value={props.preferences.fontScale}
                       onChange={(value) => props.onPreferenceChange("fontScale", value as UiPreferences["fontScale"])}
                       options={[
-                        ["compact", "Compact"],
-                        ["default", "Default"],
-                        ["large", "Large"],
+                        ["compact", "紧凑"],
+                        ["default", "默认"],
+                        ["large", "偏大"],
                       ]}
                     />
                   </SettingsRow>
-                  <SettingsRow label="Compact mode" description="Reduces toolbar and pane spacing.">
+                  <SettingsRow label="紧凑模式" description="减少 toolbar 和 pane 的间距。">
                     <SettingsSwitch
                       checked={props.preferences.compactMode}
                       onCheckedChange={(checked) => props.onPreferenceChange("compactMode", checked)}
@@ -180,41 +152,13 @@ export function SettingsModal(props: SettingsModalProps) {
 
               {section === "agent" && (
                 <SettingsGroup>
-                  <SettingsRow label="Default model" description="Used by the app request payload when model routing is connected.">
-                    <SettingsSelect
-                      value={props.preferences.defaultModel}
-                      onChange={(value) => props.onPreferenceChange("defaultModel", value as UiPreferences["defaultModel"])}
-                      options={[
-                        ["gpt-5.5", "GPT-5.5"],
-                        ["gpt-5.1", "GPT-5.1"],
-                        ["local-preview", "Local preview"],
-                      ]}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label="Response style" description="Preference placeholder for future generation prompts.">
-                    <SettingsSelect
-                      value={props.preferences.responseStyle}
-                      onChange={(value) => props.onPreferenceChange("responseStyle", value as UiPreferences["responseStyle"])}
-                      options={[
-                        ["concise", "Concise"],
-                        ["teaching", "Teaching"],
-                        ["socratic", "Socratic"],
-                      ]}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label="Auto-use selected PDF context" description="Controls future composer context behavior.">
-                    <SettingsSwitch
-                      checked={props.preferences.autoUseSelectedContext}
-                      onCheckedChange={(checked) => props.onPreferenceChange("autoUseSelectedContext", checked)}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label="Show source pills" description="Show compact source context above the thread.">
+                  <SettingsRow label="显示来源 pill" description="在对话上方显示紧凑来源上下文。">
                     <SettingsSwitch
                       checked={props.preferences.showSourcePills}
                       onCheckedChange={(checked) => props.onPreferenceChange("showSourcePills", checked)}
                     />
                   </SettingsRow>
-                  <SettingsRow label="Page-aware suggestions" description="Use the current page title and concepts in empty-state prompts.">
+                  <SettingsRow label="页面感知建议" description="根据当前页标题和概念生成空状态提示。">
                     <SettingsSwitch
                       checked={props.preferences.pageAwareSuggestions}
                       onCheckedChange={(checked) => props.onPreferenceChange("pageAwareSuggestions", checked)}
@@ -225,116 +169,40 @@ export function SettingsModal(props: SettingsModalProps) {
 
               {section === "pdf" && (
                 <SettingsGroup>
-                  <SettingsRow label="Default zoom" description="Stored for future PDF viewer controls.">
-                    <SettingsSelect
-                      value={props.preferences.defaultZoom}
-                      onChange={(value) => props.onPreferenceChange("defaultZoom", value as UiPreferences["defaultZoom"])}
-                      options={[
-                        ["auto", "Auto"],
-                        ["100", "100%"],
-                        ["125", "125%"],
-                      ]}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label="Page fit mode" description="Stored for future native PDF preview controls.">
-                    <SettingsSelect
-                      value={props.preferences.pageFitMode}
-                      onChange={(value) => props.onPreferenceChange("pageFitMode", value as UiPreferences["pageFitMode"])}
-                      options={[
-                        ["width", "Fit width"],
-                        ["page", "Fit page"],
-                        ["height", "Fit height"],
-                      ]}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label="Scrollbar style" description="Applies to workspace scroll containers.">
+                  <SettingsRow label="滚动条样式" description="应用于工作区滚动容器。">
                     <SettingsSelect
                       value={props.preferences.scrollbarStyle}
                       onChange={(value) => props.onPreferenceChange("scrollbarStyle", value as UiPreferences["scrollbarStyle"])}
                       options={[
-                        ["thin", "Thin"],
-                        ["subtle", "Subtle"],
-                        ["native", "Native"],
+                        ["thin", "细"],
+                        ["subtle", "更弱"],
+                        ["native", "系统默认"],
                       ]}
                     />
                   </SettingsRow>
-                  <SettingsRow label="Show page summary hint" description="Display the low-noise context hint below the document.">
+                  <SettingsRow label="显示页面摘要提示" description="在文档下方显示低噪声上下文提示。">
                     <SettingsSwitch
                       checked={props.preferences.showPageSummaryHint}
                       onCheckedChange={(checked) => props.onPreferenceChange("showPageSummaryHint", checked)}
                     />
                   </SettingsRow>
-                  <SettingsRow label="Enable text selection toolbar" description="Preference placeholder for the next selection toolbar pass.">
-                    <SettingsSwitch
-                      checked={props.preferences.enableSelectionToolbar}
-                      onCheckedChange={(checked) => props.onPreferenceChange("enableSelectionToolbar", checked)}
-                    />
-                  </SettingsRow>
-                </SettingsGroup>
-              )}
-
-              {section === "generation" && (
-                <SettingsGroup>
-                  <SettingsRow label="Output format" description="Saved for future generation jobs. Current generate button still calls the existing harness.">
-                    <SettingsSelect
-                      value={props.preferences.outputFormat}
-                      onChange={(value) => props.onPreferenceChange("outputFormat", value as UiPreferences["outputFormat"])}
-                      options={[
-                        ["markdown", "Markdown"],
-                        ["json", "JSON"],
-                        ["markdown-json", "Markdown + JSON"],
-                      ]}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label="Notes style" description="Saved preference for future prompt routing.">
-                    <SettingsSelect
-                      value={props.preferences.notesStyle}
-                      onChange={(value) => props.onPreferenceChange("notesStyle", value as UiPreferences["notesStyle"])}
-                      options={[
-                        ["teaching", "Teaching"],
-                        ["concise", "Concise"],
-                        ["exam", "Exam prep"],
-                      ]}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label="Quiz generation options" description="Future setting for quiz-style outputs.">
-                    <SettingsSwitch
-                      checked={props.preferences.quizOptions}
-                      onCheckedChange={(checked) => props.onPreferenceChange("quizOptions", checked)}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label="Include citations" description="Saved for future generated notes and exports.">
-                    <SettingsSwitch
-                      checked={props.preferences.includeCitations}
-                      onCheckedChange={(checked) => props.onPreferenceChange("includeCitations", checked)}
-                    />
-                  </SettingsRow>
-                </SettingsGroup>
-              )}
-
-              {section === "shortcuts" && (
-                <SettingsGroup>
-                  <ShortcutRow label="Open settings" shortcut="," />
-                  <ShortcutRow label="Send selected text to Agent" shortcut="S" />
-                  <ShortcutRow label="Toggle Agent pane" shortcut="A" />
-                  <ShortcutRow label="Generate" shortcut="G" />
                 </SettingsGroup>
               )}
 
               {section === "account" && (
                 <SettingsGroup>
-                  <SettingsRow label="OAuth status" description="OpenAI Gateway connection state.">
+                  <SettingsRow label="OAuth 状态" description="OpenAI Gateway 连接状态。">
                     <StatusValue>{oauthStatusLabel(props.oauthMode)}</StatusValue>
                   </SettingsRow>
-                  <SettingsRow label="Connected email" description="Only shown here, not in the main status bar.">
-                    <StatusValue>{props.oauthAccount || "Not connected"}</StatusValue>
+                  <SettingsRow label="已连接邮箱" description="只在这里显示，不出现在主界面状态栏。">
+                    <StatusValue>{props.oauthAccount || "未连接"}</StatusValue>
                   </SettingsRow>
-                  <SettingsRow label="Provider status" description={props.documentTitle}>
+                  <SettingsRow label="Provider 状态" description={props.documentTitle}>
                     <StatusValue>{props.providerStatus}</StatusValue>
                   </SettingsRow>
-                  <SettingsRow label="Reconnect / sign out" description="Uses the existing OAuth start/logout flow.">
+                  <SettingsRow label="重新连接 / 退出" description="复用现有 OAuth start/logout 流程。">
                     <SettingsButton onClick={props.onConnectOAuth}>
-                      {props.oauthMode === "connected" ? "Sign out" : "Connect OpenAI"}
+                      {props.oauthMode === "connected" ? "退出登录" : "连接 OpenAI"}
                     </SettingsButton>
                   </SettingsRow>
                 </SettingsGroup>
@@ -342,20 +210,17 @@ export function SettingsModal(props: SettingsModalProps) {
 
               {section === "advanced" && (
                 <SettingsGroup>
-                  <SettingsRow label="Debug mode" description="Show job status and diagnostics in the low-noise footer.">
+                  <SettingsRow label="Debug 模式" description="在低噪声 footer 中显示任务状态和诊断信息。">
                     <SettingsSwitch
                       checked={props.preferences.debugMode}
                       onCheckedChange={(checked) => props.onPreferenceChange("debugMode", checked)}
                     />
                   </SettingsRow>
-                  <SettingsRow label="Clear local UI preferences" description="Resets only local visual preferences.">
-                    <SettingsButton onClick={props.onResetPreferences}>Reset preferences</SettingsButton>
+                  <SettingsRow label="清除本地 UI 偏好" description="只重置本地视觉偏好。">
+                    <SettingsButton onClick={props.onResetPreferences}>重置偏好</SettingsButton>
                   </SettingsRow>
-                  <SettingsRow label="Export session data" description="Placeholder for a future session export action.">
-                    <SettingsButton disabled>Coming soon</SettingsButton>
-                  </SettingsRow>
-                  <SettingsRow label="Developer diagnostics" description={props.preferences.debugMode ? props.jobStatus : "Enable debug mode to show runtime status."}>
-                    <StatusValue>{props.preferences.debugMode ? "Visible" : "Hidden"}</StatusValue>
+                  <SettingsRow label="开发者诊断" description={props.preferences.debugMode ? props.jobStatus : "开启 Debug 模式后显示运行状态。"}>
+                    <StatusValue>{props.preferences.debugMode ? "可见" : "隐藏"}</StatusValue>
                   </SettingsRow>
                 </SettingsGroup>
               )}
@@ -379,17 +244,6 @@ function SettingsRow({ label, description, children }: { label: string; descript
         {description && <p>{description}</p>}
       </div>
       <div className="settings-row-control">{children}</div>
-    </div>
-  );
-}
-
-function ShortcutRow({ label, shortcut }: { label: string; shortcut: string }) {
-  return (
-    <div className="settings-row">
-      <div className="settings-row-copy">
-        <div className="settings-row-label">{label}</div>
-      </div>
-      <kbd className="settings-kbd">{shortcut}</kbd>
     </div>
   );
 }
@@ -433,10 +287,10 @@ function StatusValue({ children }: { children: ReactNode }) {
 }
 
 function oauthStatusLabel(mode: OAuthMode) {
-  if (mode === "connected") return "Connected";
-  if (mode === "polling") return "Waiting for device code";
-  if (mode === "offline") return "Backend offline";
-  if (mode === "mock") return "Local preview";
-  if (mode === "ready") return "Ready to connect";
-  return "Checking";
+  if (mode === "connected") return "已连接";
+  if (mode === "polling") return "等待设备验证码";
+  if (mode === "offline") return "后端未启动";
+  if (mode === "mock") return "本地预览";
+  if (mode === "ready") return "可连接";
+  return "检查中";
 }

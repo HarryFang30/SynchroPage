@@ -314,6 +314,7 @@ def _build_agent_prompt(body: Mapping[str, Any]) -> str:
     teaching = page.get("teaching") if isinstance(page.get("teaching"), Mapping) else {}
     source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
     messages = _transcript_messages(body.get("messages"))
+    selected_context = _selected_context(body.get("selectedContext"))
     contexts = [*_context_items(body.get("context")), *_context_parts(body.get("parts"))]
     input_text = _truncate(_text_from_parts(body.get("parts")) or str(body.get("input") or ""), MAX_CONTEXT_CHARS)
 
@@ -333,9 +334,40 @@ def _build_agent_prompt(body: Mapping[str, Any]) -> str:
         sections.extend(["Existing notes:", _truncate(str(teaching.get("speaker_notes_md")), MAX_CONTEXT_CHARS)])
     if messages:
         sections.extend(["# Recent conversation", *messages])
+    if selected_context:
+        sections.extend(
+            [
+                "# User selected source material",
+                "The user selected this source from the current workspace. Prioritize it when answering, quote it carefully, and say when the selected source is insufficient.",
+                selected_context,
+            ]
+        )
     if contexts:
-        sections.extend(["# Selected context", *contexts])
+        sections.extend(["# Additional context", *contexts])
     return "\n\n".join(section for section in sections if section)
+
+
+def _selected_context(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    text = _truncate(str(value.get("text") or ""), MAX_CONTEXT_CHARS)
+    if not text:
+        return ""
+    source_type = _string_value(value.get("sourceType"), "unknown")
+    document_title = _string_value(value.get("documentTitle"), "")
+    section_title = _string_value(value.get("sectionTitle"), "")
+    page_number = _string_value(
+        value.get("pdfPageNumber") or value.get("generatedPageNumber") or value.get("pageNumber"),
+        "",
+    )
+    meta = [f"type={source_type}"]
+    if page_number:
+        meta.append(f"page={page_number}")
+    if document_title:
+        meta.append(f"document={document_title}")
+    if section_title:
+        meta.append(f"section={section_title}")
+    return f"Selected context ({', '.join(meta)})\n{text}"
 
 
 def _context_items(value: Any) -> list[str]:

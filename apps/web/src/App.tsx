@@ -11,8 +11,14 @@ import {
   type ThreadAssistantMessagePart,
   useAuiState,
   useLocalRuntime,
+  useThreadRuntime,
 } from "@assistant-ui/react";
-import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
+import {
+  MarkdownTextPrimitive,
+  escapeCurrencyDollars,
+  normalizeMathDelimiters,
+} from "@assistant-ui/react-markdown";
+import "katex/dist/katex.min.css";
 import {
   Bot,
   Check,
@@ -27,6 +33,7 @@ import {
   Image,
   Lock,
   Maximize2,
+  MoreHorizontal,
   NotebookText,
   PanelLeftClose,
   PanelLeftOpen,
@@ -42,9 +49,11 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import rehypeKatex from "rehype-katex";
 import {
   type ChangeEvent,
   type ReactNode,
+  type RefObject,
   useCallback,
   useEffect,
   useMemo,
@@ -52,6 +61,8 @@ import {
   useState,
 } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import {
   defaultUiPreferences,
@@ -108,9 +119,48 @@ type AgentAttachment = {
   data_url: string;
 };
 
+type SelectedContextSourceType =
+  | "pdf-page"
+  | "generated-explanation"
+  | "assistant-message"
+  | "page"
+  | "unknown";
+
+type SelectedContext = {
+  id: string;
+  text: string;
+  sourceType: SelectedContextSourceType;
+  documentTitle?: string;
+  pageNumber?: number;
+  pdfPageNumber?: number;
+  generatedPageNumber?: number;
+  sectionTitle?: string;
+  messageId?: string;
+  rect?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  createdAt: number;
+};
+
+type SelectionToolbarState = {
+  context: SelectedContext;
+  x: number;
+  y: number;
+};
+
+type QuickSelectionPrompt = {
+  id: string;
+  prompt: string;
+  context: SelectedContext;
+};
+
 type AgentSnapshot = {
   contexts: AgentContextItem[];
   attachments: AgentAttachment[];
+  selectedContext: SelectedContext | null;
 };
 
 type OAuthMode = "unknown" | "ready" | "connected" | "polling" | "offline" | "mock";
@@ -285,10 +335,44 @@ function compactText(value: string, max = 120) {
 }
 
 function contextSourceLabel(context: AgentContextItem) {
-  if (context.type === "formula") return `Formula · Page ${context.page_no}`;
-  if (context.type === "selection") return `Selected passage · Page ${context.page_no}`;
-  if (context.type === "pdf_reference") return `PDF reference · Page ${context.page_no}`;
-  return `Using page ${context.page_no} · ${compactText(context.source || context.title, 28)}`;
+  if (context.type === "formula") return `公式 · PDF p.${context.page_no}`;
+  if (context.type === "selection") return `选中内容 · PDF p.${context.page_no}`;
+  if (context.type === "pdf_reference") return `PDF 来源 · p.${context.page_no}`;
+  return `来源 PDF p.${context.page_no} · ${compactText(context.source || context.title, 28)}`;
+}
+
+function selectedContextSourceLabel(context: SelectedContext) {
+  if (context.sourceType === "pdf-page") return `来源 PDF p.${context.pdfPageNumber || context.pageNumber || "?"}`;
+  if (context.sourceType === "generated-explanation") return `讲解 p.${context.generatedPageNumber || context.pageNumber || "?"}`;
+  if (context.sourceType === "assistant-message") return "助手消息";
+  if (context.sourceType === "page") return `页面 p.${context.pageNumber || "?"}`;
+  return "选中内容";
+}
+
+function selectedContextToAgentContext(context: SelectedContext): AgentContextItem {
+  const pageNo = context.pdfPageNumber || context.generatedPageNumber || context.pageNumber || 1;
+  return {
+    id: context.id,
+    type: detectContextType(context.text),
+    title: selectedContextSourceLabel(context),
+    source: context.sectionTitle || selectedContextSourceLabel(context),
+    page_no: pageNo,
+    text: context.text,
+  };
+}
+
+function selectedContextPayload(context: SelectedContext) {
+  return {
+    id: context.id,
+    text: context.text,
+    sourceType: context.sourceType,
+    documentTitle: context.documentTitle,
+    pageNumber: context.pageNumber,
+    pdfPageNumber: context.pdfPageNumber,
+    generatedPageNumber: context.generatedPageNumber,
+    sectionTitle: context.sectionTitle,
+    messageId: context.messageId,
+  };
 }
 
 function composerContextPreview(contexts: AgentContextItem[], attachments: AgentAttachment[]) {
@@ -300,26 +384,56 @@ function composerContextPreview(contexts: AgentContextItem[], attachments: Agent
   if (attachments.length) {
     const first = attachments[attachments.length - 1];
     const extra = attachments.length > 1 ? ` +${attachments.length - 1}` : "";
-    return `Using image · ${compactText(first.name, 28)}${extra}`;
+    return `图片 · ${compactText(first.name, 28)}${extra}`;
   }
   return "";
+}
+
+const markdownRemarkPlugins = [
+  remarkGfm,
+  [remarkMath, { singleDollarTextMath: true }],
+] as const;
+const markdownRehypePlugins = [[rehypeKatex, { strict: false, throwOnError: false }]] as const;
+
+function preprocessMathMarkdown(text: string) {
+  const normalized = normalizeMathDelimiters(escapeCurrencyDollars(text));
+  return normalized
+    .split(/(```[\s\S]*?```)/g)
+    .map((segment) => {
+      if (segment.startsWith("```")) return segment;
+      return segment
+        .split(/(\$\$[\s\S]*?\$\$|\$[^$\n]+\$)/g)
+        .map((part) => {
+          if (part.startsWith("$")) return part;
+          return wrapBareCircuitMath(part);
+        })
+        .join("");
+    })
+    .join("");
+}
+
+function wrapBareCircuitMath(text: string) {
+  return text
+    .replace(/^(\s*)([01]{2,}\s*(?:\\rightarrow|→)\s*[01]{2,}(?:\s*(?:\\rightarrow|→)\s*[01]{2,})+)(\s*)$/gm, (_match, lead, expression, tail) => `${lead}$$${expression}$$${tail}`)
+    .replace(/^(\s*)([A-Za-z][A-Za-z0-9]*_\{?[A-Za-z0-9]+\}?(?:\^\+)?\s*=\s*[A-Za-z][A-Za-z0-9]*_\{?[A-Za-z0-9]+\}?(?:\^\+)?)(\s*)$/gm, (_match, lead, expression, tail) => `${lead}$${expression}$${tail}`)
+    .replace(/\b([A-Z][A-Za-z0-9]*_\{?[A-Za-z0-9]+\}?(?:\^\+)?|[A-Z]\^\+)\b/g, (_match, token) => `$${token}$`);
 }
 
 function pageSuggestions(page: PageData, pageAware: boolean) {
   if (!pageAware) {
     return [
-      "Explain the selected passage",
-      "Generate concise study notes",
-      "Find missing assumptions",
+      "解释选中内容",
+      "生成简洁学习笔记",
+      "查找缺失假设",
     ];
   }
   const title = compactText(page.teaching.slide_title, 42);
   const concept = page.teaching.concepts[0] || "this page";
   return [
-    `Explain "${title}"`,
-    `Generate exam-style notes for page ${page.page_no}`,
-    `Quiz me on ${concept}`,
-    "Find the missing assumptions",
+    `解释“${title}”`,
+    `生成本页考试风格笔记`,
+    `根据“${concept}”考我`,
+    "查找缺失假设",
   ];
 }
 
@@ -383,6 +497,108 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
+function usePageSelection(args: {
+  documentTitle: string;
+  page: PageData;
+  setLastSelection: (context: SelectedContext | null) => void;
+}) {
+  const [toolbar, setToolbar] = useState<SelectionToolbarState | null>(null);
+
+  const updateSelection = useCallback(() => {
+    const selection = window.getSelection();
+    const text = selection?.toString().trim() || "";
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed || !text) {
+      setToolbar(null);
+      args.setLastSelection(null);
+      return;
+    }
+
+    const anchorElement =
+      selection.anchorNode instanceof Element
+        ? selection.anchorNode
+        : selection.anchorNode?.parentElement || null;
+    if (!anchorElement || shouldIgnoreSelection(anchorElement)) {
+      setToolbar(null);
+      args.setLastSelection(null);
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (!rect.width && !rect.height) return;
+
+    const source = detectSelectionSource(anchorElement);
+    const context: SelectedContext = {
+      id: createId("selected"),
+      text,
+      sourceType: source.sourceType,
+      documentTitle: args.documentTitle,
+      pageNumber: args.page.page_no,
+      pdfPageNumber: source.sourceType === "pdf-page" ? args.page.page_no : undefined,
+      generatedPageNumber: source.sourceType === "generated-explanation" ? args.page.page_no : undefined,
+      sectionTitle: source.label,
+      rect: {
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+      },
+      createdAt: Date.now(),
+    };
+
+    args.setLastSelection(context);
+    setToolbar({
+      context,
+      x: Math.min(window.innerWidth - 18, Math.max(18, rect.left + rect.width / 2)),
+      y: Math.max(18, rect.top - 12),
+    });
+  }, [args]);
+
+  useEffect(() => {
+    const onSelectionChange = () => window.setTimeout(updateSelection, 0);
+    const clearOnScroll = () => {
+      const selection = window.getSelection();
+      if (!selection?.toString().trim()) setToolbar(null);
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    window.addEventListener("mouseup", onSelectionChange);
+    window.addEventListener("keyup", onSelectionChange);
+    window.addEventListener("scroll", clearOnScroll, true);
+    window.addEventListener("resize", clearOnScroll);
+    return () => {
+      document.removeEventListener("selectionchange", onSelectionChange);
+      window.removeEventListener("mouseup", onSelectionChange);
+      window.removeEventListener("keyup", onSelectionChange);
+      window.removeEventListener("scroll", clearOnScroll, true);
+      window.removeEventListener("resize", clearOnScroll);
+    };
+  }, [updateSelection]);
+
+  const clearSelection = useCallback(() => {
+    window.getSelection()?.removeAllRanges();
+    args.setLastSelection(null);
+    setToolbar(null);
+  }, [args]);
+
+  return { toolbar, clearSelection };
+}
+
+function shouldIgnoreSelection(element: Element) {
+  return Boolean(
+    element.closest(
+      "input, textarea, select, [contenteditable='true'], .aui-composer-root, .selection-toolbar",
+    ),
+  );
+}
+
+function detectSelectionSource(element: Element): { sourceType: SelectedContextSourceType; label: string } {
+  if (element.closest(".pdf-pane")) return { sourceType: "pdf-page", label: "PDF 页面选区" };
+  if (element.closest(".notes-pane")) return { sourceType: "generated-explanation", label: "讲解区选区" };
+  if (element.closest(".assistant-message")) return { sourceType: "assistant-message", label: "助手消息选区" };
+  if (element.closest(".page-rail")) return { sourceType: "page", label: "目录选区" };
+  return { sourceType: "unknown", label: "页面选区" };
+}
+
 function messageText(message: unknown): string {
   const msg = message as { content?: unknown[]; role?: string };
   return (msg.content || [])
@@ -399,17 +615,34 @@ function createPdfAgentAdapter(args: {
   getPack: () => PagePack;
   getPage: () => PageData;
   isBackendOffline: () => boolean;
+  clearSelectedContext: () => void;
 }): ChatModelAdapter {
   return {
-    async run(options: ChatModelRunOptions) {
+    async *run(options: ChatModelRunOptions) {
       const snapshot = args.getSnapshot();
       const pack = args.getPack();
       const page = args.getPage();
+      const selectedAgentContext = snapshot.selectedContext
+        ? selectedContextToAgentContext(snapshot.selectedContext)
+        : null;
       const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
       const latestUserText = latestUser ? messageText(latestUser) : "";
 
       const parts = [
         latestUserText ? { type: "text", text: latestUserText } : null,
+        selectedAgentContext
+          ? {
+              type: "quote",
+              title: selectedAgentContext.title,
+              text: selectedAgentContext.text,
+              source: {
+                kind: selectedAgentContext.source,
+                page_no: selectedAgentContext.page_no,
+                document_id: pack.document.id,
+                source_type: snapshot.selectedContext?.sourceType,
+              },
+            }
+          : null,
         ...snapshot.contexts.map((context) => ({
           type: context.type === "formula" ? "quote" : "pdf_reference",
           title: context.title,
@@ -442,6 +675,8 @@ function createPdfAgentAdapter(args: {
         input: latestUserText || "请根据上下文继续。",
         parts,
         attachments: snapshot.attachments,
+        context: selectedAgentContext ? [selectedAgentContext, ...snapshot.contexts] : snapshot.contexts,
+        selectedContext: snapshot.selectedContext ? selectedContextPayload(snapshot.selectedContext) : null,
       };
 
       try {
@@ -455,8 +690,15 @@ function createPdfAgentAdapter(args: {
         );
         const content = response.message?.content || response.content;
         if (!content) throw new Error("AI 网关返回了空结果");
-        return {
+        for await (const partial of streamAssistantText(content, options.abortSignal)) {
+          yield {
+            content: [{ type: "text", text: partial }] satisfies ThreadAssistantMessagePart[],
+            status: { type: "running" },
+          };
+        }
+        yield {
           content: [{ type: "text", text: content }] satisfies ThreadAssistantMessagePart[],
+          status: { type: "complete", reason: "stop" },
         };
       } catch (error) {
         if ((error as Error).name === "AbortError") throw error;
@@ -469,12 +711,37 @@ function createPdfAgentAdapter(args: {
         ]
           .filter(Boolean)
           .join("\n\n");
-        return {
+        for await (const partial of streamAssistantText(local, options.abortSignal)) {
+          yield {
+            content: [{ type: "text", text: partial }] satisfies ThreadAssistantMessagePart[],
+            status: { type: "running" },
+          };
+        }
+        yield {
           content: [{ type: "text", text: local }] satisfies ThreadAssistantMessagePart[],
+          status: { type: "complete", reason: "stop" },
         };
+      } finally {
+        args.clearSelectedContext();
       }
     },
   };
+}
+
+async function* streamAssistantText(text: string, signal: AbortSignal) {
+  const chunks = chunkAssistantText(text);
+  let partial = "";
+  for (const chunk of chunks) {
+    if (signal.aborted) throw new DOMException("生成已停止", "AbortError");
+    partial += chunk;
+    yield partial;
+    await new Promise((resolve) => window.setTimeout(resolve, 12));
+  }
+}
+
+function chunkAssistantText(text: string) {
+  const chunks = text.match(/[\s\S]{1,24}/g);
+  return chunks?.length ? chunks : [text];
 }
 
 export default function App() {
@@ -495,19 +762,31 @@ export default function App() {
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(() => loadUiPreferences());
   const [contexts, setContexts] = useState<AgentContextItem[]>([]);
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
-  const lastSelectionRef = useRef<AgentContextItem | null>(null);
+  const [selectedContext, setSelectedContext] = useState<SelectedContext | null>(null);
+  const [pendingSelectionPrompt, setPendingSelectionPrompt] = useState<QuickSelectionPrompt | null>(null);
+  const lastSelectionRef = useRef<SelectedContext | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const oauthPollTimerRef = useRef<number | null>(null);
   const oauthCountdownTimerRef = useRef<number | null>(null);
 
   const page = pack.pages.find((item) => item.page_no === currentPageNo) || pack.pages[0];
   const currentIndex = Math.max(0, pack.pages.findIndex((item) => item.page_no === page.page_no));
-  const percent = pack.pages.length ? Math.round(((currentIndex + 1) / pack.pages.length) * 100) : 0;
   const pdfOnly = !panels.rail && !panels.notes && !panels.agent;
   const fullWorkbench = panels.rail && panels.notes && panels.agent;
   const filteredPages = pack.pages.filter((item) =>
     query ? item.teaching.slide_title.toLowerCase().includes(query.toLowerCase()) : true,
   );
   const visiblePaneCount = 1 + Number(panels.rail) + Number(panels.notes) + Number(panels.agent);
+  const pdfViewerSrc = pdfUrl
+    ? `${pdfUrl}#page=${page.page_no}&toolbar=0&navpanes=0&scrollbar=0&view=FitH`
+    : "";
+  const { toolbar: selectionToolbar, clearSelection } = usePageSelection({
+    documentTitle: pack.document.title,
+    page,
+    setLastSelection: (context) => {
+      lastSelectionRef.current = context;
+    },
+  });
 
   const togglePanel = useCallback((key: PanelKey) => {
     setPanels((current) => ({ ...current, [key]: !current[key] }));
@@ -547,8 +826,8 @@ export default function App() {
   }, []);
 
   const getSnapshot = useCallback(
-    () => ({ contexts, attachments }),
-    [attachments, contexts],
+    () => ({ contexts, attachments, selectedContext }),
+    [attachments, contexts, selectedContext],
   );
   const getPack = useCallback(() => pack, [pack]);
   const getPage = useCallback(() => page, [page]);
@@ -564,58 +843,53 @@ export default function App() {
     setPanels((current) => ({ ...current, agent: true }));
   }, []);
 
-  const captureSelection = useCallback(() => {
-    const selection = window.getSelection();
-    const text = selection?.toString().trim() || "";
-    const element =
-      selection?.anchorNode instanceof Element
-        ? selection.anchorNode
-        : selection?.anchorNode?.parentElement;
-    const source = element?.closest(".notes-pane")
-      ? "讲解选区"
-      : element?.closest(".pdf-pane")
-        ? "PDF/页面选区"
-        : element?.closest(".page-rail")
-          ? "目录选区"
-          : "页面选区";
-    const context = text
-      ? {
-          id: createId("ctx_selection"),
-          type: detectContextType(text),
-          title: source,
-          source,
-          page_no: page.page_no,
-          text,
-        }
-      : lastSelectionRef.current;
+  const focusComposer = useCallback(() => {
+    window.setTimeout(() => composerInputRef.current?.focus(), 20);
+  }, []);
+
+  const captureSelection = useCallback((context = selectionToolbar?.context || lastSelectionRef.current) => {
     if (!context) {
       setJobStatus("没有可加入的页面选区");
       return;
     }
-    addContext(context);
-    setJobStatus("选区已加入 Agent");
-  }, [addContext, page.page_no]);
+    setSelectedContext(context);
+    setPanels((current) => ({ ...current, agent: true }));
+    clearSelection();
+    focusComposer();
+    setJobStatus("选中内容已加入对话");
+  }, [clearSelection, focusComposer, selectionToolbar?.context]);
 
-  const handleSelectionChange = useCallback(() => {
-    const selection = window.getSelection();
-    const text = selection?.toString().trim() || "";
-    if (!text) return;
-    lastSelectionRef.current = {
-      id: createId("ctx_selection"),
-      type: detectContextType(text),
-      title: "页面选区",
-      source: "页面选区",
-      page_no: page.page_no,
-      text,
+  const sendSelectionPrompt = useCallback((context: SelectedContext, intent: "explain" | "summarize") => {
+    const label = selectedContextSourceLabel(context);
+    const prompt = intent === "explain"
+      ? `请解释这段选中内容，优先基于该来源回答：${label}`
+      : `请总结这段选中内容，提炼关键概念和可能的公式关系：${label}`;
+    setSelectedContext(context);
+    setPanels((current) => ({ ...current, agent: true }));
+    setPendingSelectionPrompt({ id: createId("quick_prompt"), prompt, context });
+    clearSelection();
+    setJobStatus(intent === "explain" ? "正在解释选中内容" : "正在总结选中内容");
+  }, [clearSelection]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      root.dataset.pagepairTheme = uiPreferences.theme;
+      root.dataset.pagepairResolvedTheme =
+        uiPreferences.theme === "system" ? (media.matches ? "dark" : "light") : uiPreferences.theme;
     };
-  }, [page.page_no]);
+
+    applyTheme();
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [uiPreferences.theme]);
 
   useEffect(() => {
-    document.addEventListener("selectionchange", handleSelectionChange);
-    return () => document.removeEventListener("selectionchange", handleSelectionChange);
-  }, [handleSelectionChange]);
-
-  useEffect(() => {
+    if (!uiPreferences.autoSaveSession) {
+      window.localStorage.setItem(uiPreferencesStorageKey, JSON.stringify({ autoSaveSession: false }));
+      return;
+    }
     window.localStorage.setItem(uiPreferencesStorageKey, JSON.stringify(uiPreferences));
   }, [uiPreferences]);
 
@@ -799,20 +1073,20 @@ export default function App() {
 
   const authText =
     oauthMode === "connected"
-      ? `OpenAI Gateway: OAuth session active${oauthAccount ? ` · ${oauthAccount}` : ""}`
+      ? `OpenAI Gateway：OAuth 会话已连接${oauthAccount ? ` · ${oauthAccount}` : ""}`
       : oauthMode === "polling"
-        ? "OpenAI Gateway: 等待授权"
+        ? "OpenAI Gateway：等待授权"
         : oauthMode === "offline"
-          ? "OpenAI Gateway: 后端未启动"
-          : "OpenAI Gateway: 未连接";
+          ? "OpenAI Gateway：后端未启动"
+          : "OpenAI Gateway：未连接";
   const connectionText =
     oauthMode === "connected"
-      ? "OAuth connected"
+      ? "OAuth 已连接"
       : oauthMode === "polling"
-        ? "Waiting for code"
+        ? "等待验证码"
         : oauthMode === "offline" || oauthMode === "mock"
-          ? "Local preview"
-          : "Gateway ready";
+          ? "本地预览"
+          : "网关就绪";
 
   return (
     <div
@@ -842,32 +1116,41 @@ export default function App() {
             <IconButton label={panels.notes ? "隐藏讲解面板" : "显示讲解面板"} active={panels.notes} onClick={() => togglePanel("notes")}>
               <NotebookText />
             </IconButton>
-            <IconButton label={panels.agent ? "隐藏 AI Agent" : "显示 AI Agent"} active={panels.agent} onClick={() => togglePanel("agent")}>
+            <IconButton label={panels.agent ? "隐藏助手" : "显示助手"} active={panels.agent} onClick={() => togglePanel("agent")}>
               {panels.agent ? <PanelRightClose /> : <PanelRightOpen />}
             </IconButton>
             <IconButton label={pdfOnly ? "退出 PDF 专注" : "只看 PDF"} active={pdfOnly} onClick={togglePdfOnly}>
               <Maximize2 />
             </IconButton>
           </div>
-          <IconButton
-            label={oauthMode === "polling" ? "查看 OpenAI 验证码" : "连接 OpenAI OAuth"}
-            active={oauthMode === "connected" || oauthMode === "polling"}
-            onClick={connectOAuth}
-          >
-            <Lock />
-          </IconButton>
           <FileButton label="上传 PDF" accept="application/pdf" onFile={loadPdf}>
             <Upload />
           </FileButton>
-          <FileButton label="导入 PagePair JSON" accept="application/json,.json" onFile={loadJson}>
-            <FileInput />
-          </FileButton>
-          <IconButton label="导出 JSON" onClick={exportJson}>
-            <FileJson />
-          </IconButton>
           <IconButton label="打开设置" onClick={() => openSettings("general")}>
             <Settings2 />
           </IconButton>
+          <details className="command-menu">
+            <summary className="mini-button" aria-label="更多操作" title="更多操作">
+              <MoreHorizontal />
+            </summary>
+            <div className="command-menu-popover">
+              <button type="button" onClick={connectOAuth}>
+                <Lock />
+                {oauthMode === "polling" ? "查看 OpenAI 验证码" : "连接 OpenAI OAuth"}
+              </button>
+              <MenuFileButton label="导入 PagePair JSON" accept="application/json,.json" onFile={loadJson}>
+                <FileInput />
+              </MenuFileButton>
+              <button type="button" onClick={exportJson}>
+                <FileJson />
+                导出 JSON
+              </button>
+              <button type="button" onClick={() => openSettings("advanced")}>
+                <Settings2 />
+                高级设置
+              </button>
+            </div>
+          </details>
           <button className="primary-button" type="button" onClick={() => setJobStatus("生成任务已交给后端 harness")}>
             <Zap />
             生成
@@ -877,8 +1160,8 @@ export default function App() {
 
       <section className="reader-progress">
         <div className="progress-meta">
-          <span>{page.teaching.slide_title}</span>
-          <strong>{percent}%</strong>
+          <span>讲解 {currentIndex + 1} / {pack.pages.length}</span>
+          <strong>{pack.document.title}</strong>
         </div>
         <input
           type="range"
@@ -921,6 +1204,13 @@ export default function App() {
         documentTitle={pack.document.title}
       />
 
+      <SelectionToolbar
+        state={selectionToolbar}
+        onAdd={(context) => captureSelection(context)}
+        onExplain={(context) => sendSelectionPrompt(context, "explain")}
+        onSummarize={(context) => sendSelectionPrompt(context, "summarize")}
+      />
+
       <main className="workspace" data-pane-count={visiblePaneCount}>
         <PanelGroup orientation="horizontal" className="workspace-panels">
           <Panel className="workspace-panel" hidden={!panels.rail} defaultSize={18} minSize={12}>
@@ -931,7 +1221,7 @@ export default function App() {
                 </div>
                 <div className="rail-meta">
                   <span>{pack.pages.length} 页</span>
-                  <span>{pack.pages.filter((item) => item.status === "ready").length} ready</span>
+                  <span>{pack.pages.filter((item) => item.status === "ready").length} 已就绪</span>
                 </div>
               </div>
               <div className="page-list">
@@ -946,10 +1236,10 @@ export default function App() {
                     <span className="page-copy">
                       <strong>{item.teaching.slide_title}</strong>
                       <span>
-                        {item.status} · {item.source.parser}
+                        {item.status === "ready" ? "已就绪" : item.status} · {item.source.parser}
                       </span>
                     </span>
-                    <span className="page-score">{Math.round(item.teaching.confidence * 100)}%</span>
+                    <span className="page-score">已对齐</span>
                   </button>
                 ))}
               </div>
@@ -961,7 +1251,7 @@ export default function App() {
           <Panel className="workspace-panel" defaultSize={pdfOnly ? 100 : 30} minSize={24}>
             <section className="pdf-pane">
               <PaneToolbar
-                title={pdfUrl ? "PDF 预览" : "示例预览"}
+                title={pdfUrl ? `来源 PDF p.${page.page_no}` : "示例 PDF 页面"}
                 right={
                   <div className="toolbar-actions">
                     <IconButton label="上一页" onClick={() => movePage(-1)}>
@@ -976,7 +1266,7 @@ export default function App() {
               />
               <div className={`pdf-frame ${pdfUrl ? "has-pdf" : ""}`}>
                 {pdfUrl ? (
-                  <iframe title="PDF 预览" src={`${pdfUrl}#page=${page.page_no}`} />
+                  <iframe title="PDF 预览" src={pdfViewerSrc} />
                 ) : (
                   <SlidePreview page={page} />
                 )}
@@ -995,20 +1285,23 @@ export default function App() {
           <Panel className="workspace-panel" hidden={!panels.notes} defaultSize={27} minSize={22}>
             <section className="notes-pane">
               <PaneToolbar
-                title={page.teaching.slide_title}
-                badge={`${Math.round(page.teaching.confidence * 100)}%`}
+                title="结构化讲解"
                 right={
-                  <div className="tab-group">
-                    {(["notes", "structure", "json"] as const).map((tab) => (
-                      <button
-                        key={tab}
-                        type="button"
-                        className={`tab-button ${activeTab === tab ? "active" : ""}`}
-                        onClick={() => setActiveTab(tab)}
-                      >
-                        {tab === "notes" ? "讲解" : tab === "structure" ? "结构" : "JSON"}
-                      </button>
-                    ))}
+                  <div className="notes-toolbar-right">
+                    <span className="source-pill">来源 PDF p.{page.page_no}</span>
+                    <span className="source-pill">讲解 {currentIndex + 1} / {pack.pages.length}</span>
+                    <div className="tab-group">
+                      {(["notes", "structure", "json"] as const).map((tab) => (
+                        <button
+                          key={tab}
+                          type="button"
+                          className={`tab-button ${activeTab === tab ? "active" : ""}`}
+                          onClick={() => setActiveTab(tab)}
+                        >
+                          {tab === "notes" ? "讲解" : tab === "structure" ? "结构" : "JSON"}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 }
               />
@@ -1026,13 +1319,20 @@ export default function App() {
             <AgentPanel
               contexts={contexts}
               attachments={attachments}
+              selectedContext={selectedContext}
+              pendingSelectionPrompt={pendingSelectionPrompt}
               setContexts={setContexts}
               setAttachments={setAttachments}
+              setSelectedContext={setSelectedContext}
+              clearPendingSelectionPrompt={(id) => {
+                setPendingSelectionPrompt((current) => (current?.id === id ? null : current));
+              }}
               addCurrentPage={() => {
                 addContext(pageContext(pack, page));
-                setJobStatus("当前页已加入 Agent");
+                setJobStatus("当前页已加入助手");
               }}
               captureSelection={captureSelection}
+              composerInputRef={composerInputRef}
               getSnapshot={getSnapshot}
               getPack={getPack}
               getPage={getPage}
@@ -1046,9 +1346,14 @@ export default function App() {
       </main>
 
       <footer className="statusbar">
-        <button className={`connection-indicator ${oauthMode}`} type="button" onClick={() => openSettings("account")}>
-          <span />
-          {connectionText}
+        <button
+          className={`connection-indicator ${oauthMode}`}
+          type="button"
+          title={connectionText}
+          aria-label={connectionText}
+          onClick={() => openSettings("account")}
+        >
+          <span aria-hidden="true" />
         </button>
         {uiPreferences.debugMode && <span>{jobStatus}</span>}
       </footer>
@@ -1067,10 +1372,15 @@ function WorkspaceResizeHandle() {
 function AgentPanel(props: {
   contexts: AgentContextItem[];
   attachments: AgentAttachment[];
+  selectedContext: SelectedContext | null;
+  pendingSelectionPrompt: QuickSelectionPrompt | null;
   setContexts: (fn: AgentContextItem[] | ((items: AgentContextItem[]) => AgentContextItem[])) => void;
   setAttachments: (fn: AgentAttachment[] | ((items: AgentAttachment[]) => AgentAttachment[])) => void;
+  setSelectedContext: (context: SelectedContext | null) => void;
+  clearPendingSelectionPrompt: (id: string) => void;
   addCurrentPage: () => void;
   captureSelection: () => void;
+  composerInputRef: RefObject<HTMLTextAreaElement | null>;
   getSnapshot: () => AgentSnapshot;
   getPack: () => PagePack;
   getPage: () => PageData;
@@ -1086,8 +1396,9 @@ function AgentPanel(props: {
         getPack: props.getPack,
         getPage: props.getPage,
         isBackendOffline: () => props.backendOffline,
+        clearSelectedContext: () => props.setSelectedContext(null),
       }),
-    [props.backendOffline, props.getPage, props.getPack, props.getSnapshot],
+    [props.backendOffline, props.getPage, props.getPack, props.getSnapshot, props.setSelectedContext],
   );
   const runtime = useLocalRuntime(adapter);
   const page = props.getPage();
@@ -1104,7 +1415,7 @@ function AgentPanel(props: {
       <div className="agent-toolbar">
         <div className="toolbar-title">
           <span className="agent-dot" />
-          <span>Agent</span>
+          <span>助手</span>
         </div>
         <div className="toolbar-actions">
           <span className="agent-model">{props.oauthMode === "connected" ? "OAuth" : props.backendOffline ? "Local" : "OAuth"}</span>
@@ -1137,7 +1448,7 @@ function AgentPanel(props: {
         {props.attachments.map((attachment) => (
           <span className="context-pill image-pill" key={attachment.id} title={attachment.name}>
             <img src={attachment.data_url} alt="" />
-            <span>Image · {compactText(attachment.name, 28)}</span>
+            <span>图片 · {compactText(attachment.name, 28)}</span>
             <button type="button" onClick={() => props.setAttachments((items) => items.filter((item) => item.id !== attachment.id))} aria-label="移除图片">
               <X />
             </button>
@@ -1145,10 +1456,71 @@ function AgentPanel(props: {
         ))}
       </div>
       <AssistantRuntimeProvider runtime={runtime}>
-        <AssistantThread page={page} suggestions={suggestions} contextPreview={contextPreview} />
+        <QuickSelectionPromptRunner
+          prompt={props.pendingSelectionPrompt}
+          onConsumed={props.clearPendingSelectionPrompt}
+        />
+        <AssistantThread
+          page={page}
+          suggestions={suggestions}
+          contextPreview={contextPreview}
+          selectedContext={props.selectedContext}
+          onRemoveSelectedContext={() => props.setSelectedContext(null)}
+          composerInputRef={props.composerInputRef}
+        />
       </AssistantRuntimeProvider>
     </aside>
   );
+}
+
+function SelectionToolbar(props: {
+  state: SelectionToolbarState | null;
+  onAdd: (context: SelectedContext) => void;
+  onExplain: (context: SelectedContext) => void;
+  onSummarize: (context: SelectedContext) => void;
+}) {
+  if (!props.state) return null;
+  const { context, x, y } = props.state;
+  return (
+    <div
+      className="selection-toolbar"
+      role="toolbar"
+      aria-label="选中内容操作"
+      style={{ left: x, top: y }}
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      <button type="button" onClick={() => props.onAdd(context)}>
+        添加到对话
+      </button>
+      <button type="button" onClick={() => props.onExplain(context)}>
+        解释选中内容
+      </button>
+      <button type="button" onClick={() => props.onSummarize(context)}>
+        总结选中内容
+      </button>
+    </div>
+  );
+}
+
+function QuickSelectionPromptRunner(props: {
+  prompt: QuickSelectionPrompt | null;
+  onConsumed: (id: string) => void;
+}) {
+  const thread = useThreadRuntime();
+  const consumedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!props.prompt) return;
+    if (consumedRef.current === props.prompt.id) return;
+    consumedRef.current = props.prompt.id;
+    thread.append({
+      role: "user",
+      content: [{ type: "text", text: props.prompt.prompt }],
+    });
+    props.onConsumed(props.prompt.id);
+  }, [props.prompt, props.onConsumed, thread]);
+
+  return null;
 }
 
 function OAuthDeviceDialog(props: {
@@ -1207,10 +1579,16 @@ function AssistantThread({
   page,
   suggestions,
   contextPreview,
+  selectedContext,
+  onRemoveSelectedContext,
+  composerInputRef,
 }: {
   page: PageData;
   suggestions: string[];
   contextPreview: string;
+  selectedContext: SelectedContext | null;
+  onRemoveSelectedContext: () => void;
+  composerInputRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
@@ -1218,8 +1596,8 @@ function AssistantThread({
         <div className="aui-thread-inner">
           <ThreadPrimitive.Empty>
             <div className="aui-welcome">
-              <span className="aui-welcome-kicker">Page {page.page_no} · {compactText(page.teaching.slide_title, 36)}</span>
-              <h2>Ask about this page</h2>
+              <span className="aui-welcome-kicker">PDF p.{page.page_no} · {compactText(page.teaching.slide_title, 36)}</span>
+              <h2>询问当前页面</h2>
               <div className="prompt-suggestions" aria-label="Prompt suggestions">
                 {suggestions.map((suggestion) => (
                   <span key={suggestion}>{suggestion}</span>
@@ -1234,7 +1612,12 @@ function AssistantThread({
             <ThreadPrimitive.ScrollToBottom asChild>
               <button className="scroll-bottom" type="button">↓</button>
             </ThreadPrimitive.ScrollToBottom>
-            <AssistantComposer contextPreview={contextPreview} />
+            <AssistantComposer
+              contextPreview={contextPreview}
+              selectedContext={selectedContext}
+              onRemoveSelectedContext={onRemoveSelectedContext}
+              inputRef={composerInputRef}
+            />
           </ThreadPrimitive.ViewportFooter>
         </div>
       </ThreadPrimitive.Viewport>
@@ -1263,14 +1646,21 @@ function UserMessage() {
 }
 
 function AgentMessage() {
+  const status = useAuiState((state) => state.message.status);
+  const content = useAuiState((state) => state.message.content);
+  const isThinking = status?.type === "running" && content.length === 0;
+  const isStopped = status?.type === "incomplete" && status.reason === "cancelled";
+
   return (
     <MessagePrimitive.Root className="aui-message assistant-message">
-      <div className="assistant-label">Agent</div>
+      <div className="assistant-label">助手</div>
       <div className="message-bubble assistant-bubble">
+        {isThinking && <AssistantThinkingIndicator />}
+        {isStopped && <MessageStatusNote>生成已停止</MessageStatusNote>}
         <MessagePrimitive.Parts components={{ Text: MarkdownPart }} />
         <MessagePrimitive.Error>
           <ErrorPrimitive.Root className="message-error">
-            <ErrorPrimitive.Message />
+            生成失败，请重试
           </ErrorPrimitive.Root>
         </MessagePrimitive.Error>
       </div>
@@ -1297,9 +1687,22 @@ function AgentMessage() {
   );
 }
 
-function AssistantComposer({ contextPreview }: { contextPreview: string }) {
+function AssistantComposer({
+  contextPreview,
+  selectedContext,
+  onRemoveSelectedContext,
+  inputRef,
+}: {
+  contextPreview: string;
+  selectedContext: SelectedContext | null;
+  onRemoveSelectedContext: () => void;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+}) {
   return (
     <div className="composer-shell">
+      {selectedContext && (
+        <SelectedSourcePreview context={selectedContext} onRemove={onRemoveSelectedContext} />
+      )}
       {contextPreview && (
         <div className="composer-context-preview">
           <span />
@@ -1308,10 +1711,12 @@ function AssistantComposer({ contextPreview }: { contextPreview: string }) {
       )}
       <ComposerPrimitive.Root className="aui-composer-root">
         <ComposerPrimitive.Input
+          ref={inputRef}
           className="aui-composer-input"
-          placeholder="Ask about this page or selected source"
+          placeholder={selectedContext ? "基于选中内容提问" : "询问当前页面或选中内容"}
           rows={2}
-          aria-label="Agent message input"
+          submitMode="ctrlEnter"
+          aria-label="助手输入框"
         />
         <div className="aui-composer-actions">
           <button className="composer-tool" type="button" title="数学公式"><Sigma /></button>
@@ -1328,7 +1733,55 @@ function AssistantComposer({ contextPreview }: { contextPreview: string }) {
 }
 
 function MarkdownPart() {
-  return <MarkdownTextPrimitive className="markdown-body" />;
+  return (
+    <MarkdownTextPrimitive
+      className="markdown-body"
+      remarkPlugins={markdownRemarkPlugins as never}
+      rehypePlugins={markdownRehypePlugins as never}
+      preprocess={preprocessMathMarkdown}
+      defer
+      smooth
+    />
+  );
+}
+
+function AssistantThinkingIndicator() {
+  return (
+    <div className="assistant-thinking" aria-label="Assistant is thinking">
+      <span className="thinking-wave" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+      </span>
+      <span>正在基于当前上下文思考</span>
+    </div>
+  );
+}
+
+function MessageStatusNote({ children }: { children: ReactNode }) {
+  return <div className="message-status-note">{children}</div>;
+}
+
+function SelectedSourcePreview({ context, onRemove }: { context: SelectedContext; onRemove: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className={`selected-source-preview ${expanded ? "expanded" : ""}`}>
+      <button
+        className="selected-source-main"
+        type="button"
+        onClick={() => setExpanded((current) => !current)}
+        aria-expanded={expanded}
+      >
+        <span className="selected-source-label">{selectedContextSourceLabel(context)}</span>
+        <span className="selected-source-text">{compactText(context.text, expanded ? 520 : 118)}</span>
+      </button>
+      <button className="selected-source-remove" type="button" onClick={onRemove} aria-label="移除选中内容">
+        <X />
+      </button>
+    </div>
+  );
 }
 
 function PaneToolbar({ title, badge, right }: { title: string; badge?: string; right?: ReactNode }) {
@@ -1399,6 +1852,7 @@ function StructurePanel({ page }: { page: PageData }) {
     ["页号", `第 ${page.page_no} 页`],
     ["解析器", page.source.parser],
     ["OCR", page.source.ocr_used ? "已启用" : "未启用"],
+    ["对齐置信度", `${Math.round(page.teaching.confidence * 100)}%`],
     ["前置概念", page.teaching.prerequisites.join("、") || "无"],
     ["图表说明", page.teaching.visual_explanations.join("；") || "无"],
     ["解析文本", page.source.text_md || "无"],
@@ -1434,6 +1888,20 @@ function FileButton({ label, accept, onFile, children }: { label: string; accept
   return (
     <label className="mini-button" title={label} aria-label={label}>
       {children}
+      <input type="file" accept={accept} onChange={(event: ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (file) onFile(file);
+        event.currentTarget.value = "";
+      }} />
+    </label>
+  );
+}
+
+function MenuFileButton({ label, accept, onFile, children }: { label: string; accept: string; onFile: (file: File) => void; children: ReactNode }) {
+  return (
+    <label className="command-menu-item">
+      {children}
+      <span>{label}</span>
       <input type="file" accept={accept} onChange={(event: ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (file) onFile(file);
