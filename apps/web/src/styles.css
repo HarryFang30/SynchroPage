@@ -843,6 +843,10 @@ output {
   display: none;
 }
 
+.agent-context-strip:empty + .aui-thread-root {
+  grid-row: 2 / -1;
+}
+
 .context-pill {
   max-width: 100%;
   display: inline-grid;
@@ -902,29 +906,34 @@ output {
   min-height: 0;
   height: 100%;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, white), #f2f6f9);
 }
 
 .aui-thread-viewport {
   min-height: 0;
-  overflow-y: auto;
+  height: 100%;
+  overflow: hidden;
   overflow-x: hidden;
 }
 
 .aui-thread-inner {
-  min-height: 100%;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 14px 14px 13px;
+  padding: 14px;
 }
 
 .aui-welcome {
-  min-height: 220px;
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
   place-items: center;
   align-content: center;
   gap: 12px;
+  padding: 20px 8px 16px;
   color: var(--muted);
   text-align: center;
 }
@@ -956,6 +965,10 @@ output {
   flex: 1;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
 }
 
 .aui-message {
@@ -1086,13 +1099,14 @@ output {
 }
 
 .aui-thread-footer {
-  position: sticky;
+  flex: 0 0 auto;
+  position: relative;
   bottom: 0;
   display: grid;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: auto;
   padding-top: 12px;
-  background: linear-gradient(180deg, transparent, #f2f6f9 24%);
+  background: linear-gradient(180deg, transparent, #f2f6f9 22%);
 }
 
 .scroll-bottom {
