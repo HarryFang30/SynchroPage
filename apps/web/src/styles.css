@@ -185,8 +185,12 @@ svg {
   min-width: 0;
   height: 100vh;
   display: grid;
-  grid-template-rows: 70px 38px minmax(0, 1fr) 32px;
+  grid-template-rows: 70px 38px minmax(0, 1fr);
   overflow: hidden;
+}
+
+.app-shell[data-debug-mode="true"] {
+  grid-template-rows: 70px 38px minmax(0, 1fr) 32px;
 }
 
 .app-shell[data-accent="graphite"] {
@@ -234,6 +238,10 @@ svg {
 }
 
 .compact-mode {
+  grid-template-rows: 62px 32px minmax(0, 1fr);
+}
+
+.compact-mode[data-debug-mode="true"] {
   grid-template-rows: 62px 32px minmax(0, 1fr) 26px;
 }
 
@@ -2529,6 +2537,10 @@ output {
 
 @media (max-width: 760px) {
   .app-shell {
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .app-shell[data-debug-mode="true"] {
     grid-template-rows: auto auto minmax(0, 1fr) 34px;
   }
 

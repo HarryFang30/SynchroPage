@@ -1275,6 +1275,7 @@ export default function App() {
         data-pdf-background={uiPreferences.pdfBackground}
         data-scrollbar-style={uiPreferences.scrollbarStyle}
         data-theme-mode={uiPreferences.theme}
+        data-debug-mode={uiPreferences.debugMode}
         lang={uiPreferences.language === "en-US" ? "en" : "zh-CN"}
       >
       <header className="topbar">
@@ -1564,18 +1565,20 @@ export default function App() {
         </PanelGroup>
       </main>
 
-      <footer className="statusbar">
-        <button
-          className={`connection-indicator ${oauthMode}`}
-          type="button"
-          title={connectionText}
-          aria-label={connectionText}
-          onClick={() => openSettings("account")}
-        >
-          <span aria-hidden="true" />
-        </button>
-        {uiPreferences.debugMode && <span>{jobStatus}</span>}
-      </footer>
+      {uiPreferences.debugMode && (
+        <footer className="statusbar">
+          <button
+            className={`connection-indicator ${oauthMode}`}
+            type="button"
+            title={connectionText}
+            aria-label={connectionText}
+            onClick={() => openSettings("account")}
+          >
+            <span aria-hidden="true" />
+          </button>
+          <span>{jobStatus}</span>
+        </footer>
+      )}
       </div>
     </AppCopyContext.Provider>
   );
