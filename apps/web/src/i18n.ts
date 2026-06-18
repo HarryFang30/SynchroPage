@@ -132,7 +132,6 @@ export type AppCopy = {
     jsonImported: string;
     layoutReset: string;
     generationQueued: string;
-    currentPageAdded: string;
   };
   errors: {
     accountNotFound: string;
@@ -194,10 +193,9 @@ export type AppCopy = {
     tabJson: string;
   };
   agent: {
-    addCurrentPage: string;
-    addSelection: string;
     addImage: string;
     clearContext: string;
+    newConversation: string;
     removeContext: string;
     removeImage: string;
     contextFormula: (pageNo: number) => string;
@@ -402,7 +400,6 @@ const zhCN: AppCopy = {
     jsonImported: "已导入 PagePair JSON",
     layoutReset: "工作区布局已重置",
     generationQueued: "生成任务已交给后端 harness",
-    currentPageAdded: "当前页已加入助手",
   },
   errors: {
     accountNotFound: "请先连接 OpenAI OAuth 后再发送。",
@@ -464,10 +461,9 @@ const zhCN: AppCopy = {
     tabJson: "JSON",
   },
   agent: {
-    addCurrentPage: "加入当前页",
-    addSelection: "加入选区",
     addImage: "加入图片",
     clearContext: "清空上下文",
+    newConversation: "新对话",
     removeContext: "移除上下文",
     removeImage: "移除图片",
     contextFormula: (pageNo) => `公式 · PDF p.${pageNo}`,
@@ -672,7 +668,6 @@ const enUS: AppCopy = {
     jsonImported: "Imported PagePair JSON",
     layoutReset: "Workspace layout reset",
     generationQueued: "Generation task sent to the backend harness",
-    currentPageAdded: "Current page added to the assistant",
   },
   errors: {
     accountNotFound: "Connect OpenAI OAuth before sending.",
@@ -734,10 +729,9 @@ const enUS: AppCopy = {
     tabJson: "JSON",
   },
   agent: {
-    addCurrentPage: "Add current page",
-    addSelection: "Add selection",
     addImage: "Add image",
     clearContext: "Clear context",
+    newConversation: "New chat",
     removeContext: "Remove context",
     removeImage: "Remove image",
     contextFormula: (pageNo) => `Formula · PDF p.${pageNo}`,

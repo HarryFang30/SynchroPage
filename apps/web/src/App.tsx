@@ -28,7 +28,6 @@ import {
 } from "pdfjs-dist";
 import PdfJsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
 import {
-  Bot,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -52,7 +51,6 @@ import {
   Send,
   Settings2,
   Sigma,
-  Square,
   Trash2,
   Upload,
   X,
@@ -732,29 +730,6 @@ function detectContextType(text: string): AgentContextItem["type"] {
     : "selection";
 }
 
-function pageContext(pack: PagePack, page: PageData, copy: AppCopy): AgentContextItem {
-  const teaching = page.teaching;
-  return {
-    id: createId("ctx_page"),
-    type: "page",
-    title: copy.common.pageLabel(page.page_no),
-    source: teaching.slide_title,
-    page_no: page.page_no,
-    text: [
-      `Document: ${pack.document.title}`,
-      `Page: ${page.page_no}`,
-      `Title: ${teaching.slide_title}`,
-      page.source.text_md ? `Source text: ${page.source.text_md}` : "",
-      teaching.speaker_notes_md ? `Teaching notes: ${teaching.speaker_notes_md}` : "",
-      teaching.visual_explanations.length
-        ? `Visual notes: ${teaching.visual_explanations.join(copy.common.sentenceSeparator)}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n"),
-  };
-}
-
 function readFileAsDataUrl(file: File, copy: AppCopy) {
   return new Promise<AgentAttachment>((resolve, reject) => {
     const reader = new FileReader();
@@ -1180,17 +1155,6 @@ export default function App() {
   );
   const getPack = useCallback(() => pack, [pack]);
   const getPage = useCallback(() => page, [page]);
-
-  const addContext = useCallback((context: AgentContextItem) => {
-    setContexts((items) => {
-      const signature = `${context.type}:${context.page_no}:${context.source}:${context.text}`;
-      if (items.some((item) => `${item.type}:${item.page_no}:${item.source}:${item.text}` === signature)) {
-        return items;
-      }
-      return [...items, context].slice(-10);
-    });
-    setPanels((current) => ({ ...current, agent: true }));
-  }, []);
 
   const focusComposer = useCallback(() => {
     window.setTimeout(() => composerInputRef.current?.focus(), 20);
@@ -1785,11 +1749,6 @@ export default function App() {
               clearPendingSelectionPrompt={(id) => {
                 setPendingSelectionPrompt((current) => (current?.id === id ? null : current));
               }}
-              addCurrentPage={() => {
-                addContext(pageContext(pack, page, copy));
-                setJobStatus(copy.status.currentPageAdded);
-              }}
-              captureSelection={captureSelection}
               composerInputRef={composerInputRef}
               getSnapshot={getSnapshot}
               getPack={getPack}
@@ -1840,8 +1799,6 @@ function AgentPanel(props: {
   setAttachments: (fn: AgentAttachment[] | ((items: AgentAttachment[]) => AgentAttachment[])) => void;
   setSelectedContext: (context: SelectedContext | null) => void;
   clearPendingSelectionPrompt: (id: string) => void;
-  addCurrentPage: () => void;
-  captureSelection: () => void;
   composerInputRef: RefObject<HTMLTextAreaElement | null>;
   getSnapshot: () => AgentSnapshot;
   getPack: () => PagePack;
@@ -1869,6 +1826,21 @@ function AgentPanel(props: {
   const suggestions = pageSuggestions(page, props.pageAwareSuggestions, copy);
   const contextPreview = composerContextPreview(props.contexts, props.attachments, copy);
 
+  const clearAgentContext = useCallback(() => {
+    props.setContexts([]);
+    props.setAttachments([]);
+    props.setSelectedContext(null);
+  }, [props]);
+
+  const startNewConversation = useCallback(() => {
+    runtime.thread.reset();
+    void runtime.thread.composer.reset();
+    clearAgentContext();
+    if (props.pendingSelectionPrompt) {
+      props.clearPendingSelectionPrompt(props.pendingSelectionPrompt.id);
+    }
+  }, [clearAgentContext, props, runtime]);
+
   const addImages = async (files: FileList | File[]) => {
     const images = await Promise.all([...files].filter((file) => file.type.startsWith("image/")).slice(0, 6).map((file) => readFileAsDataUrl(file, copy)));
     props.setAttachments((items) => [...items, ...images].slice(-8));
@@ -1883,10 +1855,17 @@ function AgentPanel(props: {
         </div>
         <div className="toolbar-actions">
           <span className="agent-model">{props.oauthMode === "connected" ? "OAuth" : props.backendOffline ? "Local" : "OAuth"}</span>
-          <IconButton label={copy.agent.addCurrentPage} onClick={props.addCurrentPage}><FileJson /></IconButton>
-          <IconButton label={copy.agent.addSelection} onClick={props.captureSelection}><Bot /></IconButton>
-          <label className="mini-button" title={copy.agent.addImage} aria-label={copy.agent.addImage}>
+          <button className="agent-action-button" type="button" onClick={startNewConversation}>
+            <NotebookText />
+            <span>{copy.agent.newConversation}</span>
+          </button>
+          <button className="agent-action-button" type="button" onClick={clearAgentContext}>
+            <Trash2 />
+            <span>{copy.agent.clearContext}</span>
+          </button>
+          <label className="agent-action-button" title={copy.agent.addImage} aria-label={copy.agent.addImage}>
             <Image />
+            <span>{copy.agent.addImage}</span>
             <input
               type="file"
               accept="image/*"
@@ -1897,7 +1876,6 @@ function AgentPanel(props: {
               }}
             />
           </label>
-          <IconButton label={copy.agent.clearContext} onClick={() => props.setContexts([])}><Trash2 /></IconButton>
         </div>
       </div>
       <div className="agent-context-strip" hidden={!props.showSourcePills || (!props.contexts.length && !props.attachments.length)}>
@@ -2439,10 +2417,6 @@ function AssistantComposer({
           aria-label={copy.agent.inputAria}
         />
         <div className="aui-composer-actions">
-          <button className="composer-tool" type="button" title={copy.agent.formulaTitle}><Sigma /></button>
-          <ComposerPrimitive.Cancel asChild>
-            <button className="composer-send" type="button" aria-label={copy.agent.stop}><Square /></button>
-          </ComposerPrimitive.Cancel>
           <ComposerPrimitive.Send asChild>
             <button className="composer-send" type="button" aria-label={copy.agent.send}><Send /></button>
           </ComposerPrimitive.Send>
@@ -2490,7 +2464,7 @@ function SelectedSourcePreview({ context, onRemove }: { context: SelectedContext
         aria-expanded={expanded}
       >
         <span className="selected-source-label">{selectedContextSourceLabel(context, copy)}</span>
-        <span className="selected-source-text">{compactText(context.text, expanded ? 520 : 118)}</span>
+        <span className="selected-source-text">{compactText(context.text, expanded ? 520 : 220)}</span>
       </button>
       <button className="selected-source-remove" type="button" onClick={onRemove} aria-label={copy.agent.removeSelectedContent}>
         <X />
