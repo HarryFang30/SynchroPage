@@ -14,7 +14,6 @@ import {
   useThreadRuntime,
 } from "@assistant-ui/react";
 import {
-  MarkdownTextPrimitive,
   escapeCurrencyDollars,
   normalizeMathDelimiters,
 } from "@assistant-ui/react-markdown";
@@ -2427,8 +2426,13 @@ function AssistantComposer({
 }
 
 function MarkdownPart() {
+  const text = useAuiState((state) => {
+    if (state.part.type !== "text" && state.part.type !== "reasoning") return "";
+    return state.part.text;
+  });
+
   return (
-    <ReaderMarkdown className="markdown-body" />
+    <ReaderMarkdown className="markdown-body" text={text} />
   );
 }
 
@@ -2522,29 +2526,16 @@ function MarkdownBlock({ markdown, concepts }: { markdown: string; concepts: str
   );
 }
 
-function ReaderMarkdown({ className, text }: { className: string; text?: string }) {
-  if (text !== undefined) {
-    return (
-      <div className={className}>
-        <ReactMarkdown
-          remarkPlugins={markdownRemarkPlugins as never}
-          rehypePlugins={markdownRehypePlugins as never}
-        >
-          {preprocessMathMarkdown(text)}
-        </ReactMarkdown>
-      </div>
-    );
-  }
-
+function ReaderMarkdown({ className, text }: { className: string; text: string }) {
   return (
-    <MarkdownTextPrimitive
-      className={className}
-      remarkPlugins={markdownRemarkPlugins as never}
-      rehypePlugins={markdownRehypePlugins as never}
-      preprocess={preprocessMathMarkdown}
-      defer
-      smooth
-    />
+    <div className={className}>
+      <ReactMarkdown
+        remarkPlugins={markdownRemarkPlugins as never}
+        rehypePlugins={markdownRehypePlugins as never}
+      >
+        {preprocessMathMarkdown(text)}
+      </ReactMarkdown>
+    </div>
   );
 }
 

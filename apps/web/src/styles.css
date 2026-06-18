@@ -1357,7 +1357,7 @@ output {
 
 .agent-panel {
   --agent-font-ui: var(--font-ui);
-  --agent-font-reading: var(--font-reading);
+  --agent-font-reading: var(--font-ui);
   --agent-font-mono: var(--font-mono);
   --agent-text-xs: 12px;
   --agent-text-sm: 13px;
@@ -1575,9 +1575,9 @@ output {
 
 .aui-welcome-kicker {
   color: var(--muted);
-  font-family: var(--agent-font-reading);
-  font-size: var(--agent-text-sm);
-  line-height: var(--agent-leading-compact);
+  font-family: var(--agent-font-reading, var(--font-ui));
+  font-size: var(--agent-text-sm, 13px);
+  line-height: var(--agent-leading-compact, 1.42);
 }
 
 .aui-welcome h2,
@@ -1652,10 +1652,10 @@ output {
 
 .assistant-label {
   color: color-mix(in oklch, var(--muted) 86%, var(--text));
-  font-size: var(--agent-text-xs);
+  font-size: var(--agent-text-xs, 12px);
   font-weight: 620;
   letter-spacing: 0;
-  line-height: var(--agent-leading-compact);
+  line-height: var(--agent-leading-compact, 1.42);
 }
 
 .message-bubble {
@@ -1829,9 +1829,9 @@ output {
 .markdown-body {
   min-width: 0;
   color: color-mix(in oklch, var(--text) 94%, var(--text-strong));
-  font-family: var(--agent-font-reading);
-  font-size: var(--agent-text-body);
-  line-height: var(--agent-leading-body);
+  font-family: var(--agent-font-reading, var(--font-ui));
+  font-size: var(--agent-text-body, 15.5px);
+  line-height: var(--agent-leading-body, 1.66);
   overflow-wrap: anywhere;
 }
 
@@ -1840,21 +1840,21 @@ output {
 .markdown-body h3 {
   margin: 1.05em 0 0.45em;
   color: var(--text-strong);
-  font-family: var(--agent-font-ui);
+  font-family: var(--agent-font-ui, var(--font-ui));
   font-weight: 620;
-  line-height: var(--agent-leading-title);
+  line-height: var(--agent-leading-title, 1.26);
 }
 
 .markdown-body h1 {
-  font-size: var(--agent-text-xl);
+  font-size: var(--agent-text-xl, 21px);
 }
 
 .markdown-body h2 {
-  font-size: var(--agent-text-xl);
+  font-size: var(--agent-text-xl, 21px);
 }
 
 .markdown-body h3 {
-  font-size: var(--agent-text-lg);
+  font-size: var(--agent-text-lg, 18px);
 }
 
 .markdown-body h1:first-child,
@@ -1905,8 +1905,8 @@ output {
   display: block;
   overflow-x: auto;
   border-collapse: collapse;
-  font-family: var(--agent-font-ui);
-  font-size: var(--agent-text-sm);
+  font-family: var(--agent-font-ui, var(--font-ui));
+  font-size: var(--agent-text-sm, 13px);
   line-height: 1.45;
 }
 
@@ -1928,7 +1928,7 @@ output {
   background: color-mix(in oklch, var(--secondary) 50%, white);
   color: color-mix(in oklch, var(--text-strong) 90%, var(--brand-deep));
   padding: 0.08em 0.32em;
-  font-family: var(--agent-font-mono);
+  font-family: var(--agent-font-mono, var(--font-mono));
   font-size: 0.86em;
 }
 
@@ -1940,8 +1940,8 @@ output {
   background: color-mix(in oklch, var(--secondary) 36%, var(--background));
   color: var(--text-strong);
   padding: 10px 12px;
-  font-family: var(--agent-font-mono);
-  font-size: var(--agent-text-sm);
+  font-family: var(--agent-font-mono, var(--font-mono));
+  font-size: var(--agent-text-sm, 13px);
   line-height: 1.55;
 }
 
