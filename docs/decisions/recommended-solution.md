@@ -146,4 +146,10 @@ GET  /api/documents/:document_id/export?format=json|markdown
 - 右侧：讲解 Markdown、概念、图表说明、JSON tab。
 - 顶部：OpenAI OAuth 入口、上传 PDF、导入/导出 JSON、生成按钮。
 
-当前仓库中的 `apps/web/` 是这个方案的静态原型，可直接打开 `apps/web/index.html` 预览。真实后端接入时，只需要把上传、OAuth 和生成按钮连接到上面的 API。
+当前仓库中的 `apps/web/` 是 React/TypeScript PagePair Reader，右侧 Agent Panel 基于 `@assistant-ui/react`。运行时先构建到 `dist/web`，再由 `pdf_agent.server.web_app` 提供静态资源、OAuth 路由和 `/api/agent/chat` 后端代理：
+
+```bash
+./scripts/run-web.sh --port 8765
+```
+
+开发模式下可同时运行 Python backend 和 Vite dev server，Vite 会将 `/api`、`/auth` 代理到本地后端。

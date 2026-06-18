@@ -20,8 +20,9 @@
 
 ## 已应用到 PagePair Reader
 
-- `apps/web/index.html` 新增 reader progress、settings popover、mobile reader bar。
-- `apps/web/app.js` 新增轻量 preferences、localStorage、进度跳页、侧栏收起、布局/主题/密度/字号控制。
-- `apps/web/styles.css` 新增 `data-theme`、`data-layout`、`data-density` 驱动的 reader shell 样式和移动端抽屉。
+- `apps/web/index.html` 作为 Vite/React mount point。
+- `apps/web/src/App.tsx` 实现 reader progress、页级 rail、PDF/页面预览、讲解/结构/JSON tabs，以及 `@assistant-ui/react` Agent Panel。
+- `apps/web/src/styles.css` 使用 CSS variables、响应式 grid、IDE 风格面板、上下文 chips、composer 和移动端单列布局。
+- `src/pdf_agent/server/web_app.py` 提供构建产物、OAuth 路由和 Agent chat API，避免前端直接持有模型凭据。
 
 后续如果要把 PDF 渲染升级到生产级，建议单独接 `pdf.js` 当前页 canvas/text layer，不引入 readest 的完整 ebook engine。

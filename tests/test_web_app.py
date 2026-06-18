@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pdf_agent.web_app import (
+from pdf_agent.server.web_app import (
     HttpError,
     _build_responses_payload,
     _extract_gateway_text,
