@@ -5,6 +5,9 @@ primary_output_schema: "lecture_pairpack.v1"
 
 runtime_policy:
   max_pages_per_generation_call: 5
+  default_pages_per_generation_call: 3
+  max_concurrency: 3
+  max_concurrency_cap: 8
   prefer_single_page_generation: true
   require_json_schema: true
   allow_direct_pdf_reading: true
@@ -14,6 +17,25 @@ runtime_policy:
     - "mineru"
   low_confidence_threshold: 0.78
   repair_attempts_per_page: 2
+  journal_resume: true
+  reject_page_number_mismatch: true
+  require_evidence_per_page: true
+  degrade_failed_pages_instead_of_failing_run: true
+
+harness:
+  config_file: "config/harness/course_pdf_harness.yaml"
+  workflow_file: "docs/workflows/course-pdf-pairpack.md"
+  event_stream: "sse"
+  run_store: "postgres_or_sqlite"
+  journal_store: "jsonl_or_database"
+  cache_key_fields:
+    - "document_sha256"
+    - "role"
+    - "prompt_version"
+    - "model"
+    - "schema_version"
+    - "target_pages"
+    - "fallback_page_json_hash"
 
 model_guidance:
   reasoning_effort: "medium"
@@ -152,4 +174,3 @@ ui_summary_prompt: |
   - title 不超过 24 个中文字符。
   - preview 不超过 80 个中文字符。
   - 不新增事实。
-

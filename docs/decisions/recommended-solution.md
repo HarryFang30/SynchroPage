@@ -31,28 +31,36 @@ flowchart LR
     I --> D
 ```
 
-详细框架见 [agent-framework.md](/Users/harry/PDF_Agent/agent-framework.md)，可配置 prompt 见 [prompts/course-agent.config.yaml](/Users/harry/PDF_Agent/prompts/course-agent.config.yaml)，输出 schema 见 [schemas/lecture_pairpack.schema.json](/Users/harry/PDF_Agent/schemas/lecture_pairpack.schema.json)。
+详细框架见 [docs/architecture/course-pdf-agent-framework.md](/Users/harry/PDF_Agent/docs/architecture/course-pdf-agent-framework.md)，可配置 prompt 见 [config/prompts/course_agent.prompt.yaml](/Users/harry/PDF_Agent/config/prompts/course_agent.prompt.yaml)，输出 schema 见 [contracts/schemas/lecture_pairpack/v1.schema.json](/Users/harry/PDF_Agent/contracts/schemas/lecture_pairpack/v1.schema.json)。
 
 ## OpenAI OAuth 的落点
 
-需要注意一个边界：OpenAI 平台常规模型 API 调用仍应由后端使用服务端凭据代理，不能把密钥放到浏览器。OAuth 更适合作为用户会话入口或 ChatGPT Apps/GPT Actions 这类集成场景的授权层。
+基于 `/Users/harry/cc-switch` 的调研，本项目已迁移最小可用的 ChatGPT Device Code OAuth manager。它不是本地 callback 流程，而是后端启动 device code、前端打开 ChatGPT 授权页、后端轮询并换取 token。安全边界保持不变：浏览器不接触模型 token，模型请求统一从后端 OpenAI Gateway 发出。
 
 因此这里推荐的认证结构是：
 
 ```mermaid
 flowchart LR
     A["Browser UI"] --> B["/auth/openai/start"]
-    B --> C["OpenAI OAuth / App Auth"]
-    C --> D["Backend Session"]
+    B --> C["ChatGPT Device Code OAuth"]
+    C --> D["OpenAIOAuthManager"]
     D --> E["OpenAI Gateway"]
-    E --> F["Responses API / Batch API"]
+    E --> F["ChatGPT Codex Backend / Responses-compatible adapter"]
     E --> G["Docling / PyMuPDF Parser"]
     G --> H["PagePair JSON Store"]
     F --> H
     H --> A
 ```
 
-前端只拿应用会话 cookie 或短期 session token。模型侧所有调用都经过 `OpenAI Gateway`，这样后续无论是 API key、企业凭据、ChatGPT App OAuth，还是 OpenAI-compatible 网关，都只需要替换后端 adapter。
+前端只拿应用会话和 device code。`~/.pdf_agent/openai_oauth.json` 只保存 refresh token；access token 只在内存里，由 `OpenAIOAuthManager` 到期前刷新。模型侧所有调用都经过 `OpenAI Gateway`，这样后续无论是 API key、企业凭据、ChatGPT App OAuth，还是 OpenAI-compatible 网关，都只需要替换后端 adapter。
+
+已落地文件：
+
+- [docs/architecture/openai-oauth-gateway.md](/Users/harry/PDF_Agent/docs/architecture/openai-oauth-gateway.md)
+- [src/pdf_agent/auth/openai_oauth.py](/Users/harry/PDF_Agent/src/pdf_agent/auth/openai_oauth.py)
+- [src/pdf_agent/auth/api.py](/Users/harry/PDF_Agent/src/pdf_agent/auth/api.py)
+- [src/pdf_agent/gateway/openai_gateway.py](/Users/harry/PDF_Agent/src/pdf_agent/gateway/openai_gateway.py)
+- [config/auth/openai_oauth.yaml](/Users/harry/PDF_Agent/config/auth/openai_oauth.yaml)
 
 相关官方资料入口：
 
@@ -107,8 +115,10 @@ flowchart LR
 ## 最小 API 形态
 
 ```http
-GET  /auth/openai/start
-GET  /auth/openai/callback
+POST /auth/openai/start
+POST /auth/openai/poll
+GET  /auth/openai/status
+POST /auth/openai/logout
 POST /api/documents
 GET  /api/documents/:document_id
 GET  /api/documents/:document_id/pages/:page_no
@@ -136,4 +146,4 @@ GET  /api/documents/:document_id/export?format=json|markdown
 - 右侧：讲解 Markdown、概念、图表说明、JSON tab。
 - 顶部：OpenAI OAuth 入口、上传 PDF、导入/导出 JSON、生成按钮。
 
-当前仓库中的 `frontend/` 是这个方案的静态原型，可直接打开 `frontend/index.html` 预览。真实后端接入时，只需要把上传、OAuth 和生成按钮连接到上面的 API。
+当前仓库中的 `apps/web/` 是这个方案的静态原型，可直接打开 `apps/web/index.html` 预览。真实后端接入时，只需要把上传、OAuth 和生成按钮连接到上面的 API。

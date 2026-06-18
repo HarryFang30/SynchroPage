@@ -1,0 +1,83 @@
+version: "course-pdf-harness.v1"
+
+model:
+  default: "gpt-5.5"
+  api_surface: "responses"
+  structured_outputs: true
+  direct_pdf_input: true
+  gateway_auth:
+    provider: "codex_oauth"
+    config: "config/auth/openai_oauth.yaml"
+    browser_never_receives_model_secret: true
+
+workflow:
+  name: "course_pdf_pairpack"
+  phases:
+    - id: "planning"
+      agent_role: "document_planner"
+      max_concurrency: 1
+      terminal_on_failure: true
+    - id: "generation"
+      agent_role: "page_teacher"
+      max_concurrency: 3
+      terminal_on_failure: false
+    - id: "review"
+      agent_role: "page_reviewer"
+      max_concurrency: 4
+      terminal_on_failure: false
+    - id: "repair"
+      agent_role: "page_repairer"
+      max_concurrency: 2
+      terminal_on_failure: false
+
+limits:
+  max_concurrency_cap: 8
+  default_page_batch_size: 3
+  max_page_batch_size: 5
+  max_repair_attempts_per_page: 2
+  low_confidence_threshold: 0.78
+  max_schema_validation_attempts: 2
+  token_budget_default: null
+
+journal:
+  enabled: true
+  key_fields:
+    - "document_sha256"
+    - "role"
+    - "prompt_version"
+    - "model"
+    - "schema_version"
+    - "target_pages"
+    - "fallback_page_json_hash"
+
+fallback:
+  trigger_on:
+    - "page_count_unknown"
+    - "page_number_mismatch"
+    - "no_evidence"
+    - "formula_unreadable"
+    - "table_unreadable"
+    - "schema_validation_failed_twice"
+  parser_order:
+    - "docling"
+    - "pymupdf"
+    - "mineru"
+
+observability:
+  emit_sse_events: true
+  persist_raw_model_failures: true
+  redact_pdf_text_in_logs: true
+  metrics:
+    - "run_duration_ms"
+    - "page_latency_ms"
+    - "model_input_tokens"
+    - "model_output_tokens"
+    - "schema_validation_failures"
+    - "fallback_rate"
+    - "review_issue_rate"
+
+security:
+  browser_never_receives_model_secret: true
+  model_calls_only_from_gateway: true
+  tools_disallow_shell: true
+  fail_closed_on_uncertain_page_count: true

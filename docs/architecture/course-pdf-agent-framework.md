@@ -14,6 +14,27 @@
 4. **Repair Agent**：只修复失败页面，不重跑整份文档。
 5. **Fallback Parser**：当 PDF 直读页码不稳定、扫描质量差或需要缓存时，启用 Docling/PyMuPDF/MinerU 生成 Page JSON。
 
+## 工业级 Harness 升级
+
+借鉴 `/Users/harry/claude-code-main` 后，核心设计从“prompt 编排”升级为“端口化 harness”：
+
+- **Ports over imports**：模型、解析器、validator、journal、run store、progress bus、policy、telemetry 都是端口协议。
+- **Task lifecycle**：每次处理 PDF 都有 `run_id`、状态机、取消信号、事件流和可恢复 journal。
+- **Subagent isolation**：Planner、Teacher、Reviewer、Repairer 是隔离角色，不共享隐式状态。
+- **Schema-first**：任何模型输出进入 UI 前必须通过 JSON Schema。
+- **Partial completion**：单页失败只标记该页 `needs_review` / `needs_parser_fallback`，不拖垮整份文档。
+
+已落地的 harness 文件：
+
+- [docs/architecture/agent-harness.md](/Users/harry/PDF_Agent/docs/architecture/agent-harness.md)
+- [src/pdf_agent/harness/agent_loop.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/agent_loop.py)
+- [src/pdf_agent/harness/ports.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/ports.py)
+- [src/pdf_agent/harness/types.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/types.py)
+- [src/pdf_agent/harness/policy.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/policy.py)
+- [src/pdf_agent/harness/session_store.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/session_store.py)
+- [config/harness/course_pdf_harness.yaml](/Users/harry/PDF_Agent/config/harness/course_pdf_harness.yaml)
+- [docs/workflows/course-pdf-pairpack.md](/Users/harry/PDF_Agent/docs/workflows/course-pdf-pairpack.md)
+
 ## 为什么不是单次大 Prompt
 
 GPT-5.5 直读 PDF 能省掉大量解析胶水，但单次生成整本课程有三个风险：
@@ -58,6 +79,23 @@ flowchart LR
 - 输出：`lecture_pairpack.v1.jsonl`
 - 用途：整门课程、夜间批量任务、大文件
 
+## OpenAI OAuth Gateway
+
+已从 `/Users/harry/cc-switch` 迁移最小 ChatGPT Device Code OAuth manager：
+
+- 后端启动 device code，前端只打开授权页并轮询状态。
+- refresh token 存在 `~/.pdf_agent/openai_oauth.json`，Unix 权限 `0600`。
+- access token 只在内存缓存，由后端 gateway 在请求上游前注入。
+- harness 只依赖 `ModelPort`，不直接读取或刷新 token。
+
+落地文件：
+
+- [docs/architecture/openai-oauth-gateway.md](/Users/harry/PDF_Agent/docs/architecture/openai-oauth-gateway.md)
+- [src/pdf_agent/auth/openai_oauth.py](/Users/harry/PDF_Agent/src/pdf_agent/auth/openai_oauth.py)
+- [src/pdf_agent/auth/api.py](/Users/harry/PDF_Agent/src/pdf_agent/auth/api.py)
+- [src/pdf_agent/gateway/openai_gateway.py](/Users/harry/PDF_Agent/src/pdf_agent/gateway/openai_gateway.py)
+- [config/auth/openai_oauth.yaml](/Users/harry/PDF_Agent/config/auth/openai_oauth.yaml)
+
 ## GPT-5.5 直读 PDF 的输入策略
 
 优先使用 PDF 作为 `input_file`，但 prompt 必须显式要求：
@@ -68,7 +106,7 @@ flowchart LR
 - 每页输出 `confidence` 和 `evidence`。
 - 严格遵循 JSON Schema，不输出解释性散文。
 
-示例请求骨架见 [examples/gpt55-responses-pdf-request.json](/Users/harry/PDF_Agent/examples/gpt55-responses-pdf-request.json)。
+示例请求骨架见 [examples/openai/gpt55_responses_pdf_request.json](/Users/harry/PDF_Agent/examples/openai/gpt55_responses_pdf_request.json)。
 
 ## 稳定性机制
 
@@ -95,10 +133,11 @@ flowchart LR
 
 ## Prompt 与 Schema 文件
 
-- Prompt 配置：[prompts/course-agent.config.yaml](/Users/harry/PDF_Agent/prompts/course-agent.config.yaml)
-- 输出 Schema：[schemas/lecture_pairpack.schema.json](/Users/harry/PDF_Agent/schemas/lecture_pairpack.schema.json)
-- 页级批处理 Schema：[schemas/lecture_pairpack.page_batch.schema.json](/Users/harry/PDF_Agent/schemas/lecture_pairpack.page_batch.schema.json)
-- GPT-5.5 PDF 请求示例：[examples/gpt55-responses-pdf-request.json](/Users/harry/PDF_Agent/examples/gpt55-responses-pdf-request.json)
+- Prompt 配置：[config/prompts/course_agent.prompt.yaml](/Users/harry/PDF_Agent/config/prompts/course_agent.prompt.yaml)
+- Harness 配置：[config/harness/course_pdf_harness.yaml](/Users/harry/PDF_Agent/config/harness/course_pdf_harness.yaml)
+- 输出 Schema：[contracts/schemas/lecture_pairpack/v1.schema.json](/Users/harry/PDF_Agent/contracts/schemas/lecture_pairpack/v1.schema.json)
+- 页级批处理 Schema：[contracts/schemas/lecture_pairpack/page_batch.v1.schema.json](/Users/harry/PDF_Agent/contracts/schemas/lecture_pairpack/page_batch.v1.schema.json)
+- GPT-5.5 PDF 请求示例：[examples/openai/gpt55_responses_pdf_request.json](/Users/harry/PDF_Agent/examples/openai/gpt55_responses_pdf_request.json)
 
 ## 官方资料依据
 

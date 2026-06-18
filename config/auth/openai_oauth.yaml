@@ -1,0 +1,60 @@
+version: "openai-oauth.v1"
+
+provider:
+  id: "codex_oauth"
+  mode: "chatgpt_device_code"
+  api_surface: "chatgpt_codex_backend"
+  default_model: "gpt-5.5"
+
+device_flow:
+  client_id: "app_EMoamEEZ73f0CkXaXp7hrann"
+  start_url: "https://auth.openai.com/api/accounts/deviceauth/usercode"
+  poll_url: "https://auth.openai.com/api/accounts/deviceauth/token"
+  token_url: "https://auth.openai.com/oauth/token"
+  verification_uri: "https://auth.openai.com/codex/device"
+  redirect_uri: "https://auth.openai.com/deviceauth/callback"
+  polling_safety_margin_seconds: 3
+  refresh_before_expiry_seconds: 60
+
+storage:
+  path: "~/.pdf_agent/openai_oauth.json"
+  persist_refresh_token: true
+  persist_access_token: false
+  unix_file_mode: "0600"
+
+gateway:
+  model_calls_only_from_backend: true
+  browser_never_receives_model_secret: true
+  upstream_base_url: "https://chatgpt.com/backend-api/codex"
+  responses_path: "responses"
+  models_url: "https://chatgpt.com/backend-api/codex/models"
+  usage_url: "https://chatgpt.com/backend-api/wham/usage"
+  originator: "pdf-agent"
+  force_stream: true
+  include_reasoning_encrypted_content: true
+  strip_unsupported_response_fields:
+    - "max_output_tokens"
+    - "temperature"
+    - "top_p"
+  injected_headers:
+    - "Authorization: Bearer <access_token>"
+    - "ChatGPT-Account-Id: <account_id>"
+    - "originator: <originator>"
+  forbidden_upstream_tokens:
+    - "PROXY_MANAGED"
+    - "OAUTH_MANAGED"
+    - "<managed>"
+
+frontend_api:
+  start_login: "POST /auth/openai/start"
+  poll_login: "POST /auth/openai/poll"
+  status: "GET /auth/openai/status"
+  remove_account: "DELETE /auth/openai/accounts/:account_id"
+  set_default_account: "POST /auth/openai/default"
+  logout: "POST /auth/openai/logout"
+
+security:
+  redact_tokens_in_logs: true
+  per_account_refresh_lock: true
+  jwt_claims_are_identity_hints_not_security_proof: true
+  do_not_proxy_user_subscription_as_public_service: true
