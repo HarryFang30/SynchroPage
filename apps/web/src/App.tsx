@@ -15,10 +15,13 @@ import {
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import {
   Bot,
+  Check,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Columns3,
   Copy,
+  ExternalLink,
   FileInput,
   FileJson,
   Image,
@@ -106,6 +109,14 @@ type AgentSnapshot = {
 type OAuthMode = "unknown" | "ready" | "connected" | "polling" | "offline" | "mock";
 type PanelKey = "rail" | "notes" | "agent";
 type PanelVisibility = Record<PanelKey, boolean>;
+type OAuthDevicePrompt = {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+  expires_at_ms: number;
+};
 
 const fullPanelVisibility: PanelVisibility = {
   rail: true,
@@ -266,6 +277,20 @@ function compactText(value: string, max = 120) {
   return text.length > max ? `${text.slice(0, max - 1)}...` : text;
 }
 
+function splitOAuthUserCode(value: string) {
+  const compact = value.replace(/[^a-z0-9]/gi, "").toUpperCase();
+  if (compact.length === 9) return [compact.slice(0, 4), compact.slice(4)];
+  const groups = value.split("-").map((group) => group.trim()).filter(Boolean);
+  return groups.length ? groups : [value];
+}
+
+function formatSeconds(value: number) {
+  const seconds = Math.max(0, Math.floor(value));
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
 function detectContextType(text: string): AgentContextItem["type"] {
   return /(\$\$?[^$]+\$\$?|\\\(|\\\[|\\begin\{|[∑∫√∞≈≠≤≥πθλμ])/.test(text)
     ? "formula"
@@ -415,10 +440,15 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [oauthMode, setOauthMode] = useState<OAuthMode>("unknown");
   const [oauthAccount, setOauthAccount] = useState<string | null>(null);
+  const [oauthDevice, setOauthDevice] = useState<OAuthDevicePrompt | null>(null);
+  const [oauthCodeCopied, setOauthCodeCopied] = useState(false);
+  const [oauthSecondsLeft, setOauthSecondsLeft] = useState(0);
   const [jobStatus, setJobStatus] = useState("本地原型");
   const [contexts, setContexts] = useState<AgentContextItem[]>([]);
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const lastSelectionRef = useRef<AgentContextItem | null>(null);
+  const oauthPollTimerRef = useRef<number | null>(null);
+  const oauthCountdownTimerRef = useRef<number | null>(null);
 
   const page = pack.pages.find((item) => item.page_no === currentPageNo) || pack.pages[0];
   const currentIndex = Math.max(0, pack.pages.findIndex((item) => item.page_no === page.page_no));
@@ -460,6 +490,17 @@ export default function App() {
       const currentPdfOnly = !current.rail && !current.notes && !current.agent;
       return currentPdfOnly ? fullPanelVisibility : { rail: false, notes: false, agent: false };
     });
+  }, []);
+
+  const stopOAuthTimers = useCallback(() => {
+    if (oauthPollTimerRef.current !== null) {
+      window.clearInterval(oauthPollTimerRef.current);
+      oauthPollTimerRef.current = null;
+    }
+    if (oauthCountdownTimerRef.current !== null) {
+      window.clearInterval(oauthCountdownTimerRef.current);
+      oauthCountdownTimerRef.current = null;
+    }
   }, []);
 
   const getSnapshot = useCallback(
@@ -546,16 +587,47 @@ export default function App() {
     }
   };
 
+  const copyOAuthUserCode = useCallback(async () => {
+    if (!oauthDevice) return;
+    await navigator.clipboard?.writeText(oauthDevice.user_code).catch(() => undefined);
+    setOauthCodeCopied(true);
+    setJobStatus(`授权码 ${oauthDevice.user_code} 已复制`);
+    window.setTimeout(() => setOauthCodeCopied(false), 1800);
+  }, [oauthDevice]);
+
+  const openOAuthVerification = useCallback(() => {
+    if (!oauthDevice) return;
+    window.open(oauthDevice.verification_uri, "_blank", "noopener,noreferrer");
+    setJobStatus(`请在 OpenAI 页面输入授权码 ${oauthDevice.user_code}`);
+  }, [oauthDevice]);
+
+  const cancelOAuthLogin = useCallback(() => {
+    stopOAuthTimers();
+    setOauthDevice(null);
+    setOauthSecondsLeft(0);
+    setOauthCodeCopied(false);
+    setOauthMode((mode) => (mode === "polling" ? "ready" : mode));
+    setJobStatus("OAuth 登录已取消");
+  }, [stopOAuthTimers]);
+
   const connectOAuth = async () => {
     try {
+      if (oauthMode === "polling" && oauthDevice) {
+        await copyOAuthUserCode();
+        return;
+      }
       const status = await requestJson<{ authenticated: boolean }>("/auth/openai/status");
       if (status.authenticated) {
+        stopOAuthTimers();
         await requestJson("/auth/openai/logout", { method: "POST" });
         setOauthMode("ready");
         setOauthAccount(null);
+        setOauthDevice(null);
+        setOauthSecondsLeft(0);
         setJobStatus("OAuth 会话已断开");
         return;
       }
+      stopOAuthTimers();
       const device = await requestJson<{
         user_code: string;
         device_code: string;
@@ -563,15 +635,28 @@ export default function App() {
         expires_in: number;
         interval: number;
       }>("/auth/openai/start", { method: "POST" });
-      await navigator.clipboard?.writeText(device.user_code).catch(() => undefined);
-      window.open(device.verification_uri, "_blank", "noopener,noreferrer");
-      setOauthMode("polling");
-      setJobStatus(`授权码 ${device.user_code}`);
       const expiresAt = Date.now() + device.expires_in * 1000;
-      const timer = window.setInterval(async () => {
+      const nextDevice = { ...device, expires_at_ms: expiresAt };
+      setOauthDevice(nextDevice);
+      setOauthSecondsLeft(Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)));
+      setOauthCodeCopied(false);
+      await navigator.clipboard?.writeText(device.user_code).catch(() => undefined);
+      setOauthCodeCopied(true);
+      window.setTimeout(() => setOauthCodeCopied(false), 1800);
+      setOauthMode("polling");
+      setJobStatus(`授权码 ${device.user_code} 已显示，复制后打开授权页`);
+
+      oauthCountdownTimerRef.current = window.setInterval(() => {
+        const secondsLeft = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+        setOauthSecondsLeft(secondsLeft);
+      }, 1000);
+
+      const pollOnce = async () => {
         if (Date.now() > expiresAt) {
-          window.clearInterval(timer);
+          stopOAuthTimers();
           setOauthMode("ready");
+          setOauthDevice(null);
+          setOauthSecondsLeft(0);
           setJobStatus("OAuth 授权码已过期");
           return;
         }
@@ -584,17 +669,29 @@ export default function App() {
             },
           );
           if (!account) return;
-          window.clearInterval(timer);
+          stopOAuthTimers();
           setOauthMode("connected");
           setOauthAccount(account.login || account.id || null);
+          setOauthDevice(null);
+          setOauthSecondsLeft(0);
+          setOauthCodeCopied(false);
           setJobStatus("OAuth 已连接");
         } catch (error) {
-          window.clearInterval(timer);
+          stopOAuthTimers();
           setOauthMode("ready");
+          setOauthDevice(null);
+          setOauthSecondsLeft(0);
+          setOauthCodeCopied(false);
           setJobStatus((error as Error).message);
         }
-      }, Math.max(device.interval || 8, 8) * 1000);
+      };
+
+      void pollOnce();
+      oauthPollTimerRef.current = window.setInterval(pollOnce, Math.max(device.interval || 8, 8) * 1000);
     } catch {
+      stopOAuthTimers();
+      setOauthDevice(null);
+      setOauthSecondsLeft(0);
       setOauthMode((mode) => (mode === "mock" ? "offline" : "mock"));
       setOauthAccount((account) => (account ? null : "static preview"));
       setJobStatus("OAuth 后端未启动，已进入静态模拟连接");
@@ -604,6 +701,8 @@ export default function App() {
   useEffect(() => {
     void refreshOAuthStatus();
   }, []);
+
+  useEffect(() => () => stopOAuthTimers(), [stopOAuthTimers]);
 
   const loadPdf = (file: File) => {
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
@@ -688,7 +787,11 @@ export default function App() {
               <Maximize2 />
             </IconButton>
           </div>
-          <IconButton label="连接 OpenAI OAuth" active={oauthMode === "connected"} onClick={connectOAuth}>
+          <IconButton
+            label={oauthMode === "polling" ? "查看 OpenAI 验证码" : "连接 OpenAI OAuth"}
+            active={oauthMode === "connected" || oauthMode === "polling"}
+            onClick={connectOAuth}
+          >
             <Lock />
           </IconButton>
           <FileButton label="上传 PDF" accept="application/pdf" onFile={loadPdf}>
@@ -724,6 +827,17 @@ export default function App() {
           aria-label="页面进度"
         />
       </section>
+
+      {oauthDevice && (
+        <OAuthDeviceDialog
+          device={oauthDevice}
+          secondsLeft={oauthSecondsLeft}
+          copied={oauthCodeCopied}
+          onCopy={copyOAuthUserCode}
+          onOpen={openOAuthVerification}
+          onCancel={cancelOAuthLogin}
+        />
+      )}
 
       <main className="workspace" style={workspaceStyle}>
         <aside className="page-rail" hidden={!panels.rail}>
@@ -921,6 +1035,58 @@ function AgentPanel(props: {
         <AssistantThread />
       </AssistantRuntimeProvider>
     </aside>
+  );
+}
+
+function OAuthDeviceDialog(props: {
+  device: OAuthDevicePrompt;
+  secondsLeft: number;
+  copied: boolean;
+  onCopy: () => void;
+  onOpen: () => void;
+  onCancel: () => void;
+}) {
+  const groups = splitOAuthUserCode(props.device.user_code);
+
+  return (
+    <section className="oauth-device-panel" role="dialog" aria-labelledby="oauth-device-title" aria-live="polite">
+      <div className="oauth-device-header">
+        <div>
+          <p>OpenAI Codex 登录</p>
+          <h2 id="oauth-device-title">输入网页要求的 9 位验证码</h2>
+        </div>
+        <button className="oauth-device-close" type="button" aria-label="取消 OAuth 登录" onClick={props.onCancel}>
+          <X />
+        </button>
+      </div>
+
+      <div className="oauth-code-display" aria-label={`授权码 ${props.device.user_code}`}>
+        {groups.map((group, groupIndex) => (
+          <div className="oauth-code-group" key={`${group}-${groupIndex}`}>
+            {groupIndex > 0 && <span className="oauth-code-separator">-</span>}
+            {[...group].map((char, index) => (
+              <span className="oauth-code-cell" key={`${char}-${index}`}>{char}</span>
+            ))}
+          </div>
+        ))}
+      </div>
+
+      <div className="oauth-device-actions">
+        <button className="oauth-secondary-button" type="button" onClick={props.onCopy}>
+          {props.copied ? <Check /> : <Copy />}
+          {props.copied ? "已复制" : "复制验证码"}
+        </button>
+        <button className="oauth-primary-button" type="button" onClick={props.onOpen}>
+          <ExternalLink />
+          打开授权页
+        </button>
+      </div>
+
+      <div className="oauth-device-meta">
+        <span><Clock /> {formatSeconds(props.secondsLeft)} 后过期</span>
+        <span>{props.device.verification_uri}</span>
+      </div>
+    </section>
   );
 }
 
