@@ -66,6 +66,10 @@ button:disabled {
   opacity: 0.48;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 ::selection {
   background: color-mix(in srgb, var(--teal) 22%, transparent);
 }
@@ -164,6 +168,39 @@ svg {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.layout-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 82%, var(--soft)), color-mix(in srgb, var(--soft) 72%, white));
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.82) inset;
+}
+
+.layout-switcher .mini-button {
+  width: 34px;
+  height: 34px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.layout-switcher .mini-button:hover {
+  border-color: color-mix(in srgb, var(--line-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--panel-strong) 76%, var(--soft));
+  box-shadow: none;
+}
+
+.layout-switcher .mini-button.active {
+  border-color: color-mix(in srgb, var(--teal) 34%, var(--line));
+  background: var(--panel-strong);
+  color: var(--teal);
+  box-shadow: 0 1px 7px rgba(25, 36, 49, 0.1);
 }
 
 .mini-button,
@@ -281,22 +318,14 @@ input[type="range"] {
 .workspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: 232px minmax(296px, 0.98fr) minmax(312px, 0.92fr) minmax(328px, 0.9fr);
+  grid-template-columns: var(--workspace-columns, 232px minmax(296px, 1.04fr) minmax(312px, 0.96fr) minmax(328px, 0.92fr));
   gap: 11px;
   padding: 11px;
   transition: grid-template-columns 180ms ease;
 }
 
-.rail-collapsed .workspace {
-  grid-template-columns: 0 minmax(320px, 0.98fr) minmax(312px, 0.92fr) minmax(328px, 0.9fr);
-}
-
-.agent-collapsed .workspace {
-  grid-template-columns: 232px minmax(380px, 1.04fr) minmax(340px, 0.96fr) 0;
-}
-
-.rail-collapsed.agent-collapsed .workspace {
-  grid-template-columns: 0 minmax(380px, 1.04fr) minmax(340px, 0.96fr) 0;
+.pdf-focus .workspace {
+  gap: 12px;
 }
 
 .page-rail,
@@ -316,18 +345,6 @@ input[type="range"] {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   transition: opacity 180ms ease, transform 180ms ease;
-}
-
-.rail-collapsed .page-rail {
-  pointer-events: none;
-  opacity: 0;
-  transform: translateX(-12px);
-}
-
-.agent-panel.hidden {
-  pointer-events: none;
-  opacity: 0;
-  transform: translateX(12px);
 }
 
 .rail-tools {
@@ -461,6 +478,19 @@ input[type="range"] {
 
 .pdf-pane {
   grid-template-rows: 52px minmax(0, 1fr) auto;
+}
+
+.pdf-focus .pdf-pane {
+  background: color-mix(in srgb, var(--panel-strong) 82%, var(--blue-soft));
+}
+
+.pdf-focus .pdf-frame {
+  padding: clamp(16px, 2.2vw, 28px);
+}
+
+.pdf-focus .slide-preview {
+  width: min(100%, 980px);
+  max-height: min(68vh, 760px);
 }
 
 .pane-toolbar,
@@ -1217,17 +1247,9 @@ output {
     min-height: 100vh;
   }
 
-  .workspace,
-  .rail-collapsed .workspace,
-  .agent-collapsed .workspace,
-  .rail-collapsed.agent-collapsed .workspace {
+  .workspace {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(420px, 55vh) minmax(420px, auto) minmax(520px, auto);
-  }
-
-  .rail-collapsed .page-rail,
-  .agent-panel.hidden {
-    display: none;
+    grid-template-rows: var(--workspace-rows, auto minmax(420px, 55vh) minmax(420px, auto) minmax(520px, auto));
   }
 }
 

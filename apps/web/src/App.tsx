@@ -17,15 +17,18 @@ import {
   Bot,
   ChevronLeft,
   ChevronRight,
+  Columns3,
   Copy,
   FileInput,
   FileJson,
   Image,
-  LayoutList,
   Lock,
+  Maximize2,
+  NotebookText,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
-  Plus,
   RefreshCw,
   Send,
   Settings2,
@@ -38,6 +41,7 @@ import {
 } from "lucide-react";
 import {
   type ChangeEvent,
+  type CSSProperties,
   type ReactNode,
   useCallback,
   useEffect,
@@ -100,6 +104,14 @@ type AgentSnapshot = {
 };
 
 type OAuthMode = "unknown" | "ready" | "connected" | "polling" | "offline" | "mock";
+type PanelKey = "rail" | "notes" | "agent";
+type PanelVisibility = Record<PanelKey, boolean>;
+
+const fullPanelVisibility: PanelVisibility = {
+  rail: true,
+  notes: true,
+  agent: true,
+};
 
 const samplePack: PagePack = {
   schema: "lecture_pairpack.v1",
@@ -399,8 +411,7 @@ export default function App() {
   const [currentPageNo, setCurrentPageNo] = useState(1);
   const [pdfUrl, setPdfUrl] = useState("");
   const [activeTab, setActiveTab] = useState<"notes" | "structure" | "json">("notes");
-  const [railCollapsed, setRailCollapsed] = useState(false);
-  const [agentCollapsed, setAgentCollapsed] = useState(false);
+  const [panels, setPanels] = useState<PanelVisibility>(fullPanelVisibility);
   const [query, setQuery] = useState("");
   const [oauthMode, setOauthMode] = useState<OAuthMode>("unknown");
   const [oauthAccount, setOauthAccount] = useState<string | null>(null);
@@ -412,9 +423,44 @@ export default function App() {
   const page = pack.pages.find((item) => item.page_no === currentPageNo) || pack.pages[0];
   const currentIndex = Math.max(0, pack.pages.findIndex((item) => item.page_no === page.page_no));
   const percent = pack.pages.length ? Math.round(((currentIndex + 1) / pack.pages.length) * 100) : 0;
+  const pdfOnly = !panels.rail && !panels.notes && !panels.agent;
+  const fullWorkbench = panels.rail && panels.notes && panels.agent;
   const filteredPages = pack.pages.filter((item) =>
     query ? item.teaching.slide_title.toLowerCase().includes(query.toLowerCase()) : true,
   );
+  const workspaceColumns = useMemo(() => {
+    const columns = [
+      panels.rail ? "232px" : null,
+      pdfOnly ? "minmax(0, 1fr)" : "minmax(296px, 1.04fr)",
+      panels.notes ? "minmax(312px, 0.96fr)" : null,
+      panels.agent ? "minmax(328px, 0.92fr)" : null,
+    ];
+    return columns.filter(Boolean).join(" ");
+  }, [panels.agent, panels.notes, panels.rail, pdfOnly]);
+  const workspaceRows = useMemo(() => {
+    const rows = [
+      panels.rail ? "auto" : null,
+      pdfOnly ? "minmax(620px, calc(100vh - 170px))" : "minmax(420px, 55vh)",
+      panels.notes ? "minmax(420px, auto)" : null,
+      panels.agent ? "minmax(520px, auto)" : null,
+    ];
+    return rows.filter(Boolean).join(" ");
+  }, [panels.agent, panels.notes, panels.rail, pdfOnly]);
+  const workspaceStyle = {
+    "--workspace-columns": workspaceColumns,
+    "--workspace-rows": workspaceRows,
+  } as CSSProperties;
+
+  const togglePanel = useCallback((key: PanelKey) => {
+    setPanels((current) => ({ ...current, [key]: !current[key] }));
+  }, []);
+
+  const togglePdfOnly = useCallback(() => {
+    setPanels((current) => {
+      const currentPdfOnly = !current.rail && !current.notes && !current.agent;
+      return currentPdfOnly ? fullPanelVisibility : { rail: false, notes: false, agent: false };
+    });
+  }, []);
 
   const getSnapshot = useCallback(
     () => ({ contexts, attachments }),
@@ -431,7 +477,7 @@ export default function App() {
       }
       return [...items, context].slice(-10);
     });
-    setAgentCollapsed(false);
+    setPanels((current) => ({ ...current, agent: true }));
   }, []);
 
   const captureSelection = useCallback(() => {
@@ -615,7 +661,7 @@ export default function App() {
           : "OpenAI Gateway: 未连接";
 
   return (
-    <div className={`app-shell ${railCollapsed ? "rail-collapsed" : ""} ${agentCollapsed ? "agent-collapsed" : ""}`}>
+    <div className={`app-shell ${pdfOnly ? "pdf-focus" : ""}`}>
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark">PP</div>
@@ -625,12 +671,23 @@ export default function App() {
           </div>
         </div>
         <div className="topbar-actions">
-          <IconButton label="切换目录栏" active={!railCollapsed} onClick={() => setRailCollapsed((v) => !v)}>
-            <LayoutList />
-          </IconButton>
-          <IconButton label="切换 AI Agent" active={!agentCollapsed} onClick={() => setAgentCollapsed((v) => !v)}>
-            {agentCollapsed ? <PanelRightOpen /> : <PanelRightClose />}
-          </IconButton>
+          <div className="layout-switcher" role="group" aria-label="工作区布局">
+            <IconButton label="恢复完整工作台" active={fullWorkbench} onClick={() => setPanels(fullPanelVisibility)}>
+              <Columns3 />
+            </IconButton>
+            <IconButton label={panels.rail ? "隐藏左侧目录" : "显示左侧目录"} active={panels.rail} onClick={() => togglePanel("rail")}>
+              {panels.rail ? <PanelLeftClose /> : <PanelLeftOpen />}
+            </IconButton>
+            <IconButton label={panels.notes ? "隐藏讲解面板" : "显示讲解面板"} active={panels.notes} onClick={() => togglePanel("notes")}>
+              <NotebookText />
+            </IconButton>
+            <IconButton label={panels.agent ? "隐藏 AI Agent" : "显示 AI Agent"} active={panels.agent} onClick={() => togglePanel("agent")}>
+              {panels.agent ? <PanelRightClose /> : <PanelRightOpen />}
+            </IconButton>
+            <IconButton label={pdfOnly ? "退出 PDF 专注" : "只看 PDF"} active={pdfOnly} onClick={togglePdfOnly}>
+              <Maximize2 />
+            </IconButton>
+          </div>
           <IconButton label="连接 OpenAI OAuth" active={oauthMode === "connected"} onClick={connectOAuth}>
             <Lock />
           </IconButton>
@@ -668,8 +725,8 @@ export default function App() {
         />
       </section>
 
-      <main className="workspace">
-        <aside className="page-rail">
+      <main className="workspace" style={workspaceStyle}>
+        <aside className="page-rail" hidden={!panels.rail}>
           <div className="rail-tools">
             <div className="search-box">
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索页标题" />
@@ -730,7 +787,7 @@ export default function App() {
           )}
         </section>
 
-        <section className="notes-pane">
+        <section className="notes-pane" hidden={!panels.notes}>
           <PaneToolbar
             title={page.teaching.slide_title}
             badge={`${Math.round(page.teaching.confidence * 100)}%`}
@@ -757,7 +814,7 @@ export default function App() {
         </section>
 
         <AgentPanel
-          collapsed={agentCollapsed}
+          hidden={!panels.agent}
           contexts={contexts}
           attachments={attachments}
           setContexts={setContexts}
@@ -784,7 +841,7 @@ export default function App() {
 }
 
 function AgentPanel(props: {
-  collapsed: boolean;
+  hidden: boolean;
   contexts: AgentContextItem[];
   attachments: AgentAttachment[];
   setContexts: (fn: AgentContextItem[] | ((items: AgentContextItem[]) => AgentContextItem[])) => void;
@@ -815,7 +872,7 @@ function AgentPanel(props: {
   };
 
   return (
-    <aside className={`agent-panel ${props.collapsed ? "hidden" : ""}`}>
+    <aside className="agent-panel" hidden={props.hidden}>
       <div className="agent-toolbar">
         <div className="toolbar-title">
           <span className="agent-dot" />
@@ -1060,7 +1117,14 @@ function StructurePanel({ page }: { page: PageData }) {
 
 function IconButton({ label, active, onClick, children }: { label: string; active?: boolean; onClick?: () => void; children: ReactNode }) {
   return (
-    <button className={`mini-button ${active ? "active" : ""}`} type="button" aria-label={label} title={label} onClick={onClick}>
+    <button
+      className={`mini-button ${active ? "active" : ""}`}
+      type="button"
+      aria-label={label}
+      aria-pressed={active === undefined ? undefined : active}
+      title={label}
+      onClick={onClick}
+    >
       {children}
     </button>
   );
