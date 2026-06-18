@@ -307,14 +307,6 @@ svg {
   position: relative;
 }
 
-.command-menu summary {
-  list-style: none;
-}
-
-.command-menu summary::-webkit-details-marker {
-  display: none;
-}
-
 .command-menu-popover {
   position: absolute;
   z-index: 70;
@@ -330,8 +322,7 @@ svg {
   box-shadow: 0 18px 44px oklch(0.30 0.018 95 / 0.14);
 }
 
-.command-menu-popover button,
-.command-menu-item {
+.command-menu-popover button {
   min-width: 0;
   min-height: 36px;
   display: grid;
@@ -347,16 +338,11 @@ svg {
   font-size: 13px;
 }
 
-.command-menu-popover button:hover,
-.command-menu-item:hover {
+.command-menu-popover button:hover {
   background: color-mix(in oklch, var(--secondary) 52%, transparent);
 }
 
-.command-menu-item {
-  cursor: pointer;
-}
-
-.command-menu-item input {
+.command-menu-file-input {
   position: absolute;
   opacity: 0;
   pointer-events: none;

@@ -760,12 +760,15 @@ export default function App() {
   const [jobStatus, setJobStatus] = useState("本地原型");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
+  const [commandMenuOpen, setCommandMenuOpen] = useState(false);
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(() => loadUiPreferences());
   const [contexts, setContexts] = useState<AgentContextItem[]>([]);
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [selectedContext, setSelectedContext] = useState<SelectedContext | null>(null);
   const [pendingSelectionPrompt, setPendingSelectionPrompt] = useState<QuickSelectionPrompt | null>(null);
   const lastSelectionRef = useRef<SelectedContext | null>(null);
+  const commandMenuRef = useRef<HTMLDivElement>(null);
+  const jsonImportInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const oauthPollTimerRef = useRef<number | null>(null);
   const oauthCountdownTimerRef = useRef<number | null>(null);
@@ -803,6 +806,10 @@ export default function App() {
   const openSettings = useCallback((section: SettingsSection = "general") => {
     setSettingsSection(section);
     setSettingsOpen(true);
+  }, []);
+
+  const closeCommandMenu = useCallback(() => {
+    setCommandMenuOpen(false);
   }, []);
 
   const updatePreference = useCallback(<K extends keyof UiPreferences>(key: K, value: UiPreferences[K]) => {
@@ -871,6 +878,26 @@ export default function App() {
     clearSelection();
     setJobStatus(intent === "explain" ? "正在解释选中内容" : "正在总结选中内容");
   }, [clearSelection]);
+
+  useEffect(() => {
+    if (!commandMenuOpen) return undefined;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && commandMenuRef.current?.contains(target)) return;
+      setCommandMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCommandMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [commandMenuOpen]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -1130,28 +1157,61 @@ export default function App() {
           <IconButton label="打开设置" onClick={() => openSettings("general")}>
             <Settings2 />
           </IconButton>
-          <details className="command-menu">
-            <summary className="mini-button" aria-label="更多操作" title="更多操作">
+          <div className="command-menu" ref={commandMenuRef}>
+            <button
+              className={`mini-button ${commandMenuOpen ? "active" : ""}`}
+              type="button"
+              aria-label="更多操作"
+              aria-expanded={commandMenuOpen}
+              title="更多操作"
+              onClick={() => setCommandMenuOpen((open) => !open)}
+            >
               <MoreHorizontal />
-            </summary>
-            <div className="command-menu-popover">
-              <button type="button" onClick={connectOAuth}>
-                <Lock />
-                {oauthMode === "polling" ? "查看 OpenAI 验证码" : "连接 OpenAI OAuth"}
-              </button>
-              <MenuFileButton label="导入 PagePair JSON" accept="application/json,.json" onFile={loadJson}>
-                <FileInput />
-              </MenuFileButton>
-              <button type="button" onClick={exportJson}>
-                <FileJson />
-                导出 JSON
-              </button>
-              <button type="button" onClick={() => openSettings("advanced")}>
-                <Settings2 />
-                高级设置
-              </button>
-            </div>
-          </details>
+            </button>
+            {commandMenuOpen ? (
+              <div className="command-menu-popover">
+                <button type="button" onClick={() => {
+                  closeCommandMenu();
+                  void connectOAuth();
+                }}>
+                  <Lock />
+                  {oauthMode === "polling" ? "查看 OpenAI 验证码" : "连接 OpenAI OAuth"}
+                </button>
+                <button type="button" onClick={() => {
+                  jsonImportInputRef.current?.click();
+                  closeCommandMenu();
+                }}>
+                  <FileInput />
+                  导入 PagePair JSON
+                </button>
+                <button type="button" onClick={() => {
+                  closeCommandMenu();
+                  exportJson();
+                }}>
+                  <FileJson />
+                  导出 JSON
+                </button>
+                <button type="button" onClick={() => {
+                  closeCommandMenu();
+                  openSettings("advanced");
+                }}>
+                  <Settings2 />
+                  高级设置
+                </button>
+              </div>
+            ) : null}
+            <input
+              ref={jsonImportInputRef}
+              className="command-menu-file-input"
+              type="file"
+              accept="application/json,.json"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) loadJson(file);
+                event.currentTarget.value = "";
+              }}
+            />
+          </div>
           <button className="primary-button" type="button" onClick={() => setJobStatus("生成任务已交给后端 harness")}>
             <Zap />
             生成
@@ -1914,20 +1974,6 @@ function FileButton({ label, accept, onFile, children }: { label: string; accept
   return (
     <label className="mini-button" title={label} aria-label={label}>
       {children}
-      <input type="file" accept={accept} onChange={(event: ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (file) onFile(file);
-        event.currentTarget.value = "";
-      }} />
-    </label>
-  );
-}
-
-function MenuFileButton({ label, accept, onFile, children }: { label: string; accept: string; onFile: (file: File) => void; children: ReactNode }) {
-  return (
-    <label className="command-menu-item">
-      {children}
-      <span>{label}</span>
       <input type="file" accept={accept} onChange={(event: ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (file) onFile(file);
