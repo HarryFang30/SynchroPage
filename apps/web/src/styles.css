@@ -1468,6 +1468,27 @@ output {
   padding: 10px 12px;
 }
 
+.message-quote {
+  margin: 0 0 9px;
+  border-left: 3px solid color-mix(in oklch, var(--brand) 38%, var(--line));
+  color: color-mix(in oklch, var(--text) 78%, var(--muted));
+  padding: 2px 0 2px 10px;
+}
+
+.message-quote span {
+  display: block;
+  margin-bottom: 3px;
+  color: color-mix(in oklch, var(--brand) 62%, var(--text));
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.message-quote p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .assistant-bubble {
   background: color-mix(in oklch, var(--background) 74%, white);
   padding: 11px 12px;

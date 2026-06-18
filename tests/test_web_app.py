@@ -25,6 +25,13 @@ class WebAppTest(unittest.TestCase):
                     "teaching": {"slide_title": "Eigenvectors", "speaker_notes_md": "Use $\\lambda$."},
                 },
                 "input": "解释这个公式",
+                "selectedContext": {
+                    "text": "D_i = Q_i^+",
+                    "sourceType": "generated-explanation",
+                    "documentTitle": "Linear Algebra",
+                    "pageNumber": 7,
+                    "sectionTitle": "讲解区选区",
+                },
                 "parts": [
                     {"type": "text", "text": "解释这个公式"},
                     {
@@ -54,6 +61,8 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(payload["model"], "gpt-5.5")
         content = payload["input"][0]["content"]
         self.assertEqual(content[0]["type"], "input_text")
+        self.assertIn("# User selected source material", content[0]["text"])
+        self.assertIn("D_i = Q_i^+", content[0]["text"])
         self.assertIn("$$Ax = \\lambda x$$", content[0]["text"])
         self.assertIn("上一轮问题", content[0]["text"])
         self.assertEqual(content[1], {"type": "input_image", "image_url": "data:image/png;base64,AAAA"})

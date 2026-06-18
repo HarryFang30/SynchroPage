@@ -61,6 +61,7 @@ import {
   useState,
 } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
+import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
@@ -1634,6 +1635,14 @@ function UserMessage() {
   return (
     <MessagePrimitive.Root className="aui-message user-message">
       <div className="message-bubble user-bubble">
+        <MessagePrimitive.Quote>
+          {(quote) => (
+            <div className="message-quote">
+              <span>选中内容</span>
+              <p>{compactText(quote.text, 220)}</p>
+            </div>
+          )}
+        </MessagePrimitive.Quote>
         <MessagePrimitive.Parts />
       </div>
       <ActionBarPrimitive.Root className="message-actions" hideWhenRunning autohide="not-last">
@@ -1698,6 +1707,19 @@ function AssistantComposer({
   onRemoveSelectedContext: () => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
 }) {
+  const thread = useThreadRuntime();
+
+  useEffect(() => {
+    thread.composer.setQuote(
+      selectedContext
+        ? {
+            text: selectedContext.text,
+            messageId: selectedContext.id,
+          }
+        : undefined,
+    );
+  }, [selectedContext, thread]);
+
   return (
     <div className="composer-shell">
       {selectedContext && (
@@ -1734,14 +1756,7 @@ function AssistantComposer({
 
 function MarkdownPart() {
   return (
-    <MarkdownTextPrimitive
-      className="markdown-body"
-      remarkPlugins={markdownRemarkPlugins as never}
-      rehypePlugins={markdownRehypePlugins as never}
-      preprocess={preprocessMathMarkdown}
-      defer
-      smooth
-    />
+    <ReaderMarkdown className="markdown-body" />
   );
 }
 
@@ -1826,24 +1841,35 @@ function SlidePreview({ page }: { page: PageData }) {
 function MarkdownBlock({ markdown, concepts }: { markdown: string; concepts: string[] }) {
   return (
     <article className="note-markdown">
-      <SimpleMarkdown markdown={markdown} />
+      <ReaderMarkdown className="note-markdown-content markdown-body" text={markdown} />
       <div className="chips">{concepts.map((item) => <span className="chip" key={item}>{item}</span>)}</div>
     </article>
   );
 }
 
-function SimpleMarkdown({ markdown }: { markdown: string }) {
+function ReaderMarkdown({ className, text }: { className: string; text?: string }) {
+  if (text !== undefined) {
+    return (
+      <div className={className}>
+        <ReactMarkdown
+          remarkPlugins={markdownRemarkPlugins as never}
+          rehypePlugins={markdownRehypePlugins as never}
+        >
+          {preprocessMathMarkdown(text)}
+        </ReactMarkdown>
+      </div>
+    );
+  }
+
   return (
-    <>
-      {markdown.split("\n").map((line, index) => {
-        const trimmed = line.trim();
-        if (!trimmed) return null;
-        if (trimmed.startsWith("## ")) return <h2 key={index}>{trimmed.slice(3)}</h2>;
-        if (trimmed.startsWith("### ")) return <h3 key={index}>{trimmed.slice(4)}</h3>;
-        if (trimmed.startsWith("- ")) return <p className="bullet" key={index}>• {trimmed.slice(2)}</p>;
-        return <p key={index}>{trimmed}</p>;
-      })}
-    </>
+    <MarkdownTextPrimitive
+      className={className}
+      remarkPlugins={markdownRemarkPlugins as never}
+      rehypePlugins={markdownRehypePlugins as never}
+      preprocess={preprocessMathMarkdown}
+      defer
+      smooth
+    />
   );
 }
 
