@@ -185,12 +185,12 @@ svg {
   min-width: 0;
   height: 100vh;
   display: grid;
-  grid-template-rows: 70px 38px minmax(0, 1fr);
+  grid-template-rows: 70px minmax(0, 1fr);
   overflow: hidden;
 }
 
 .app-shell[data-debug-mode="true"] {
-  grid-template-rows: 70px 38px minmax(0, 1fr) 32px;
+  grid-template-rows: 70px minmax(0, 1fr) 32px;
 }
 
 .app-shell[data-fullscreen-mode="true"] {
@@ -200,7 +200,6 @@ svg {
 }
 
 .app-shell[data-fullscreen-mode="true"] .topbar,
-.app-shell[data-fullscreen-mode="true"] .reader-progress,
 .app-shell[data-fullscreen-mode="true"] .statusbar {
   display: none;
 }
@@ -504,41 +503,6 @@ svg {
 .primary-button:hover {
   filter: brightness(1.03);
   transform: translateY(-1px);
-}
-
-.reader-progress {
-  display: grid;
-  grid-template-columns: minmax(180px, 340px) minmax(0, 1fr);
-  align-items: center;
-  gap: 14px;
-  padding: 7px 18px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in oklch, var(--surface) 82%, transparent);
-}
-
-.progress-meta {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.progress-meta span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.progress-meta strong,
-input[type="range"] {
-  accent-color: var(--brand);
-}
-
-input[type="range"] {
-  height: 4px;
 }
 
 .oauth-device-panel {
@@ -2488,10 +2452,6 @@ output {
   padding-block: 7px;
 }
 
-.compact-mode .reader-progress {
-  padding-block: 4px;
-}
-
 .compact-mode .pane-toolbar,
 .compact-mode .agent-toolbar {
   min-height: 46px;
@@ -2628,11 +2588,6 @@ output {
 
   .oauth-device-actions {
     grid-template-columns: 1fr;
-  }
-
-  .reader-progress {
-    grid-template-columns: 1fr;
-    padding: 8px 12px;
   }
 
   .settings-dialog {

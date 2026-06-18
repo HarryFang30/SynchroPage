@@ -1419,21 +1419,6 @@ export default function App() {
         </div>
       </header>
 
-      <section className="reader-progress">
-        <div className="progress-meta">
-          <span>{copy.common.explanationProgress(currentIndex + 1, pack.pages.length)}</span>
-          <strong>{pack.document.title}</strong>
-        </div>
-        <input
-          type="range"
-          min={1}
-          max={Math.max(pack.pages.length, 1)}
-          value={currentIndex + 1}
-          onChange={(event) => setCurrentPageNo(pack.pages[Number(event.target.value) - 1]?.page_no || 1)}
-          aria-label={copy.topbar.pageProgressAria}
-        />
-      </section>
-
       {oauthDevice && (
         <OAuthDeviceDialog
           device={oauthDevice}
