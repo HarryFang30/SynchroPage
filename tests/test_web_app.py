@@ -10,6 +10,7 @@ from pdf_agent.server.web_app import (
     _build_responses_payload,
     _build_teaching_generation_payload,
     _extract_gateway_text,
+    _parse_generated_page,
     _resolve_static_path,
 )
 
@@ -173,6 +174,30 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(content[2]["type"], "input_text")
         self.assertIn("Target page:", content[2]["text"])
         self.assertIn("page_no: 2", content[2]["text"])
+
+    def test_generated_page_normalizes_mixed_language_latex_ranges(self) -> None:
+        page = _parse_generated_page(
+            json.dumps(
+                {
+                    "page_no": 1,
+                    "source": {"text_md": "n-bit counter range", "pdf_page_ref": "#page=1"},
+                    "teaching": {
+                        "slide_title": "Counter range",
+                        "speaker_notes_md": "计数范围是 $0 到 \\2^n-1$。",
+                        "concepts": ["counter"],
+                        "confidence": 0.9,
+                    },
+                }
+            ),
+            {
+                "page": {
+                    "page_no": 1,
+                    "source": {"text_md": "n-bit counter range", "pdf_page_ref": "#page=1"},
+                }
+            },
+        )
+
+        self.assertIn("$0 \\text{到} 2^n-1$", page["teaching"]["speaker_notes_md"])
 
     def test_extracts_streaming_response_text(self) -> None:
         stream = "\n".join(

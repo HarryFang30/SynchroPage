@@ -1028,12 +1028,27 @@ function preprocessMathMarkdown(text: string) {
       return segment
         .split(/(\$\$[\s\S]*?\$\$|\$[^$\n]+\$)/g)
         .map((part) => {
-          if (part.startsWith("$")) return part;
+          if (part.startsWith("$")) return sanitizeMathMarkdownSegment(part);
           return wrapBareCircuitMath(part);
         })
         .join("");
     })
     .join("");
+}
+
+function sanitizeMathMarkdownSegment(segment: string) {
+  const delimiter = segment.startsWith("$$") ? "$$" : "$";
+  if (!segment.endsWith(delimiter)) return segment;
+  const body = segment.slice(delimiter.length, -delimiter.length);
+  return `${delimiter}${sanitizeKatexBody(body)}${delimiter}`;
+}
+
+function sanitizeKatexBody(body: string) {
+  let normalized = body.replace(/\\(?=\d)/g, "");
+  if (!/\\(?:text|mathrm|operatorname)\s*\{/.test(normalized)) {
+    normalized = normalized.replace(/([\u3400-\u9fff]+)/g, "\\text{$1}");
+  }
+  return normalized;
 }
 
 function wrapBareCircuitMath(text: string) {

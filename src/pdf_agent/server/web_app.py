@@ -6,6 +6,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
 import threading
 import urllib.error
 import urllib.parse
@@ -49,6 +50,8 @@ TEACHING_GENERATOR_INSTRUCTIONS = """You are the PagePair per-page teaching gene
 Generate page-aligned study notes for one PDF page at a time.
 Return strict JSON only. Do not wrap JSON in Markdown fences.
 Use the user's language. Preserve formulas in LaTeX using $...$ or $$...$$.
+Do not put natural-language Chinese text directly inside math delimiters. Write ranges like $0$ 到 $2^n - 1$, or use $0 \\text{ 到 } 2^n - 1$.
+Never escape digits in LaTeX; write 2^n, not \\2^n.
 Render tables as GitHub-Flavored Markdown tables inside speaker_notes_md when the source page contains tabular content.
 Do not invent facts that are not supported by the source page text. If the page has no extractable text, mark it as needs_parser_fallback."""
 
@@ -154,39 +157,11 @@ class TeachingGenerationGateway:
 
     async def generate_page(self, body: Mapping[str, Any]) -> dict[str, Any]:
         auth = await build_chatgpt_codex_auth(self.manager, session_id=_string_or_none(body.get("session_id")))
-        document_file_used = bool(_pdf_file_input(body.get("documentFile")))
-        payload = build_codex_responses_payload(
-            _build_teaching_generation_payload(body, default_model=self.model),
-            force_stream=True,
-            include_reasoning_encrypted_content=True,
-            strip_unsupported_fields=True,
+        content, payload, document_file_used = await self._generate_content_with_fallback(
+            codex_responses_url(base_url=auth.upstream_base_url),
+            body,
+            auth.headers,
         )
-        try:
-            text, content_type, payload = await self._post_payload_with_cache_fallback(
-                codex_responses_url(base_url=auth.upstream_base_url),
-                payload,
-                auth.headers,
-            )
-        except HttpError as exc:
-            if not document_file_used or exc.status not in {400, 413, 415, 422}:
-                raise
-            fallback_body = dict(body)
-            fallback_body.pop("documentFile", None)
-            document_file_used = False
-            payload = build_codex_responses_payload(
-                _build_teaching_generation_payload(fallback_body, default_model=self.model),
-                force_stream=True,
-                include_reasoning_encrypted_content=True,
-                strip_unsupported_fields=True,
-            )
-            text, content_type, payload = await self._post_payload_with_cache_fallback(
-                codex_responses_url(base_url=auth.upstream_base_url),
-                payload,
-                auth.headers,
-            )
-        content = _extract_gateway_text(text, content_type)
-        if not content:
-            raise HttpError(502, "OpenAI gateway returned an empty generation response", code="empty_gateway_response")
         page = _parse_generated_page(content, body)
         return {
             "page": page,
@@ -198,6 +173,41 @@ class TeachingGenerationGateway:
                 "document_file_input": document_file_used,
             },
         }
+
+    async def _generate_content_with_fallback(
+        self,
+        url: str,
+        body: Mapping[str, Any],
+        headers: dict[str, str],
+    ) -> tuple[str, dict[str, Any], bool]:
+        candidate_bodies: list[tuple[Mapping[str, Any], bool]] = [(body, bool(_pdf_file_input(body.get("documentFile"))))]
+        if candidate_bodies[0][1]:
+            fallback_body = dict(body)
+            fallback_body.pop("documentFile", None)
+            candidate_bodies.append((fallback_body, False))
+
+        last_error: HttpError | None = None
+        for candidate_body, document_file_used in candidate_bodies:
+            payload = build_codex_responses_payload(
+                _build_teaching_generation_payload(candidate_body, default_model=self.model),
+                force_stream=True,
+                include_reasoning_encrypted_content=True,
+                strip_unsupported_fields=True,
+            )
+            try:
+                text, content_type, payload = await self._post_payload_with_cache_fallback(url, payload, headers)
+                content = _extract_gateway_text(text, content_type)
+                if not content:
+                    raise HttpError(502, "OpenAI gateway returned an empty generation response", code="empty_gateway_response")
+                return content, payload, document_file_used
+            except HttpError as exc:
+                last_error = exc
+                if document_file_used and exc.status in {400, 413, 415, 422, 500, 502}:
+                    continue
+                raise
+        if last_error:
+            raise last_error
+        raise HttpError(502, "OpenAI gateway returned an empty generation response", code="empty_gateway_response")
 
     async def _post_payload_with_cache_fallback(
         self,
@@ -477,6 +487,8 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
         "- source.text_md must preserve the source page text you received.",
         "- speaker_notes_md must be Markdown suitable for side-by-side learning.",
         "- Use headings, short paragraphs, bullet lists, Markdown tables, and LaTeX math when helpful.",
+        "- For mixed language and math, keep prose outside math delimiters when possible: write $0$ 到 $2^n - 1$, not $0 到 \\2^n-1$.",
+        "- Never escape digits in LaTeX. Use 2^n, not \\2^n.",
         "- If the page contains formulas, explain symbols and intuition in speaker_notes_md and formula_explanations.",
         "- If the page contains table-like content, reconstruct a concise Markdown table when possible.",
         "- If source text is empty or unreadable, do not hallucinate; set needs_parser_fallback=true, needs_review=true, confidence<=0.35.",
@@ -639,6 +651,7 @@ def _parse_generated_page(content: str, body: Mapping[str, Any]) -> dict[str, An
             "## 当前页暂无法生成可靠讲解\n\n"
             "这一页没有可提取的 PDF 文本层。本轮不会编造内容；请后续接入 OCR 或手动补充页面文本后再重新生成。"
         )
+    notes = _normalize_markdown_math(notes)
 
     evidence = teaching.get("evidence")
     if not isinstance(evidence, list) or not evidence:
@@ -693,6 +706,33 @@ def _json_from_model_text(content: str) -> Any:
             return json.loads(text[start : end + 1])
         except json.JSONDecodeError as exc:
             raise HttpError(502, f"Generation response was not valid JSON: {exc}", code="invalid_generation_json") from exc
+
+
+def _normalize_markdown_math(value: str) -> str:
+    if not value:
+        return value
+    segments = re.split(r"(```[\s\S]*?```)", value)
+    return "".join(segment if segment.startswith("```") else _normalize_markdown_math_segment(segment) for segment in segments)
+
+
+def _normalize_markdown_math_segment(value: str) -> str:
+    return re.sub(r"(\$\$[\s\S]*?\$\$|\$[^$\n]+\$)", _normalize_math_match, value)
+
+
+def _normalize_math_match(match: re.Match[str]) -> str:
+    segment = match.group(0)
+    delimiter = "$$" if segment.startswith("$$") else "$"
+    if not segment.endswith(delimiter):
+        return segment
+    body = segment[len(delimiter) : -len(delimiter)]
+    return f"{delimiter}{_normalize_katex_body(body)}{delimiter}"
+
+
+def _normalize_katex_body(value: str) -> str:
+    normalized = re.sub(r"\\(?=\d)", "", value)
+    if not re.search(r"\\(?:text|mathrm|operatorname)\s*\{", normalized):
+        normalized = re.sub(r"([\u3400-\u9fff]+)", r"\\text{\1}", normalized)
+    return normalized
 
 
 def _build_agent_prompt(body: Mapping[str, Any]) -> str:
