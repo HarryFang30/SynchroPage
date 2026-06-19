@@ -63,6 +63,7 @@ import {
   type ChangeEvent,
   createContext,
   forwardRef,
+  type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type RefObject,
@@ -2991,6 +2992,16 @@ function AgentPanel(props: {
     props.setAttachments((items) => [...items, ...images].slice(-8));
   };
 
+  const addClipboardImages = useCallback((event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
+    if (!files.length) return;
+    event.preventDefault();
+    void addImages(files);
+  }, [addImages]);
+
   return (
     <aside className="agent-panel">
       <div className="agent-toolbar">
@@ -3033,13 +3044,13 @@ function AgentPanel(props: {
           </span>
         ))}
         {props.attachments.map((attachment) => (
-          <span className="context-pill image-pill" key={attachment.id} title={attachment.name}>
-            <img src={attachment.data_url} alt="" />
-            <span>{copy.agent.imagePreview(compactText(attachment.name, 28))}</span>
+          <figure className="context-pill image-pill" key={attachment.id} title={attachment.name}>
+            <img src={attachment.data_url} alt={attachment.name} />
+            <figcaption>{compactText(attachment.name, 22)}</figcaption>
             <button type="button" onClick={() => props.setAttachments((items) => items.filter((item) => item.id !== attachment.id))} aria-label={copy.agent.removeImage}>
               <X />
             </button>
-          </span>
+          </figure>
         ))}
       </div>
       <AssistantRuntimeProvider runtime={runtime}>
@@ -3054,6 +3065,7 @@ function AgentPanel(props: {
           selectedContext={props.selectedContext}
           onRemoveSelectedContext={() => props.setSelectedContext(null)}
           composerInputRef={props.composerInputRef}
+          onPasteImages={addClipboardImages}
         />
       </AssistantRuntimeProvider>
     </aside>
@@ -3133,6 +3145,8 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [documentError, setDocumentError] = useState("");
   const [renderWindowCenter, setRenderWindowCenter] = useState(pageNumber);
+  const onDocumentReadyRef = useRef(onDocumentReady);
+  const onPdfContextReadyRef = useRef(onPdfContextReady);
   const pageCount = pdfDocument?.numPages || 0;
   const safePageNumber = Math.min(Math.max(pageNumber, 1), Math.max(pageCount, 1));
   const pageNumbers = viewMode === "single-page"
@@ -3189,6 +3203,11 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
   }, []);
 
   useEffect(() => {
+    onDocumentReadyRef.current = onDocumentReady;
+    onPdfContextReadyRef.current = onPdfContextReady;
+  }, [onDocumentReady, onPdfContextReady]);
+
+  useEffect(() => {
     let cancelled = false;
     setPdfDocument(null);
     setDocumentError("");
@@ -3204,13 +3223,13 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
           return;
         }
         setPdfDocument(document);
-        onDocumentReady(document.numPages);
+        onDocumentReadyRef.current(document.numPages);
         void extractPdfContextFromDocument(document, documentId, documentTitle, {
           pdfContextFullPageLimit,
           pdfContextEdgePageCount,
         })
           .then((context) => {
-            if (!cancelled) onPdfContextReady(context);
+            if (!cancelled) onPdfContextReadyRef.current(context);
           })
           .catch(() => undefined);
       })
@@ -3224,7 +3243,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
       if (activePageTimerRef.current) window.clearTimeout(activePageTimerRef.current);
       void loadingTask.destroy().catch(() => undefined);
     };
-  }, [documentId, documentTitle, onDocumentReady, onPdfContextReady, pdfContextEdgePageCount, pdfContextFullPageLimit, url]);
+  }, [documentId, documentTitle, pdfContextEdgePageCount, pdfContextFullPageLimit, url]);
 
   useEffect(() => {
     lastActivePageRef.current = pageNumber;
@@ -3607,6 +3626,7 @@ function AssistantThread({
   selectedContext,
   onRemoveSelectedContext,
   composerInputRef,
+  onPasteImages,
 }: {
   page: PageData;
   suggestions: string[];
@@ -3614,6 +3634,7 @@ function AssistantThread({
   selectedContext: SelectedContext | null;
   onRemoveSelectedContext: () => void;
   composerInputRef: RefObject<HTMLTextAreaElement | null>;
+  onPasteImages: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
 }) {
   const copy = useAppCopy();
   const thread = useThreadRuntime();
@@ -3653,6 +3674,7 @@ function AssistantThread({
               selectedContext={selectedContext}
               onRemoveSelectedContext={onRemoveSelectedContext}
               inputRef={composerInputRef}
+              onPasteImages={onPasteImages}
             />
           </ThreadPrimitive.ViewportFooter>
         </div>
@@ -3738,11 +3760,13 @@ function AssistantComposer({
   selectedContext,
   onRemoveSelectedContext,
   inputRef,
+  onPasteImages,
 }: {
   contextPreview: string;
   selectedContext: SelectedContext | null;
   onRemoveSelectedContext: () => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
+  onPasteImages: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
 }) {
   const copy = useAppCopy();
   const thread = useThreadRuntime();
@@ -3777,6 +3801,7 @@ function AssistantComposer({
           rows={2}
           submitMode="enter"
           aria-label={copy.agent.inputAria}
+          onPaste={onPasteImages}
         />
         <div className="aui-composer-actions">
           <ComposerPrimitive.Send asChild>

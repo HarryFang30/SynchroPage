@@ -1843,10 +1843,10 @@ output {
 }
 
 .agent-context-strip {
-  max-height: 78px;
+  max-height: 122px;
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  align-items: flex-start;
+  gap: 7px;
   overflow: auto;
   padding: 7px 12px;
   border-bottom: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
@@ -1914,11 +1914,46 @@ output {
   height: 14px;
 }
 
+.image-pill {
+  position: relative;
+  width: 112px;
+  flex: 0 0 112px;
+  display: grid;
+  gap: 5px;
+  align-items: start;
+  margin: 0;
+  padding: 5px;
+  border-radius: 9px;
+}
+
 .image-pill img {
-  width: 28px;
-  height: 22px;
+  width: 100%;
+  height: 66px;
   object-fit: cover;
-  border-radius: 5px;
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--secondary) 54%, transparent);
+}
+
+.image-pill figcaption {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: color-mix(in oklch, var(--text) 76%, var(--muted));
+  font-size: 10.5px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-pill button {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 22px;
+  height: 22px;
+  background: color-mix(in oklch, var(--background) 82%, transparent);
+  color: var(--text);
+  box-shadow: 0 4px 14px oklch(0.25 0.01 85 / 0.14);
 }
 
 .aui-thread-root {
