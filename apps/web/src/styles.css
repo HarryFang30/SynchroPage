@@ -48,6 +48,12 @@
   --gold: oklch(0.62 0.10 78);
   --gold-soft: oklch(0.93 0.04 82);
   --violet: oklch(0.52 0.07 330);
+  --destructive: oklch(0.53 0.16 28);
+  --destructive-foreground: oklch(0.99 0.006 86);
+  --destructive-muted: oklch(0.94 0.035 32);
+  --settings-row-border: color-mix(in oklch, var(--line) 62%, transparent);
+  --settings-nav-active: color-mix(in oklch, var(--secondary) 68%, transparent);
+  --settings-description: color-mix(in oklch, var(--muted) 88%, var(--text));
   --shadow: 0 1px 3px 0 oklch(0 0 0 / 0.07), 0 1px 2px -1px oklch(0 0 0 / 0.06);
   --shadow-soft: 0 1px 2px oklch(0 0 0 / 0.04);
   --shadow-pop: 0 10px 28px oklch(0.38 0.08 48 / 0.18);
@@ -94,6 +100,12 @@
   --gold: oklch(0.70 0.080 78);
   --gold-soft: oklch(0.31 0.045 78);
   --violet: oklch(0.72 0.070 330);
+  --destructive: oklch(0.68 0.135 28);
+  --destructive-foreground: oklch(0.14 0.006 86);
+  --destructive-muted: oklch(0.27 0.040 28);
+  --settings-row-border: color-mix(in oklch, var(--line) 64%, transparent);
+  --settings-nav-active: color-mix(in oklch, var(--secondary) 52%, transparent);
+  --settings-description: color-mix(in oklch, var(--muted) 90%, var(--text));
   --shadow: 0 1px 3px 0 oklch(0 0 0 / 0.34), 0 1px 2px -1px oklch(0 0 0 / 0.32);
   --shadow-soft: 0 1px 2px oklch(0 0 0 / 0.25);
   --shadow-pop: 0 18px 52px oklch(0 0 0 / 0.36);
@@ -2442,15 +2454,15 @@ output {
   z-index: 90;
   top: 50%;
   left: 50%;
-  width: min(980px, calc(100vw - 42px));
-  height: min(700px, 86vh);
+  width: min(1000px, calc(100vw - 44px));
+  height: min(720px, 86vh);
   display: grid;
-  grid-template-columns: 258px minmax(0, 1fr);
+  grid-template-columns: 252px minmax(0, 1fr);
   overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--line) 74%, transparent);
-  border-radius: 14px;
-  background: color-mix(in oklch, var(--background) 86%, white);
-  box-shadow: 0 28px 72px oklch(0.28 0.018 95 / 0.24);
+  border: 1px solid color-mix(in oklch, var(--line) 64%, transparent);
+  border-radius: 16px;
+  background: color-mix(in oklch, var(--background) 91%, white);
+  box-shadow: 0 30px 76px oklch(0.28 0.018 95 / 0.22);
   transform: translate(-50%, -50%);
 }
 
@@ -2458,25 +2470,25 @@ output {
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 14px;
-  padding: 15px 9px;
-  border-right: 1px solid color-mix(in oklch, var(--line) 70%, transparent);
-  background: color-mix(in oklch, var(--sidebar) 68%, var(--background));
+  gap: 12px;
+  padding: 14px 10px;
+  border-right: 1px solid color-mix(in oklch, var(--line) 58%, transparent);
+  background: color-mix(in oklch, var(--sidebar) 72%, var(--background));
 }
 
 .settings-close {
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 8px;
-  background: color-mix(in oklch, var(--secondary) 58%, transparent);
+  border-radius: 9px;
+  background: transparent;
   color: var(--muted);
 }
 
 .settings-close:hover {
-  background: color-mix(in oklch, var(--secondary) 88%, white);
+  background: color-mix(in oklch, var(--secondary) 68%, transparent);
   color: var(--text);
 }
 
@@ -2484,7 +2496,7 @@ output {
   min-height: 0;
   display: grid;
   align-content: start;
-  gap: 3px;
+  gap: 2px;
   overflow: auto;
 }
 
@@ -2493,23 +2505,25 @@ output {
   min-width: 0;
   height: 38px;
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
-  padding: 0 12px;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  gap: 10px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 9px;
   background: transparent;
   color: color-mix(in oklch, var(--text) 86%, var(--muted));
+  cursor: pointer;
   text-align: left;
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 520;
 }
 
 .settings-nav-item svg {
   width: 18px;
   height: 18px;
   color: var(--muted);
-  opacity: 0.78;
+  opacity: 0.76;
 }
 
 .settings-nav-item span {
@@ -2520,12 +2534,11 @@ output {
 }
 
 .settings-nav-item:hover {
-  background: color-mix(in oklch, var(--secondary) 54%, transparent);
+  background: color-mix(in oklch, var(--secondary) 50%, transparent);
 }
 
 .settings-nav-item.active {
-  border-color: color-mix(in oklch, var(--primary) 10%, var(--line));
-  background: color-mix(in oklch, var(--brand-soft) 32%, var(--background));
+  background: var(--settings-nav-active);
   color: var(--text-strong);
 }
 
@@ -2538,47 +2551,48 @@ output {
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  background: color-mix(in oklch, var(--background) 92%, white);
+  background: color-mix(in oklch, var(--background) 96%, white);
 }
 
 .settings-content-header {
-  padding: 21px 25px 15px;
-  border-bottom: 1px solid color-mix(in oklch, var(--line) 70%, transparent);
+  padding: 28px 32px 18px;
+  border-bottom: 1px solid var(--settings-row-border);
 }
 
 .settings-content-header h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 20px;
-  line-height: 1.25;
-  font-weight: 650;
+  font-size: 23px;
+  line-height: 1.2;
+  font-weight: 680;
 }
 
 .settings-content-header p {
   margin: 5px 0 0;
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--settings-description);
+  font-size: 13.5px;
+  line-height: 1.45;
 }
 
 .settings-panel {
   min-height: 0;
   overflow: auto;
-  padding: 12px 25px 24px;
+  padding: 6px 32px 26px;
 }
 
 .settings-group {
   display: grid;
-  border-top: 1px solid color-mix(in oklch, var(--line) 70%, transparent);
+  border-top: 1px solid var(--settings-row-border);
 }
 
 .settings-row {
-  min-height: 66px;
+  min-height: 68px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(132px, 170px);
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 238px);
   align-items: center;
-  gap: 22px;
-  padding: 12px 0;
-  border-bottom: 1px solid color-mix(in oklch, var(--line) 70%, transparent);
+  gap: 18px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--settings-row-border);
 }
 
 .settings-row-copy {
@@ -2587,40 +2601,45 @@ output {
 
 .settings-row-label {
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: 14.5px;
   line-height: 1.35;
-  font-weight: 540;
+  font-weight: 580;
 }
 
 .settings-row-copy p {
   max-width: 60ch;
   margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--settings-description);
+  font-size: 12.5px;
   line-height: 1.42;
 }
 
 .settings-row-control {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
 }
 
 .settings-inline-actions {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 10px;
+  max-width: 100%;
+  white-space: nowrap;
 }
 
 .settings-select,
 .settings-number-input {
-  width: 170px;
-  height: 32px;
-  border: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  width: 176px;
+  height: 34px;
+  border: 1px solid color-mix(in oklch, var(--line) 68%, transparent);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--background) 76%, white);
+  background: color-mix(in oklch, var(--background) 84%, white);
   color: var(--text);
   padding: 0 32px 0 10px;
+  font-size: 13px;
+  font-weight: 500;
   outline: 0;
 }
 
@@ -2644,6 +2663,7 @@ output {
   border: 1px solid color-mix(in oklch, var(--line) 74%, transparent);
   border-radius: 999px;
   background: color-mix(in oklch, var(--secondary) 62%, white);
+  cursor: pointer;
   transition: background 140ms ease, border-color 140ms ease;
 }
 
@@ -2667,16 +2687,20 @@ output {
 }
 
 .settings-button {
-  min-height: 32px;
+  min-height: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  border: 1px solid color-mix(in oklch, var(--line) 70%, transparent);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--background) 74%, white);
+  background: color-mix(in oklch, var(--background) 84%, white);
   color: var(--text);
-  padding: 0 12px;
-  font-weight: 540;
+  padding: 0 13px;
+  font-size: 13px;
+  font-weight: 580;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 #immersive-translate-popup,
@@ -2689,15 +2713,105 @@ output {
 }
 
 .settings-button:hover:not(:disabled) {
-  background: color-mix(in oklch, var(--secondary) 70%, white);
+  background: color-mix(in oklch, var(--secondary) 66%, white);
+}
+
+.settings-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.settings-button.primary {
+  border-color: color-mix(in oklch, var(--brand) 74%, var(--line));
+  background: color-mix(in oklch, var(--brand) 88%, white);
+  color: var(--primary-foreground);
+}
+
+.settings-button.destructive-outline {
+  border-color: color-mix(in oklch, var(--destructive) 44%, var(--line));
+  background: color-mix(in oklch, var(--destructive-muted) 48%, transparent);
+  color: var(--destructive);
+}
+
+.settings-button.destructive-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--destructive);
+}
+
+.settings-button.destructive-outline:hover:not(:disabled),
+.settings-button.destructive-ghost:hover:not(:disabled) {
+  border-color: color-mix(in oklch, var(--destructive) 62%, var(--line));
+  background: color-mix(in oklch, var(--destructive-muted) 82%, transparent);
+  color: color-mix(in oklch, var(--destructive) 86%, var(--text-strong));
 }
 
 .settings-status-value {
   min-width: 0;
   color: color-mix(in oklch, var(--text) 82%, var(--muted));
-  font-size: 13px;
+  font-size: 13.5px;
+  line-height: 1.35;
   text-align: right;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.settings-inline-actions .settings-status-value {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.settings-confirm-overlay {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  background: oklch(0.16 0.010 90 / 0.34);
+  backdrop-filter: blur(3px);
+}
+
+.settings-confirm-dialog {
+  position: fixed;
+  z-index: 110;
+  top: 50%;
+  left: 50%;
+  width: min(420px, calc(100vw - 40px));
+  padding: 22px;
+  border: 1px solid color-mix(in oklch, var(--line) 70%, transparent);
+  border-radius: 14px;
+  background: color-mix(in oklch, var(--popover) 94%, white);
+  box-shadow: 0 22px 58px oklch(0.22 0.018 95 / 0.25);
+  transform: translate(-50%, -50%);
+}
+
+:root[data-pagepair-resolved-theme="dark"] .settings-confirm-overlay {
+  background: oklch(0.04 0.004 86 / 0.68);
+}
+
+:root[data-pagepair-resolved-theme="dark"] .settings-confirm-dialog {
+  background: color-mix(in oklch, var(--popover) 92%, var(--background));
+  box-shadow: 0 24px 64px oklch(0 0 0 / 0.48);
+}
+
+.settings-confirm-dialog h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 680;
+}
+
+.settings-confirm-dialog p {
+  margin: 10px 0 0;
+  color: var(--settings-description);
+  font-size: 13.5px;
+  line-height: 1.48;
+}
+
+.settings-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 22px;
 }
 
 :root[data-pagepair-resolved-theme="dark"] .chip,
@@ -2753,7 +2867,7 @@ output {
 
 :root[data-pagepair-resolved-theme="dark"] .settings-select,
 :root[data-pagepair-resolved-theme="dark"] .settings-number-input,
-:root[data-pagepair-resolved-theme="dark"] .settings-button {
+:root[data-pagepair-resolved-theme="dark"] .settings-button:not(.primary):not(.destructive-outline):not(.destructive-ghost) {
   background: color-mix(in oklch, var(--secondary) 84%, var(--background));
   color: var(--text);
 }
@@ -2800,7 +2914,7 @@ output {
   background: color-mix(in oklch, var(--secondary) 56%, transparent);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .settings-button:hover:not(:disabled),
+:root[data-pagepair-resolved-theme="dark"] .settings-button:not(.primary):not(.destructive-outline):not(.destructive-ghost):hover:not(:disabled),
 :root[data-pagepair-resolved-theme="dark"] .message-actions button:hover,
 :root[data-pagepair-resolved-theme="dark"] .branch-picker button:hover,
 :root[data-pagepair-resolved-theme="dark"] .context-pill button:hover {

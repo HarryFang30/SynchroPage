@@ -9,7 +9,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { getAppCopy } from "./i18n";
 import type { UiPreferences } from "./settings";
 
@@ -26,6 +26,14 @@ export type SettingsSection =
 
 type SaveStatusKind = "draft" | "saving" | "saved" | "error" | "quota";
 type PersistentStorageState = "unknown" | "persisted" | "best-effort" | "unsupported";
+type SettingsButtonVariant = "secondary" | "primary" | "destructive-outline" | "destructive-ghost";
+
+type ConfirmAction = {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+};
 
 type SettingsModalProps = {
   open: boolean;
@@ -57,6 +65,7 @@ type SettingsModalProps = {
 export function SettingsModal(props: SettingsModalProps) {
   const section = props.activeSection;
   const copy = getAppCopy(props.preferences.language);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const sections: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
     { id: "general", label: copy.settings.sections.general, icon: <Settings2 /> },
     { id: "appearance", label: copy.settings.sections.appearance, icon: <Palette /> },
@@ -67,11 +76,19 @@ export function SettingsModal(props: SettingsModalProps) {
     { id: "advanced", label: copy.settings.sections.advanced, icon: <Wrench /> },
   ];
 
+  const requestConfirm = (action: ConfirmAction) => setConfirmAction(action);
+  const confirmAndClose = () => {
+    const action = confirmAction;
+    setConfirmAction(null);
+    action?.onConfirm();
+  };
+
   return (
-    <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="settings-overlay" />
-        <Dialog.Content className="settings-dialog" aria-describedby="settings-description">
+    <>
+      <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="settings-overlay" />
+          <Dialog.Content className="settings-dialog" aria-describedby="settings-description">
           <div className="settings-sidebar">
             <Dialog.Close className="settings-close" aria-label={copy.settings.close}>
               <X />
@@ -244,7 +261,21 @@ export function SettingsModal(props: SettingsModalProps) {
                     <StatusValue>{props.providerStatus}</StatusValue>
                   </SettingsRow>
                   <SettingsRow label={copy.settings.account.reconnectLabel} description={copy.settings.account.reconnectDescription}>
-                    <SettingsButton onClick={props.onConnectOAuth}>
+                    <SettingsButton
+                      variant={props.oauthMode === "connected" ? "destructive-outline" : "secondary"}
+                      onClick={() => {
+                        if (props.oauthMode !== "connected") {
+                          props.onConnectOAuth();
+                          return;
+                        }
+                        requestConfirm({
+                          title: copy.settings.confirm.disconnectTitle,
+                          description: copy.settings.confirm.disconnectDescription,
+                          confirmLabel: copy.settings.confirm.disconnectConfirm,
+                          onConfirm: props.onConnectOAuth,
+                        });
+                      }}
+                    >
                       {props.oauthMode === "connected" ? copy.settings.account.disconnectButton : copy.settings.account.connectButton}
                     </SettingsButton>
                   </SettingsRow>
@@ -288,7 +319,16 @@ export function SettingsModal(props: SettingsModalProps) {
                     <SettingsButton onClick={props.onImportWorkspace}>{copy.settings.storage.importButton}</SettingsButton>
                   </SettingsRow>
                   <SettingsRow label={copy.settings.storage.clearLabel} description={copy.settings.storage.clearDescription}>
-                    <SettingsButton disabled={!props.hasWorkspace} onClick={props.onClearWorkspace}>
+                    <SettingsButton
+                      disabled={!props.hasWorkspace}
+                      variant="destructive-outline"
+                      onClick={() => requestConfirm({
+                        title: copy.settings.confirm.clearWorkspaceTitle,
+                        description: copy.settings.confirm.clearWorkspaceDescription,
+                        confirmLabel: copy.settings.confirm.clearWorkspaceConfirm,
+                        onConfirm: props.onClearWorkspace,
+                      })}
+                    >
                       {copy.settings.storage.clearButton}
                     </SettingsButton>
                   </SettingsRow>
@@ -296,7 +336,18 @@ export function SettingsModal(props: SettingsModalProps) {
                     <SettingsButton onClick={props.onRepairStorage}>{copy.settings.storage.repairButton}</SettingsButton>
                   </SettingsRow>
                   <SettingsRow label={copy.settings.storage.resetLabel} description={copy.settings.storage.resetDescription}>
-                    <SettingsButton onClick={props.onResetWorkspace}>{copy.settings.storage.resetButton}</SettingsButton>
+                    <SettingsButton
+                      disabled={!props.hasWorkspace}
+                      variant="destructive-outline"
+                      onClick={() => requestConfirm({
+                        title: copy.settings.confirm.resetWorkspaceTitle,
+                        description: copy.settings.confirm.resetWorkspaceDescription,
+                        confirmLabel: copy.settings.confirm.resetWorkspaceConfirm,
+                        onConfirm: props.onResetWorkspace,
+                      })}
+                    >
+                      {copy.settings.storage.resetButton}
+                    </SettingsButton>
                   </SettingsRow>
                 </SettingsGroup>
               )}
@@ -310,7 +361,17 @@ export function SettingsModal(props: SettingsModalProps) {
                     />
                   </SettingsRow>
                   <SettingsRow label={copy.settings.advanced.clearPreferencesLabel} description={copy.settings.advanced.clearPreferencesDescription}>
-                    <SettingsButton onClick={props.onResetPreferences}>{copy.settings.advanced.clearPreferencesButton}</SettingsButton>
+                    <SettingsButton
+                      variant="destructive-ghost"
+                      onClick={() => requestConfirm({
+                        title: copy.settings.confirm.resetPreferencesTitle,
+                        description: copy.settings.confirm.resetPreferencesDescription,
+                        confirmLabel: copy.settings.confirm.resetPreferencesConfirm,
+                        onConfirm: props.onResetPreferences,
+                      })}
+                    >
+                      {copy.settings.advanced.clearPreferencesButton}
+                    </SettingsButton>
                   </SettingsRow>
                   <SettingsRow label={copy.settings.advanced.diagnosticsLabel} description={props.preferences.debugMode ? props.jobStatus : copy.settings.advanced.diagnosticsHiddenDescription}>
                     <StatusValue>{props.preferences.debugMode ? copy.settings.advanced.visible : copy.settings.advanced.hidden}</StatusValue>
@@ -319,9 +380,30 @@ export function SettingsModal(props: SettingsModalProps) {
               )}
             </div>
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={Boolean(confirmAction)} onOpenChange={(open) => {
+        if (!open) setConfirmAction(null);
+      }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="settings-confirm-overlay" />
+          <Dialog.Content className="settings-confirm-dialog" aria-describedby="settings-confirm-description">
+            <Dialog.Title>{confirmAction?.title}</Dialog.Title>
+            <Dialog.Description id="settings-confirm-description">
+              {confirmAction?.description}
+            </Dialog.Description>
+            <div className="settings-confirm-actions">
+              <SettingsButton onClick={() => setConfirmAction(null)}>{copy.settings.confirm.cancel}</SettingsButton>
+              <SettingsButton variant="destructive-outline" onClick={confirmAndClose}>
+                {confirmAction?.confirmLabel}
+              </SettingsButton>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
   );
 }
 
@@ -382,9 +464,19 @@ function SettingsSwitch({ checked, onCheckedChange }: { checked: boolean; onChec
   );
 }
 
-function SettingsButton({ children, disabled, onClick }: { children: ReactNode; disabled?: boolean; onClick?: () => void }) {
+function SettingsButton({
+  children,
+  disabled,
+  onClick,
+  variant = "secondary",
+}: {
+  children: ReactNode;
+  disabled?: boolean;
+  onClick?: () => void;
+  variant?: SettingsButtonVariant;
+}) {
   return (
-    <button className="settings-button" type="button" disabled={disabled} onClick={onClick}>
+    <button className={`settings-button ${variant}`} type="button" disabled={disabled} onClick={onClick}>
       {children}
     </button>
   );

@@ -136,6 +136,21 @@ export type AppCopy = {
       unknown: string;
       noWorkspace: string;
     };
+    confirm: {
+      cancel: string;
+      clearWorkspaceTitle: string;
+      clearWorkspaceDescription: string;
+      clearWorkspaceConfirm: string;
+      resetWorkspaceTitle: string;
+      resetWorkspaceDescription: string;
+      resetWorkspaceConfirm: string;
+      disconnectTitle: string;
+      disconnectDescription: string;
+      disconnectConfirm: string;
+      resetPreferencesTitle: string;
+      resetPreferencesDescription: string;
+      resetPreferencesConfirm: string;
+    };
     advanced: {
       debugLabel: string;
       debugDescription: string;
@@ -435,36 +450,51 @@ const zhCN: AppCopy = {
     },
     storage: {
       saveStateLabel: "保存状态",
-      saveStateDescription: "当前 workspace 的本地自动保存状态。",
-      workspaceCountLabel: "Workspace 数量",
-      workspaceCountDescription: "本机 IndexedDB 中保存的工作区。",
+      saveStateDescription: "当前工作区的本地自动保存状态。",
+      workspaceCountLabel: "工作区数量",
+      workspaceCountDescription: "本机保存的阅读工作区。",
       documentCountLabel: "文档数量",
-      documentCountDescription: "本机保存的 PDF / PagePair 文档。",
-      usageLabel: "本地占用",
-      usageDescription: "浏览器报告的 IndexedDB / Cache 等站点存储估算值。",
-      persistentLabel: "Persistent storage",
+      documentCountDescription: "本机保存的 PDF 与讲解文档。",
+      usageLabel: "本地存储占用",
+      usageDescription: "浏览器报告的站点存储估算值。",
+      persistentLabel: "持久存储",
       persistentDescription: "请求浏览器尽量不要在存储压力下清理本地草稿。",
       persistentRequestButton: "启用持久存储",
-      exportLabel: "导出当前 workspace",
-      exportDescription: "导出 metadata、对话、讲解和 PDF Blob，便于备份。",
+      exportLabel: "导出当前工作区",
+      exportDescription: "导出 PDF、讲解、对话和本地元数据，便于备份。",
       exportButton: "导出",
-      importLabel: "导入 workspace",
-      importDescription: "导入 PagePair workspace 备份并设为当前工作区。",
+      importLabel: "导入工作区",
+      importDescription: "导入 PagePair 工作区备份并打开。",
       importButton: "导入",
-      clearLabel: "清空当前 workspace",
-      clearDescription: "删除当前 workspace 的 PDF、讲解、对话和选区。不可撤销。",
+      clearLabel: "清空当前工作区",
+      clearDescription: "删除当前 PDF、讲解、对话和选区上下文。",
       clearButton: "清空",
       repairLabel: "检查并清理存储",
-      repairDescription: "删除孤儿 blob、无引用消息和损坏引用；PDF Blob 缺失的文档会标记为缺失。",
+      repairDescription: "检查无引用数据并修复损坏引用。",
       repairButton: "检查清理",
-      resetLabel: "重置当前 workspace",
-      resetDescription: "回到初始示例状态，但保留全局 UI 偏好。",
+      resetLabel: "重置当前工作区",
+      resetDescription: "回到初始示例状态，并保留全局 UI 偏好。",
       resetButton: "重置",
       persisted: "已启用",
-      bestEffort: "普通本地存储",
+      bestEffort: "标准存储",
       unsupported: "浏览器不支持",
       unknown: "未知",
-      noWorkspace: "暂无 workspace",
+      noWorkspace: "暂无工作区",
+    },
+    confirm: {
+      cancel: "取消",
+      clearWorkspaceTitle: "清空当前工作区？",
+      clearWorkspaceDescription: "这会删除当前 PDF、生成讲解、对话和选区上下文。此操作无法撤销。",
+      clearWorkspaceConfirm: "清空",
+      resetWorkspaceTitle: "重置当前工作区？",
+      resetWorkspaceDescription: "这会移除当前工作区并回到初始示例状态。已保存的 PDF、讲解和对话将被删除。",
+      resetWorkspaceConfirm: "重置",
+      disconnectTitle: "断开 OpenAI OAuth？",
+      disconnectDescription: "断开后，新的 AI 请求将无法继续使用当前 OAuth 会话，直到你重新连接。",
+      disconnectConfirm: "断开连接",
+      resetPreferencesTitle: "重置本地 UI 偏好？",
+      resetPreferencesDescription: "这只会恢复主题、布局和界面偏好，不会删除 PDF、讲解或对话。",
+      resetPreferencesConfirm: "重置偏好",
     },
     advanced: {
       debugLabel: "Debug 模式",
@@ -791,10 +821,25 @@ const enUS: AppCopy = {
       resetDescription: "Return to the initial sample state while keeping global UI preferences.",
       resetButton: "Reset",
       persisted: "Enabled",
-      bestEffort: "Best-effort local",
+      bestEffort: "Standard storage",
       unsupported: "Unsupported",
       unknown: "Unknown",
       noWorkspace: "No workspace yet",
+    },
+    confirm: {
+      cancel: "Cancel",
+      clearWorkspaceTitle: "Clear current workspace?",
+      clearWorkspaceDescription: "This deletes the current PDF, generated notes, chat, and selected context. This action cannot be undone.",
+      clearWorkspaceConfirm: "Clear",
+      resetWorkspaceTitle: "Reset current workspace?",
+      resetWorkspaceDescription: "This removes the current workspace and returns to the initial sample state. Saved PDFs, notes, and chat will be deleted.",
+      resetWorkspaceConfirm: "Reset",
+      disconnectTitle: "Disconnect OpenAI OAuth?",
+      disconnectDescription: "New AI requests cannot use this OAuth session until you connect again.",
+      disconnectConfirm: "Disconnect",
+      resetPreferencesTitle: "Reset local UI preferences?",
+      resetPreferencesDescription: "This only restores theme, layout, and interface preferences. It does not delete PDFs, notes, or chat.",
+      resetPreferencesConfirm: "Reset preferences",
     },
     advanced: {
       debugLabel: "Debug mode",
