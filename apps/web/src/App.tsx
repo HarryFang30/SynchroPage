@@ -37,6 +37,7 @@ import {
   ExternalLink,
   FileInput,
   FileJson,
+  FileText,
   Image,
   Lock,
   Maximize2,
@@ -47,6 +48,7 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Plus,
   RefreshCw,
   Send,
   Settings2,
@@ -91,6 +93,8 @@ import {
   exportWorkspace,
   importWorkspace,
   loadLastWorkspace,
+  loadWorkspaceDocument,
+  loadWorkspaceDocuments,
   requestPersistentStorage,
   repairWorkspaceStorage,
   saveChatMessage,
@@ -104,9 +108,11 @@ import {
   updateStreamingMessage,
   type ChatMessageRecord,
   type ChatMessageStatus,
+  type DocumentSidebarItem,
   type DocumentRecord,
   type ExportedWorkspace,
   type GeneratedPageRecord,
+  type LoadedWorkspace,
   type SaveStatusKind,
   type StorageEstimate,
   type StorageRepairResult,
@@ -1289,6 +1295,7 @@ export default function App() {
   const [pendingSelectionPrompt, setPendingSelectionPrompt] = useState<QuickSelectionPrompt | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [documentId, setDocumentId] = useState<string | null>(null);
+  const [documentItems, setDocumentItems] = useState<DocumentSidebarItem[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [isRestoringWorkspace, setIsRestoringWorkspace] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "draft", message: copy.persistence.localDraft });
@@ -1316,10 +1323,33 @@ export default function App() {
     pack.pages[Math.min(Math.max(currentPageNo - 1, 0), Math.max(pack.pages.length - 1, 0))] ||
     samplePacks[uiPreferences.language].pages[0];
   const currentIndex = Math.max(0, pack.pages.findIndex((item) => item.page_no === page.page_no));
+  const generatedPageCount = pack.pages.filter((item) => item.teaching.speaker_notes_md.trim()).length;
   const pdfOnly = !panels.rail && !panels.notes && !panels.agent;
   const fullWorkbench = panels.rail && panels.notes && panels.agent;
-  const filteredPages = pack.pages.filter((item) =>
-    query ? item.teaching.slide_title.toLowerCase().includes(query.toLowerCase()) : true,
+  const sidebarDocuments: DocumentSidebarItem[] = documentItems.length
+    ? documentItems
+    : [
+        {
+          id: pack.document.id,
+          workspaceId: workspaceId || "sample",
+          documentId: documentId || pack.document.id,
+          title: pack.document.title,
+          fileName: pack.document.source_pdf_url,
+          mimeType: pdfUrl ? "application/pdf" : "application/json",
+          pageCount: pdfPageCount || pack.document.page_count || pack.pages.length,
+          currentPdfPageNumber: currentPdfPageNo,
+          generatedPageCount,
+          status: "ready",
+          updatedAt: 0,
+          uploadedAt: 0,
+          isActive: true,
+        },
+      ];
+  const normalizedDocumentQuery = query.trim().toLowerCase();
+  const filteredDocuments = sidebarDocuments.filter((item) =>
+    normalizedDocumentQuery
+      ? `${item.title} ${item.fileName}`.toLowerCase().includes(normalizedDocumentQuery)
+      : true,
   );
   const visiblePaneCount = 1 + Number(panels.rail) + Number(panels.notes) + Number(panels.agent);
   const pdfViewerSrc = pdfUrl
@@ -1579,6 +1609,7 @@ export default function App() {
     replacePdfObjectUrl("");
     setWorkspaceId(null);
     setDocumentId(null);
+    setDocumentItems([]);
     setThreadId(null);
     setPdfPageCount(null);
     setCurrentPageNo(1);
@@ -1590,6 +1621,83 @@ export default function App() {
     setAgentRuntimeKey(`thread:initial:${Date.now()}`);
     setPack(samplePacks[uiPreferences.language]);
   }, [replacePdfObjectUrl, uiPreferences.language]);
+
+  const refreshDocumentItems = useCallback(async (
+    nextWorkspaceId = workspaceId,
+    activeDocumentId = documentId,
+  ) => {
+    if (!nextWorkspaceId) {
+      setDocumentItems([]);
+      return [];
+    }
+    const items = await loadWorkspaceDocuments(nextWorkspaceId, activeDocumentId);
+    setDocumentItems(items);
+    return items;
+  }, [documentId, workspaceId]);
+
+  const applyLoadedWorkspace = useCallback((
+    loaded: LoadedWorkspace,
+    options: { restoreLayout?: boolean } = {},
+  ) => {
+    const restoredPreferences = settingsRecordToPreferences(loaded.settings || loaded.workspace.settingsSnapshot);
+    const restoredCopy = getAppCopy(restoredPreferences.language);
+    setUiPreferences(restoredPreferences);
+    setWorkspaceId(loaded.workspace.id);
+    setDocumentId(loaded.document?.id || null);
+    setDocumentItems(loaded.documentItems);
+    setThreadId(loaded.thread?.id || null);
+    setPdfTextContext(null);
+
+    if (options.restoreLayout) {
+      const layout = (loaded.workspace.layoutState || {}) as {
+        panels?: unknown;
+        activeTab?: unknown;
+        query?: unknown;
+        contexts?: unknown;
+        attachments?: unknown;
+      };
+      if (isPanelVisibility(layout.panels)) setPanels(layout.panels);
+      if (isActiveTab(layout.activeTab)) setActiveTab(layout.activeTab);
+      if (typeof layout.query === "string") setQuery(layout.query);
+      if (Array.isArray(layout.contexts)) setContexts(layout.contexts as AgentContextItem[]);
+      if (Array.isArray(layout.attachments)) setAttachments(layout.attachments as AgentAttachment[]);
+    } else {
+      setContexts([]);
+      setAttachments([]);
+    }
+
+    if (loaded.document) {
+      const restoredPack = pagePackFromPersistence(loaded.document, loaded.generatedPages, restoredCopy);
+      const pageCount = loaded.document.pageCount || restoredPack.pages.length || 1;
+      setPack(restoredPack);
+      setPdfPageCount(loaded.document.pageCount || null);
+      setCurrentPageNo(
+        Math.min(
+          Math.max(loaded.workspace.currentPdfPageNumber || loaded.document.currentPdfPageNumber || 1, 1),
+          Math.max(pageCount, 1),
+        ),
+      );
+      if (loaded.pdfBlob?.blob) {
+        replacePdfObjectUrl(URL.createObjectURL(loaded.pdfBlob.blob));
+      } else {
+        replacePdfObjectUrl("");
+        if (loaded.document.pdfBlobId) {
+          setJobStatus(restoredCopy.persistence.pdfMissing);
+          setSaveState({ kind: "error", message: restoredCopy.persistence.pdfMissing, updatedAt: Date.now() });
+        }
+      }
+    } else {
+      replacePdfObjectUrl("");
+      setPack(samplePacks[restoredPreferences.language]);
+      setPdfPageCount(null);
+      setCurrentPageNo(1);
+    }
+
+    setSelectedContext((loaded.selectedContext?.payload as unknown as SelectedContext) || null);
+    const restoredMessages = loaded.messages.map(chatMessageToThreadMessageLike);
+    setPersistedMessages(restoredMessages);
+    setAgentRuntimeKey(`${loaded.thread?.id || "thread"}:${restoredMessages.length}:${loaded.workspace.updatedAt}`);
+  }, [replacePdfObjectUrl]);
 
   const handleSaveStatusClick = useCallback(() => {
     if (saveState.kind === "error" || saveState.kind === "quota") {
@@ -1625,51 +1733,8 @@ export default function App() {
         }
 
         const restoredPreferences = settingsRecordToPreferences(loaded.settings || loaded.workspace.settingsSnapshot);
-        const restoredCopy = getAppCopy(restoredPreferences.language);
-        setUiPreferences(restoredPreferences);
-        setWorkspaceId(loaded.workspace.id);
-        setDocumentId(loaded.document?.id || null);
-        setThreadId(loaded.thread?.id || null);
-
-        const layout = (loaded.workspace.layoutState || {}) as {
-          panels?: unknown;
-          activeTab?: unknown;
-          query?: unknown;
-          contexts?: unknown;
-          attachments?: unknown;
-        };
-        if (isPanelVisibility(layout.panels)) setPanels(layout.panels);
-        if (isActiveTab(layout.activeTab)) setActiveTab(layout.activeTab);
-        if (typeof layout.query === "string") setQuery(layout.query);
-        if (Array.isArray(layout.contexts)) setContexts(layout.contexts as AgentContextItem[]);
-        if (Array.isArray(layout.attachments)) setAttachments(layout.attachments as AgentAttachment[]);
-
-        if (loaded.document) {
-          const restoredPack = pagePackFromPersistence(loaded.document, loaded.generatedPages, restoredCopy);
-          setPack(restoredPack);
-          setPdfPageCount(loaded.document.pageCount || null);
-          setCurrentPageNo(
-            Math.min(
-              Math.max(loaded.workspace.currentPdfPageNumber || loaded.document.currentPdfPageNumber || 1, 1),
-              Math.max(loaded.document.pageCount || restoredPack.pages.length || 1, 1),
-            ),
-          );
-          if (loaded.pdfBlob?.blob) {
-            replacePdfObjectUrl(URL.createObjectURL(loaded.pdfBlob.blob));
-          } else if (loaded.document.pdfBlobId) {
-            setJobStatus(restoredCopy.persistence.pdfMissing);
-            setSaveState({ kind: "error", message: restoredCopy.persistence.pdfMissing, updatedAt: Date.now() });
-          }
-        }
-
-        if (loaded.selectedContext?.payload) {
-          setSelectedContext(loaded.selectedContext.payload as unknown as SelectedContext);
-        }
-
-        const restoredMessages = loaded.messages.map(chatMessageToThreadMessageLike);
-        setPersistedMessages(restoredMessages);
-        setAgentRuntimeKey(`${loaded.thread?.id || "thread"}:${restoredMessages.length}:${loaded.workspace.updatedAt}`);
-        setSaveState({ kind: "saved", message: restoredCopy.persistence.restored, updatedAt: Date.now() });
+        applyLoadedWorkspace(loaded, { restoreLayout: true });
+        setSaveState({ kind: "saved", message: getAppCopy(restoredPreferences.language).persistence.restored, updatedAt: Date.now() });
         void refreshStorageEstimate().catch(() => undefined);
       } catch (error) {
         if (!cancelled) {
@@ -1771,6 +1836,32 @@ export default function App() {
     }, 900);
     return () => window.clearTimeout(timer);
   }, [documentId, isRestoringWorkspace, pack, persistOperation, workspaceId]);
+
+  useEffect(() => {
+    if (!documentId) return;
+    setDocumentItems((items) => items.map((item) =>
+      item.documentId === documentId
+        ? {
+            ...item,
+            title: pack.document.title,
+            fileName: pack.document.source_pdf_url,
+            pageCount: pdfPageCount || pack.document.page_count || pack.pages.length,
+            currentPdfPageNumber: currentPdfPageNo,
+            generatedPageCount,
+            isActive: true,
+          }
+        : { ...item, isActive: false },
+    ));
+  }, [
+    currentPdfPageNo,
+    documentId,
+    generatedPageCount,
+    pack.document.source_pdf_url,
+    pack.document.title,
+    pack.document.page_count,
+    pack.pages.length,
+    pdfPageCount,
+  ]);
 
   useEffect(() => {
     if (isRestoringWorkspace || !restoredOnceRef.current) return undefined;
@@ -2015,6 +2106,7 @@ export default function App() {
       });
       setWorkspaceId(saved.workspace.id);
       setDocumentId(saved.document.id);
+      await refreshDocumentItems(saved.workspace.id, saved.document.id);
       setThreadId(saved.thread.id);
       setPersistedMessages([]);
       setAgentRuntimeKey(`${saved.thread.id}:0:${Date.now()}`);
@@ -2040,6 +2132,13 @@ export default function App() {
         },
       };
     });
+    if (documentId) {
+      setDocumentItems((items) => items.map((item) =>
+        item.documentId === documentId
+          ? { ...item, pageCount, currentPdfPageNumber: currentPdfPageNo, generatedPageCount, status: "ready" }
+          : item,
+      ));
+    }
     if (workspaceId) {
       void persistOperation(async () => {
         await saveWorkspacePatch(workspaceId, { currentPdfPageNumber: currentPdfPageNo });
@@ -2052,7 +2151,7 @@ export default function App() {
         }
       }).catch(() => undefined);
     }
-  }, [currentPdfPageNo, documentId, persistOperation, workspaceId]);
+  }, [currentPdfPageNo, documentId, generatedPageCount, persistOperation, workspaceId]);
 
   const handlePdfContextReady = useCallback((context: PdfContextPayload) => {
     setPdfTextContext(context);
@@ -2082,6 +2181,7 @@ export default function App() {
           });
           setWorkspaceId(saved.workspace.id);
           setDocumentId(saved.document.id);
+          await refreshDocumentItems(saved.workspace.id, saved.document.id);
           setThreadId(saved.thread.id);
           setAgentRuntimeKey(`${saved.thread.id}:0:${Date.now()}`);
           return saved;
@@ -2205,6 +2305,24 @@ export default function App() {
       if (documentId) await clearPersistedSelectedContext(workspaceId, documentId);
     }).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
   }, [copy.persistence.failed, documentId, persistOperation, workspaceId]);
+
+  const switchDocument = useCallback((nextDocumentId: string) => {
+    if (!workspaceId || nextDocumentId === documentId) return;
+    void persistOperation(async () => {
+      await forceSaveSnapshot();
+      const loaded = await loadWorkspaceDocument(workspaceId, nextDocumentId);
+      applyLoadedWorkspace(loaded);
+      return loaded;
+    }, copy.persistence.restored).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+  }, [
+    applyLoadedWorkspace,
+    copy.persistence.failed,
+    copy.persistence.restored,
+    documentId,
+    forceSaveSnapshot,
+    persistOperation,
+    workspaceId,
+  ]);
 
   const movePage = (delta: number) => {
     setCurrentPageNo((current) => Math.min(Math.max(current + delta, 1), pdfNavigationPageCount));
@@ -2407,34 +2525,49 @@ export default function App() {
       <main className="workspace" data-pane-count={visiblePaneCount}>
         <PanelGroup orientation="horizontal" className="workspace-panels">
           <Panel className="workspace-panel" hidden={!panels.rail} defaultSize={18} minSize={12}>
-            <aside className="page-rail">
+            <aside className="page-rail document-rail">
               <div className="rail-tools">
+                <div className="rail-heading">
+                  <div>
+                    <span className="rail-kicker">{copy.rail.currentWorkspace}</span>
+                    <strong>{copy.rail.documents}</strong>
+                  </div>
+                  <FileButton label={copy.rail.uploadDocument} accept="application/pdf" onFile={loadPdf}>
+                    <Plus />
+                  </FileButton>
+                </div>
                 <div className="search-box">
                   <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.rail.searchPlaceholder} />
                 </div>
                 <div className="rail-meta">
-                  <span>{copy.common.pageCount(pack.pages.length)}</span>
-                  <span>{copy.common.readyCount(pack.pages.filter((item) => item.status === "ready").length)}</span>
+                  <span>{copy.rail.documentCount(sidebarDocuments.length)}</span>
+                  <span>{copy.rail.currentPage(currentPdfPageNo)}</span>
                 </div>
               </div>
-              <div className="page-list">
-                {filteredPages.map((item) => (
+              <div className="document-list">
+                {filteredDocuments.map((item) => (
                   <button
-                    className={`page-item ${item.page_no === page.page_no ? "active" : ""}`}
-                    key={item.page_no}
+                    className={`document-item ${item.isActive ? "active" : ""}`}
+                    key={item.documentId}
                     type="button"
-                    onClick={() => setCurrentPageNo(item.page_no)}
+                    onClick={() => switchDocument(item.documentId)}
                   >
-                    <span className="page-number">{item.page_no}</span>
-                    <span className="page-copy">
-                      <strong>{item.teaching.slide_title}</strong>
+                    <span className="document-icon"><FileText /></span>
+                    <span className="document-copy">
+                      <strong>{item.title}</strong>
                       <span>
-                        {item.status === "ready" ? copy.common.ready : item.status} · {item.source.parser}
+                        {copy.rail.documentMeta(Math.max(item.pageCount || 1, 1), item.generatedPageCount)}
                       </span>
+                      <small>{item.fileName}</small>
                     </span>
-                    <span className="page-score">{copy.common.aligned}</span>
+                    <span className={`document-state ${item.status === "missing-file" ? "missing" : ""}`}>
+                      {item.status === "missing-file" ? copy.rail.missingFile : item.isActive ? copy.rail.activeDocument : ""}
+                    </span>
                   </button>
                 ))}
+                {!filteredDocuments.length && (
+                  <div className="rail-empty">{copy.rail.emptyDocuments}</div>
+                )}
               </div>
             </aside>
           </Panel>

@@ -7,6 +7,7 @@ import {
   type ChatMessageRecord,
   type ChatMessageStatus,
   type ChatThreadRecord,
+  type DocumentSidebarItem,
   type DocumentRecord,
   type ExportedWorkspace,
   type FileBlobRecord,
@@ -96,6 +97,41 @@ export async function loadLastWorkspace() {
   return loadWorkspace(workspaceId);
 }
 
+export async function loadWorkspaceDocuments(
+  workspaceId: string,
+  activeDocumentId?: string | null,
+): Promise<DocumentSidebarItem[]> {
+  const [documents, generatedPages] = await Promise.all([
+    pagePairDb.documents.where("workspaceId").equals(workspaceId).toArray(),
+    pagePairDb.generatedPages.where("workspaceId").equals(workspaceId).toArray(),
+  ]);
+  const generatedCounts = generatedPages.reduce((counts, page) => {
+    if (page.status === "completed" && page.markdown.trim()) {
+      counts.set(page.documentId, (counts.get(page.documentId) || 0) + 1);
+    }
+    return counts;
+  }, new Map<string, number>());
+
+  return documents
+    .slice()
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .map((document) => ({
+      id: document.id,
+      workspaceId: document.workspaceId,
+      documentId: document.id,
+      title: document.title,
+      fileName: document.fileName,
+      mimeType: document.mimeType,
+      pageCount: document.pageCount,
+      currentPdfPageNumber: document.currentPdfPageNumber,
+      generatedPageCount: generatedCounts.get(document.id) || 0,
+      status: document.status,
+      updatedAt: document.updatedAt,
+      uploadedAt: document.uploadedAt,
+      isActive: document.id === activeDocumentId,
+    }));
+}
+
 export async function loadWorkspace(workspaceId: string): Promise<LoadedWorkspace | null> {
   const workspace = await pagePairDb.workspaces.get(workspaceId);
   if (!workspace) {
@@ -103,9 +139,13 @@ export async function loadWorkspace(workspaceId: string): Promise<LoadedWorkspac
     return null;
   }
 
-  const document = workspace.activeDocumentId
+  let document = workspace.activeDocumentId
     ? (await pagePairDb.documents.get(workspace.activeDocumentId)) || null
     : null;
+  if (!document) {
+    const documents = await pagePairDb.documents.where("workspaceId").equals(workspace.id).sortBy("updatedAt");
+    document = documents.at(-1) || null;
+  }
   const pdfBlob = document?.pdfBlobId
     ? (await pagePairDb.fileBlobs.get(document.pdfBlobId)) || null
     : null;
@@ -115,11 +155,15 @@ export async function loadWorkspace(workspaceId: string): Promise<LoadedWorkspac
         .equals(document.id)
         .sortBy("generatedPageIndex")
     : [];
-  const thread = workspace.activeThreadId
+  let thread = workspace.activeThreadId
     ? (await pagePairDb.chatThreads.get(workspace.activeThreadId)) || null
     : document
       ? (await pagePairDb.chatThreads.where("documentId").equals(document.id).last()) || null
       : null;
+  if (document && thread?.documentId !== document.id) {
+    const threads = await pagePairDb.chatThreads.where("documentId").equals(document.id).sortBy("updatedAt");
+    thread = threads.at(-1) || null;
+  }
   const messages = thread
     ? await pagePairDb.chatMessages.where("threadId").equals(thread.id).sortBy("createdAt")
     : [];
@@ -127,13 +171,92 @@ export async function loadWorkspace(workspaceId: string): Promise<LoadedWorkspac
     ? (await pagePairDb.selectedContexts.where("documentId").equals(document.id).last()) || null
     : null;
   const settings = (await loadSettings(workspaceId)) || null;
+  const documentItems = await loadWorkspaceDocuments(workspace.id, document?.id || workspace.activeDocumentId);
 
-  await pagePairDb.workspaces.update(workspace.id, { lastOpenedAt: Date.now() });
+  await pagePairDb.workspaces.update(workspace.id, {
+    activeDocumentId: document?.id || workspace.activeDocumentId,
+    activeThreadId: thread?.id || workspace.activeThreadId,
+    lastOpenedAt: Date.now(),
+  });
   setLastWorkspaceId(workspace.id);
 
   return {
-    workspace,
+    workspace: {
+      ...workspace,
+      activeDocumentId: document?.id || workspace.activeDocumentId,
+      activeThreadId: thread?.id || workspace.activeThreadId,
+    },
     document,
+    documentItems,
+    pdfBlob,
+    generatedPages,
+    thread,
+    messages: messages.sort((left, right) => left.createdAt - right.createdAt),
+    selectedContext,
+    settings,
+  };
+}
+
+export async function loadWorkspaceDocument(
+  workspaceId: string,
+  documentId: string,
+): Promise<LoadedWorkspace> {
+  const [workspace, document] = await Promise.all([
+    pagePairDb.workspaces.get(workspaceId),
+    pagePairDb.documents.get(documentId),
+  ]);
+  if (!workspace) throw new PersistenceError("not_found", "Workspace not found");
+  if (!document || document.workspaceId !== workspaceId) {
+    throw new PersistenceError("not_found", "Document not found");
+  }
+
+  const pdfBlob = document.pdfBlobId
+    ? (await pagePairDb.fileBlobs.get(document.pdfBlobId)) || null
+    : null;
+  const generatedPages = await pagePairDb.generatedPages
+    .where("documentId")
+    .equals(document.id)
+    .sortBy("generatedPageIndex");
+  let thread = workspace.activeThreadId
+    ? (await pagePairDb.chatThreads.get(workspace.activeThreadId)) || null
+    : null;
+  if (thread?.documentId !== document.id) thread = null;
+  if (!thread) {
+    const threads = await pagePairDb.chatThreads.where("documentId").equals(document.id).sortBy("updatedAt");
+    thread = threads.at(-1) || null;
+  }
+  if (!thread) {
+    thread = await createChatThread({
+      workspaceId,
+      documentId: document.id,
+      title: "Main chat",
+    });
+  }
+  const messages = await pagePairDb.chatMessages.where("threadId").equals(thread.id).sortBy("createdAt");
+  const selectedContext = (await pagePairDb.selectedContexts.where("documentId").equals(document.id).last()) || null;
+  const settings = (await loadSettings(workspaceId)) || null;
+  const now = Date.now();
+  const nextWorkspace: WorkspaceRecord = {
+    ...workspace,
+    activeDocumentId: document.id,
+    activeThreadId: thread.id,
+    currentPdfPageNumber: document.currentPdfPageNumber || 1,
+    updatedAt: now,
+    lastOpenedAt: now,
+  };
+  await pagePairDb.workspaces.update(workspace.id, {
+    activeDocumentId: document.id,
+    activeThreadId: thread.id,
+    currentPdfPageNumber: document.currentPdfPageNumber || 1,
+    updatedAt: now,
+    lastOpenedAt: now,
+  });
+  setLastWorkspaceId(workspace.id);
+
+  return {
+    workspace: nextWorkspace,
+    document,
+    documentItems: await loadWorkspaceDocuments(workspace.id, document.id),
     pdfBlob,
     generatedPages,
     thread,

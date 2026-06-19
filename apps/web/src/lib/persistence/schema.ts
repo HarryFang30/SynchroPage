@@ -36,6 +36,22 @@ export type DocumentRecord = {
   status: "draft" | "ready" | "missing-file" | "failed";
 };
 
+export type DocumentSidebarItem = {
+  id: string;
+  workspaceId: string;
+  documentId: string;
+  title: string;
+  fileName: string;
+  mimeType: string;
+  pageCount: number;
+  currentPdfPageNumber: number;
+  generatedPageCount: number;
+  status: DocumentRecord["status"];
+  updatedAt: number;
+  uploadedAt: number;
+  isActive: boolean;
+};
+
 export type FileBlobRecord = {
   id: string;
   workspaceId: string;
@@ -114,6 +130,7 @@ export type SettingsRecord = UiPreferences & {
 export type LoadedWorkspace = {
   workspace: WorkspaceRecord;
   document: DocumentRecord | null;
+  documentItems: DocumentSidebarItem[];
   pdfBlob: FileBlobRecord | null;
   generatedPages: GeneratedPageRecord[];
   thread: ChatThreadRecord | null;

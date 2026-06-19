@@ -532,6 +532,7 @@ svg {
 .tab-button:focus-visible,
 .agent-action-button:focus-visible,
 .page-item:focus-visible,
+.document-item:focus-visible,
 .context-pill button:focus-visible,
 .message-actions button:focus-visible,
 .branch-picker button:focus-visible,
@@ -778,20 +779,63 @@ svg {
 }
 
 .rail-tools {
-  padding: 12px 12px 11px;
+  padding: 16px 14px 13px;
   border-bottom: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
-  background: color-mix(in oklch, var(--sidebar) 58%, var(--background));
+  background: color-mix(in oklch, var(--sidebar) 70%, var(--background));
+}
+
+.rail-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.rail-heading > div {
+  min-width: 0;
+}
+
+.rail-heading strong,
+.rail-kicker {
+  display: block;
+}
+
+.rail-heading strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 17px;
+  font-weight: 760;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-kicker {
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.rail-heading .mini-button {
+  width: 32px;
+  height: 32px;
+  border-color: transparent;
+  background: color-mix(in oklch, var(--secondary) 58%, transparent);
+  color: var(--text);
+  flex: 0 0 auto;
 }
 
 .search-box input {
   width: 100%;
-  height: 38px;
-  border: 1px solid color-mix(in oklch, var(--line) 80%, transparent);
-  border-radius: 8px;
+  height: 40px;
+  border: 1px solid color-mix(in oklch, var(--line) 66%, transparent);
+  border-radius: 10px;
   outline: 0;
-  background: color-mix(in oklch, var(--background) 84%, white);
+  background: color-mix(in oklch, var(--background) 80%, white);
   color: var(--text);
-  padding: 0 11px;
+  padding: 0 12px;
   box-shadow: none;
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
 }
@@ -805,97 +849,128 @@ svg {
 .rail-meta {
   display: flex;
   justify-content: space-between;
+  gap: 10px;
   margin-top: 10px;
   color: var(--muted);
   font-size: 12px;
 }
 
-.page-list {
-  min-height: 0;
-  overflow: auto;
-  padding: 9px 8px 10px;
+.rail-meta span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.page-item {
+.document-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 8px 12px;
+}
+
+.document-item {
   position: relative;
   width: 100%;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 9px;
-  padding: 10px 9px;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 9px 10px 8px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
   color: var(--text);
   text-align: left;
-  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
-.page-item:hover {
-  background: color-mix(in oklch, var(--primary) 6%, var(--background));
-  transform: translateX(1px);
+.document-item:hover {
+  background: color-mix(in oklch, var(--primary) 5%, transparent);
 }
 
-.page-item.active {
-  border-color: color-mix(in oklch, var(--primary) 18%, var(--line));
-  background: color-mix(in oklch, var(--primary) 6%, var(--background));
+.document-item.active {
+  border-color: color-mix(in oklch, var(--primary) 16%, transparent);
+  background: color-mix(in oklch, var(--primary) 7%, var(--background));
   box-shadow: none;
 }
 
-.page-item.active::before {
+.document-item.active::before {
   position: absolute;
-  inset: 8px auto 8px 0;
+  inset: 9px auto 9px 0;
   width: 3px;
   border-radius: 999px;
   background: color-mix(in oklch, var(--brand) 76%, var(--muted));
   content: "";
 }
 
-.page-number {
+.document-icon {
+  width: 28px;
   height: 28px;
   display: grid;
   place-items: center;
-  border-radius: 7px;
-  background: color-mix(in oklch, var(--secondary) 78%, white);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--secondary) 52%, transparent);
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 900;
 }
 
-.page-item.active .page-number {
-  background: color-mix(in oklch, var(--brand-soft) 50%, white);
+.document-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.9;
+}
+
+.document-item.active .document-icon {
+  background: color-mix(in oklch, var(--brand-soft) 54%, white);
   color: color-mix(in oklch, var(--brand) 76%, var(--text));
 }
 
-.page-copy {
+.document-copy {
   min-width: 0;
 }
 
-.page-copy strong,
-.page-copy span {
+.document-copy strong,
+.document-copy span,
+.document-copy small {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.page-copy strong {
+.document-copy strong {
   color: var(--text-strong);
   font-size: 13px;
   letter-spacing: 0;
 }
 
-.page-copy span {
+.document-copy span,
+.document-copy small {
   margin-top: 3px;
   color: var(--muted);
   font-size: 12px;
 }
 
-.page-score {
+.document-copy small {
+  color: color-mix(in oklch, var(--muted) 76%, transparent);
+}
+
+.document-state {
+  min-height: 20px;
+  padding-top: 1px;
   color: color-mix(in oklch, var(--brand) 68%, var(--muted));
-  font-size: 12px;
-  font-weight: 900;
+  font-size: 11px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.document-state.missing {
+  color: color-mix(in oklch, var(--danger) 78%, var(--muted));
+}
+
+.rail-empty {
+  padding: 22px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
 }
 
 .pdf-pane,
