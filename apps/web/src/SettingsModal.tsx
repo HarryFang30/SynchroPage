@@ -1,6 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Bot,
+  Database,
   FileText,
   Palette,
   Settings2,
@@ -20,7 +21,11 @@ export type SettingsSection =
   | "agent"
   | "pdf"
   | "account"
+  | "storage"
   | "advanced";
+
+type SaveStatusKind = "draft" | "saving" | "saved" | "error" | "quota";
+type PersistentStorageState = "unknown" | "persisted" | "best-effort" | "unsupported";
 
 type SettingsModalProps = {
   open: boolean;
@@ -37,6 +42,16 @@ type SettingsModalProps = {
   providerStatus: string;
   jobStatus: string;
   documentTitle: string;
+  saveState: { kind: SaveStatusKind; message?: string; updatedAt?: number };
+  storageEstimate: { usage: number; quota: number; workspaceCount: number; documentCount: number } | null;
+  persistentStorageState: PersistentStorageState;
+  hasWorkspace: boolean;
+  onRequestPersistentStorage: () => void;
+  onExportWorkspace: () => void;
+  onImportWorkspace: () => void;
+  onClearWorkspace: () => void;
+  onRepairStorage: () => void;
+  onResetWorkspace: () => void;
 };
 
 export function SettingsModal(props: SettingsModalProps) {
@@ -48,6 +63,7 @@ export function SettingsModal(props: SettingsModalProps) {
     { id: "agent", label: copy.settings.sections.agent, icon: <Bot /> },
     { id: "pdf", label: copy.settings.sections.pdf, icon: <FileText /> },
     { id: "account", label: copy.settings.sections.account, icon: <UserCircle /> },
+    { id: "storage", label: copy.settings.sections.storage, icon: <Database /> },
     { id: "advanced", label: copy.settings.sections.advanced, icon: <Wrench /> },
   ];
 
@@ -235,6 +251,56 @@ export function SettingsModal(props: SettingsModalProps) {
                 </SettingsGroup>
               )}
 
+              {section === "storage" && (
+                <SettingsGroup>
+                  <SettingsRow label={copy.settings.storage.saveStateLabel} description={copy.settings.storage.saveStateDescription}>
+                    <StatusValue>{props.saveState.message || saveKindLabel(props.saveState.kind, copy)}</StatusValue>
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.storage.workspaceCountLabel} description={copy.settings.storage.workspaceCountDescription}>
+                    <StatusValue>{props.storageEstimate?.workspaceCount ?? 0}</StatusValue>
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.storage.documentCountLabel} description={copy.settings.storage.documentCountDescription}>
+                    <StatusValue>{props.storageEstimate?.documentCount ?? 0}</StatusValue>
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.storage.usageLabel} description={copy.settings.storage.usageDescription}>
+                    <StatusValue>
+                      {formatBytes(props.storageEstimate?.usage || 0)}
+                      {props.storageEstimate?.quota ? ` / ${formatBytes(props.storageEstimate.quota)}` : ""}
+                    </StatusValue>
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.storage.persistentLabel} description={copy.settings.storage.persistentDescription}>
+                    <div className="settings-inline-actions">
+                      <StatusValue>{persistentStatusLabel(props.persistentStorageState, copy)}</StatusValue>
+                      <SettingsButton
+                        disabled={props.persistentStorageState === "persisted" || props.persistentStorageState === "unsupported"}
+                        onClick={props.onRequestPersistentStorage}
+                      >
+                        {copy.settings.storage.persistentRequestButton}
+                      </SettingsButton>
+                    </div>
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.storage.exportLabel} description={copy.settings.storage.exportDescription}>
+                    <SettingsButton disabled={!props.hasWorkspace} onClick={props.onExportWorkspace}>
+                      {copy.settings.storage.exportButton}
+                    </SettingsButton>
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.storage.importLabel} description={copy.settings.storage.importDescription}>
+                    <SettingsButton onClick={props.onImportWorkspace}>{copy.settings.storage.importButton}</SettingsButton>
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.storage.clearLabel} description={copy.settings.storage.clearDescription}>
+                    <SettingsButton disabled={!props.hasWorkspace} onClick={props.onClearWorkspace}>
+                      {copy.settings.storage.clearButton}
+                    </SettingsButton>
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.storage.repairLabel} description={copy.settings.storage.repairDescription}>
+                    <SettingsButton onClick={props.onRepairStorage}>{copy.settings.storage.repairButton}</SettingsButton>
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.storage.resetLabel} description={copy.settings.storage.resetDescription}>
+                    <SettingsButton onClick={props.onResetWorkspace}>{copy.settings.storage.resetButton}</SettingsButton>
+                  </SettingsRow>
+                </SettingsGroup>
+              )}
+
               {section === "advanced" && (
                 <SettingsGroup>
                   <SettingsRow label={copy.settings.advanced.debugLabel} description={copy.settings.advanced.debugDescription}>
@@ -335,4 +401,31 @@ function oauthStatusLabel(mode: OAuthMode, copy: ReturnType<typeof getAppCopy>) 
   if (mode === "mock") return copy.settings.account.statuses.mock;
   if (mode === "ready") return copy.settings.account.statuses.ready;
   return copy.settings.account.statuses.unknown;
+}
+
+function saveKindLabel(kind: SaveStatusKind, copy: ReturnType<typeof getAppCopy>) {
+  if (kind === "saving") return copy.persistence.saving;
+  if (kind === "saved") return copy.persistence.saved;
+  if (kind === "quota") return copy.persistence.quota;
+  if (kind === "error") return copy.persistence.failed;
+  return copy.persistence.localDraft;
+}
+
+function persistentStatusLabel(status: PersistentStorageState, copy: ReturnType<typeof getAppCopy>) {
+  if (status === "persisted") return copy.settings.storage.persisted;
+  if (status === "best-effort") return copy.settings.storage.bestEffort;
+  if (status === "unsupported") return copy.settings.storage.unsupported;
+  return copy.settings.storage.unknown;
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
 }

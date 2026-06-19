@@ -9,6 +9,7 @@ import {
   type ChatModelAdapter,
   type ChatModelRunOptions,
   type ThreadAssistantMessagePart,
+  type ThreadMessageLike,
   useAuiState,
   useLocalRuntime,
   useThreadRuntime,
@@ -80,6 +81,36 @@ import {
   type UiPreferences,
   uiPreferencesStorageKey,
 } from "./settings";
+import {
+  chatMessageToThreadMessageLike,
+  clearSelectedContext as clearPersistedSelectedContext,
+  clearWorkspace,
+  classifyPersistenceError,
+  createChatThread,
+  estimateStorage,
+  exportWorkspace,
+  importWorkspace,
+  loadLastWorkspace,
+  requestPersistentStorage,
+  repairWorkspaceStorage,
+  saveChatMessage,
+  saveDocumentPatch,
+  saveGeneratedPagesFromPack,
+  saveImportedPagePack,
+  savePdfBlob,
+  saveSelectedContext,
+  saveSettings,
+  saveWorkspacePatch,
+  updateStreamingMessage,
+  type ChatMessageRecord,
+  type ChatMessageStatus,
+  type DocumentRecord,
+  type ExportedWorkspace,
+  type GeneratedPageRecord,
+  type SaveStatusKind,
+  type StorageEstimate,
+  type StorageRepairResult,
+} from "./lib/persistence";
 
 const AppCopyContext = createContext<AppCopy>(getAppCopy("zh-CN"));
 
@@ -205,6 +236,24 @@ type AgentSnapshot = {
   selectedContext: SelectedContext | null;
   pdfContext: PdfContextPayload | null;
 };
+
+type ChatPersistInput = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  status: ChatMessageStatus;
+  createdAt?: number;
+  selectedContext?: Record<string, unknown> | null;
+  sourceRefs?: Record<string, unknown>[];
+};
+
+type SaveState = {
+  kind: SaveStatusKind;
+  message?: string;
+  updatedAt?: number;
+};
+
+type PersistentStorageState = "unknown" | "persisted" | "best-effort" | "unsupported";
 
 type OAuthMode = "unknown" | "ready" | "connected" | "polling" | "offline" | "mock";
 type PanelKey = "rail" | "notes" | "agent";
@@ -369,6 +418,137 @@ const samplePacks: Record<UiPreferences["language"], PagePack> = {
 
 function createId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createDraftPagePack(title: string, fileName: string, pageCount: number, documentId = createId("pdf_doc")): PagePack {
+  const safeCount = Math.max(1, Math.floor(pageCount) || 1);
+  return {
+    schema: "lecture_pairpack.v1",
+    document: {
+      id: documentId,
+      title,
+      source_pdf_url: fileName,
+      page_count: safeCount,
+    },
+    pages: Array.from({ length: safeCount }, (_, index) => {
+      const pageNo = index + 1;
+      return {
+        page_no: pageNo,
+        source: {
+          pdf_page_ref: `#page=${pageNo}`,
+          text_md: "",
+          ocr_used: false,
+          parser: "pdfjs",
+        },
+        teaching: {
+          slide_title: `PDF p.${pageNo}`,
+          speaker_notes_md: "",
+          concepts: [],
+          visual_explanations: [],
+          prerequisites: [],
+          confidence: 0,
+        },
+        status: "draft",
+      };
+    }),
+  };
+}
+
+function pagePackFromPersistence(
+  document: DocumentRecord,
+  generatedPages: GeneratedPageRecord[],
+  copy: AppCopy,
+): PagePack {
+  const rawPages = generatedPages
+    .slice()
+    .sort((left, right) => left.generatedPageIndex - right.generatedPageIndex)
+    .map((page) => page.json);
+  if (rawPages.length) {
+    return normalizePack(
+      {
+        schema: "lecture_pairpack.v1",
+        document: {
+          id: document.id,
+          title: document.title,
+          source_pdf_url: document.fileName,
+          page_count: Math.max(document.pageCount || 0, rawPages.length),
+        },
+        pages: rawPages,
+      },
+      copy,
+    );
+  }
+  return createDraftPagePack(document.title, document.fileName, Math.max(document.pageCount || 1, 1), document.id);
+}
+
+function settingsRecordToPreferences(record: Partial<UiPreferences> | null | undefined): UiPreferences {
+  const merged = { ...defaultUiPreferences, ...(record || {}) };
+  return {
+    ...merged,
+    pdfContextFullPageLimit: clampPreferenceNumber(merged.pdfContextFullPageLimit, defaultUiPreferences.pdfContextFullPageLimit, 1, 500),
+    pdfContextEdgePageCount: clampPreferenceNumber(merged.pdfContextEdgePageCount, defaultUiPreferences.pdfContextEdgePageCount, 1, 100),
+  };
+}
+
+function clampPreferenceNumber(value: unknown, fallback: number, min: number, max: number) {
+  const numeric = Math.floor(Number(value));
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(Math.max(numeric, min), max);
+}
+
+function workspaceLayoutSnapshot(input: {
+  panels: PanelVisibility;
+  activeTab: "notes" | "structure" | "json";
+  query: string;
+  contexts: AgentContextItem[];
+  attachments: AgentAttachment[];
+}) {
+  return {
+    panels: input.panels,
+    activeTab: input.activeTab,
+    query: input.query,
+    contexts: input.contexts,
+    attachments: input.attachments,
+  };
+}
+
+function isPanelVisibility(value: unknown): value is PanelVisibility {
+  const record = value as Partial<PanelVisibility> | null;
+  return (
+    Boolean(record) &&
+    typeof record?.rail === "boolean" &&
+    typeof record?.notes === "boolean" &&
+    typeof record?.agent === "boolean"
+  );
+}
+
+function isActiveTab(value: unknown): value is "notes" | "structure" | "json" {
+  return value === "notes" || value === "structure" || value === "json";
+}
+
+function asPersistedRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") return {};
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function upsertThreadMessage(messages: ThreadMessageLike[], next: ThreadMessageLike) {
+  const index = messages.findIndex((message) => message.id === next.id);
+  if (index === -1) return [...messages, next];
+  const copy = messages.slice();
+  copy[index] = next;
+  return copy;
+}
+
+function storageRepairCount(result: StorageRepairResult) {
+  return (
+    result.orphanFileBlobs +
+    result.orphanGeneratedPages +
+    result.orphanChatThreads +
+    result.orphanChatMessages +
+    result.orphanSelectedContexts +
+    result.workspacesRepaired +
+    result.documentsMarkedMissing
+  );
 }
 
 async function requestJson<T>(path: string, options: RequestInit = {}, accountNotFoundMessage = "请先连接 OpenAI OAuth 后再发送。") {
@@ -883,6 +1063,7 @@ function createPdfAgentAdapter(args: {
   copy: AppCopy;
   isBackendOffline: () => boolean;
   clearSelectedContext: () => void;
+  persistChatMessage?: (input: ChatPersistInput) => Promise<void>;
 }): ChatModelAdapter {
   return {
     async *run(options: ChatModelRunOptions) {
@@ -895,6 +1076,53 @@ function createPdfAgentAdapter(args: {
       const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
       const latestUserText = latestUser ? messageText(latestUser) : "";
       const promptInput = buildSelectedQuestionPrompt(latestUserText, snapshot.selectedContext, snapshot.pdfContext, args.copy);
+      const latestUserMeta = latestUser as { id?: string; createdAt?: Date };
+      const assistantMessageId = options.unstable_assistantMessageId || createId("assistant");
+      const selectedContextRecord = snapshot.selectedContext ? asPersistedRecord(selectedContextPayload(snapshot.selectedContext)) : null;
+      const sourceRefs = [
+        ...(selectedAgentContext ? [asPersistedRecord(selectedAgentContext)] : []),
+        ...snapshot.contexts.map((context) => asPersistedRecord(context)),
+      ];
+      let persistQueue = Promise.resolve();
+      let lastPartialSaveAt = 0;
+      const enqueuePersist = (input: ChatPersistInput) => {
+        persistQueue = persistQueue
+          .then(() => args.persistChatMessage?.(input))
+          .catch(() => undefined);
+        return persistQueue;
+      };
+      if (latestUserText) {
+        await enqueuePersist({
+          id: latestUserMeta.id || createId("user"),
+          role: "user",
+          content: latestUserText,
+          status: "completed",
+          createdAt: latestUserMeta.createdAt?.getTime?.() || Date.now(),
+          selectedContext: selectedContextRecord,
+          sourceRefs,
+        });
+      }
+      await enqueuePersist({
+        id: assistantMessageId,
+        role: "assistant",
+        content: "",
+        status: "pending",
+        selectedContext: selectedContextRecord,
+        sourceRefs,
+      });
+      const persistPartial = (content: string, status: ChatMessageStatus, force = false) => {
+        const now = Date.now();
+        if (!force && now - lastPartialSaveAt < 420) return;
+        lastPartialSaveAt = now;
+        void enqueuePersist({
+          id: assistantMessageId,
+          role: "assistant",
+          content,
+          status,
+          selectedContext: selectedContextRecord,
+          sourceRefs,
+        });
+      };
 
       const parts = [
         promptInput ? { type: "text", text: promptInput } : null,
@@ -961,37 +1189,57 @@ function createPdfAgentAdapter(args: {
         const content = response.message?.content || response.content;
         if (!content) throw new Error(args.copy.errors.emptyGatewayResult);
         for await (const partial of streamAssistantText(content, options.abortSignal, args.copy.errors.generationStopped)) {
+          persistPartial(partial, "streaming");
           yield {
             content: [{ type: "text", text: partial }] satisfies ThreadAssistantMessagePart[],
             status: { type: "running" },
           };
         }
+        persistPartial(content, "completed", true);
+        await persistQueue;
         yield {
           content: [{ type: "text", text: content }] satisfies ThreadAssistantMessagePart[],
           status: { type: "complete", reason: "stop" },
         };
       } catch (error) {
-        if ((error as Error).name === "AbortError") throw error;
-        if (!args.isBackendOffline()) throw error;
-        const local = [
-          args.copy.agent.localPreviewIntro,
-          selectedAgentContext ? args.copy.agent.localPreviewSelected(selectedAgentContext.title) : "",
-          snapshot.contexts.length ? args.copy.agent.localPreviewContexts(snapshot.contexts.length) : args.copy.agent.localPreviewPage(page.page_no),
-          snapshot.attachments.length ? args.copy.agent.localPreviewImages(snapshot.attachments.length) : "",
-          latestUserText ? args.copy.agent.localPreviewQuestion(latestUserText) : "",
-        ]
-          .filter(Boolean)
-          .join("\n\n");
-        for await (const partial of streamAssistantText(local, options.abortSignal, args.copy.errors.generationStopped)) {
-          yield {
-            content: [{ type: "text", text: partial }] satisfies ThreadAssistantMessagePart[],
-            status: { type: "running" },
-          };
+        if ((error as Error).name === "AbortError") {
+          persistPartial("", "stopped", true);
+          await persistQueue;
+          throw error;
         }
-        yield {
-          content: [{ type: "text", text: local }] satisfies ThreadAssistantMessagePart[],
-          status: { type: "complete", reason: "stop" },
-        };
+        if (!args.isBackendOffline()) {
+          persistPartial((error as Error).message, "failed", true);
+          await persistQueue;
+          throw error;
+        }
+        try {
+          const local = [
+            args.copy.agent.localPreviewIntro,
+            selectedAgentContext ? args.copy.agent.localPreviewSelected(selectedAgentContext.title) : "",
+            snapshot.contexts.length ? args.copy.agent.localPreviewContexts(snapshot.contexts.length) : args.copy.agent.localPreviewPage(page.page_no),
+            snapshot.attachments.length ? args.copy.agent.localPreviewImages(snapshot.attachments.length) : "",
+            latestUserText ? args.copy.agent.localPreviewQuestion(latestUserText) : "",
+          ]
+            .filter(Boolean)
+            .join("\n\n");
+          for await (const partial of streamAssistantText(local, options.abortSignal, args.copy.errors.generationStopped)) {
+            persistPartial(partial, "streaming");
+            yield {
+              content: [{ type: "text", text: partial }] satisfies ThreadAssistantMessagePart[],
+              status: { type: "running" },
+            };
+          }
+          persistPartial(local, "completed", true);
+          await persistQueue;
+          yield {
+            content: [{ type: "text", text: local }] satisfies ThreadAssistantMessagePart[],
+            status: { type: "complete", reason: "stop" },
+          };
+        } catch (localError) {
+          persistPartial((localError as Error).name === "AbortError" ? "" : (localError as Error).message, (localError as Error).name === "AbortError" ? "stopped" : "failed", true);
+          await persistQueue;
+          throw localError;
+        }
       } finally {
         args.clearSelectedContext();
       }
@@ -1039,14 +1287,26 @@ export default function App() {
   const [selectedContext, setSelectedContext] = useState<SelectedContext | null>(null);
   const [pdfTextContext, setPdfTextContext] = useState<PdfContextPayload | null>(null);
   const [pendingSelectionPrompt, setPendingSelectionPrompt] = useState<QuickSelectionPrompt | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [documentId, setDocumentId] = useState<string | null>(null);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [isRestoringWorkspace, setIsRestoringWorkspace] = useState(true);
+  const [saveState, setSaveState] = useState<SaveState>({ kind: "draft", message: copy.persistence.localDraft });
+  const [storageEstimate, setStorageEstimate] = useState<StorageEstimate | null>(null);
+  const [persistentStorageState, setPersistentStorageState] = useState<PersistentStorageState>("unknown");
+  const [persistedMessages, setPersistedMessages] = useState<ThreadMessageLike[]>([]);
+  const [agentRuntimeKey, setAgentRuntimeKey] = useState("thread:initial");
   const lastSelectionRef = useRef<SelectedContext | null>(null);
+  const currentPdfObjectUrlRef = useRef("");
   const appShellRef = useRef<HTMLDivElement>(null);
   const commandMenuRef = useRef<HTMLDivElement>(null);
   const jsonImportInputRef = useRef<HTMLInputElement>(null);
+  const workspaceImportInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const oauthPollTimerRef = useRef<number | null>(null);
   const oauthCountdownTimerRef = useRef<number | null>(null);
   const fullscreenIntentRef = useRef(false);
+  const restoredOnceRef = useRef(false);
   const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false);
 
   const pdfNavigationPageCount = Math.max(pdfUrl ? pdfPageCount || pack.document.page_count || pack.pages.length : pack.pages.length, 1);
@@ -1182,6 +1442,351 @@ export default function App() {
     clearSelection();
     setJobStatus(intent === "explain" ? copy.status.explainingSelection : copy.status.summarizingSelection);
   }, [clearSelection, copy]);
+
+  const refreshStorageEstimate = useCallback(async () => {
+    const estimate = await estimateStorage();
+    setStorageEstimate(estimate);
+    setPersistentStorageState(
+      estimate.persisted === true
+        ? "persisted"
+        : estimate.persisted === false
+          ? "best-effort"
+          : "unknown",
+    );
+    return estimate;
+  }, []);
+
+  const persistOperation = useCallback(async <T,>(operation: () => Promise<T>, successMessage?: string) => {
+    setSaveState({ kind: "saving", message: copy.persistence.saving });
+    try {
+      const result = await operation();
+      setSaveState({ kind: "saved", message: successMessage || copy.persistence.saved, updatedAt: Date.now() });
+      void refreshStorageEstimate().catch(() => undefined);
+      return result;
+    } catch (error) {
+      const classified = classifyPersistenceError(error);
+      setSaveState({
+        kind: classified.kind === "quota" ? "quota" : "error",
+        message: classified.kind === "quota" ? copy.persistence.quota : `${copy.persistence.failed}: ${classified.message}`,
+        updatedAt: Date.now(),
+      });
+      throw error;
+    }
+  }, [copy.persistence.failed, copy.persistence.quota, copy.persistence.saved, copy.persistence.saving, refreshStorageEstimate]);
+
+  const persistChatMessage = useCallback(async (input: ChatPersistInput) => {
+    if (!workspaceId || !threadId) return;
+    const now = Date.now();
+    const baseRecord: ChatMessageRecord = {
+      id: input.id,
+      threadId,
+      workspaceId,
+      documentId: documentId || undefined,
+      role: input.role,
+      content: input.content,
+      contentMarkdown: input.content,
+      selectedContext: input.selectedContext ?? null,
+      sourceRefs: input.sourceRefs || [],
+      status: input.status,
+      createdAt: input.createdAt || now,
+      updatedAt: now,
+    };
+    await persistOperation(async () => {
+      if (input.role === "assistant") {
+        await updateStreamingMessage({
+          id: input.id,
+          threadId,
+          workspaceId,
+          documentId: documentId || undefined,
+          content: input.content,
+          status: input.status,
+          selectedContext: input.selectedContext ?? null,
+          sourceRefs: input.sourceRefs || [],
+        });
+      } else {
+        await saveChatMessage(baseRecord);
+      }
+    });
+    setPersistedMessages((messages) => upsertThreadMessage(messages, chatMessageToThreadMessageLike(baseRecord)));
+  }, [documentId, persistOperation, threadId, workspaceId]);
+
+  const replacePdfObjectUrl = useCallback((nextUrl: string) => {
+    if (currentPdfObjectUrlRef.current) {
+      URL.revokeObjectURL(currentPdfObjectUrlRef.current);
+    }
+    currentPdfObjectUrlRef.current = nextUrl;
+    setPdfUrl(nextUrl);
+  }, []);
+
+  const currentLayoutState = useCallback(() => workspaceLayoutSnapshot({
+    panels,
+    activeTab,
+    query,
+    contexts,
+    attachments,
+  }), [activeTab, attachments, contexts, panels, query]);
+
+  const forceSaveSnapshot = useCallback(async () => {
+    await persistOperation(async () => {
+      await saveSettings(uiPreferences, workspaceId || "global");
+      if (!workspaceId) return;
+      await saveWorkspacePatch(workspaceId, {
+        currentPdfPageNumber: currentPdfPageNo,
+        currentGeneratedPageIndex: currentIndex,
+        layoutState: currentLayoutState(),
+        settingsSnapshot: uiPreferences,
+      });
+      if (documentId) {
+        await saveDocumentPatch(documentId, {
+          currentPdfPageNumber: currentPdfPageNo,
+          pageCount: pdfPageCount || pack.document.page_count || pack.pages.length,
+        });
+        await saveGeneratedPagesFromPack({ workspaceId, documentId, pack });
+        if (selectedContext) {
+          await saveSelectedContext({
+            workspaceId,
+            documentId,
+            context: asPersistedRecord(selectedContextPayload(selectedContext)) as Record<string, unknown> & {
+              id?: string;
+              text?: string;
+              sourceType?: string;
+              pdfPageNumber?: number;
+              generatedPageNumber?: number;
+              sectionTitle?: string;
+              selectionRects?: Record<string, unknown>[];
+            },
+          });
+        } else {
+          await clearPersistedSelectedContext(workspaceId, documentId);
+        }
+      }
+    }, copy.persistence.saved);
+  }, [
+    copy.persistence.saved,
+    currentIndex,
+    currentLayoutState,
+    currentPdfPageNo,
+    documentId,
+    pack,
+    pdfPageCount,
+    persistOperation,
+    selectedContext,
+    uiPreferences,
+    workspaceId,
+  ]);
+
+  const resetLocalWorkspaceState = useCallback(() => {
+    replacePdfObjectUrl("");
+    setWorkspaceId(null);
+    setDocumentId(null);
+    setThreadId(null);
+    setPdfPageCount(null);
+    setCurrentPageNo(1);
+    setSelectedContext(null);
+    setPdfTextContext(null);
+    setContexts([]);
+    setAttachments([]);
+    setPersistedMessages([]);
+    setAgentRuntimeKey(`thread:initial:${Date.now()}`);
+    setPack(samplePacks[uiPreferences.language]);
+  }, [replacePdfObjectUrl, uiPreferences.language]);
+
+  const handleSaveStatusClick = useCallback(() => {
+    if (saveState.kind === "error" || saveState.kind === "quota") {
+      void forceSaveSnapshot().catch(() => undefined);
+      return;
+    }
+    openSettings("storage");
+  }, [forceSaveSnapshot, openSettings, saveState.kind]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const restoreWorkspace = async () => {
+      setIsRestoringWorkspace(true);
+      try {
+        const loaded = await loadLastWorkspace();
+        if (cancelled) return;
+        const persistent = await navigator.storage?.persisted?.().catch(() => null);
+        if (!cancelled) {
+          setPersistentStorageState(
+            persistent === true
+              ? "persisted"
+              : persistent === false
+                ? "best-effort"
+                : "unsupported",
+          );
+        }
+
+        if (!loaded) {
+          setSaveState({ kind: "draft", message: getAppCopy(uiPreferences.language).persistence.localDraft });
+          void refreshStorageEstimate().catch(() => undefined);
+          return;
+        }
+
+        const restoredPreferences = settingsRecordToPreferences(loaded.settings || loaded.workspace.settingsSnapshot);
+        const restoredCopy = getAppCopy(restoredPreferences.language);
+        setUiPreferences(restoredPreferences);
+        setWorkspaceId(loaded.workspace.id);
+        setDocumentId(loaded.document?.id || null);
+        setThreadId(loaded.thread?.id || null);
+
+        const layout = (loaded.workspace.layoutState || {}) as {
+          panels?: unknown;
+          activeTab?: unknown;
+          query?: unknown;
+          contexts?: unknown;
+          attachments?: unknown;
+        };
+        if (isPanelVisibility(layout.panels)) setPanels(layout.panels);
+        if (isActiveTab(layout.activeTab)) setActiveTab(layout.activeTab);
+        if (typeof layout.query === "string") setQuery(layout.query);
+        if (Array.isArray(layout.contexts)) setContexts(layout.contexts as AgentContextItem[]);
+        if (Array.isArray(layout.attachments)) setAttachments(layout.attachments as AgentAttachment[]);
+
+        if (loaded.document) {
+          const restoredPack = pagePackFromPersistence(loaded.document, loaded.generatedPages, restoredCopy);
+          setPack(restoredPack);
+          setPdfPageCount(loaded.document.pageCount || null);
+          setCurrentPageNo(
+            Math.min(
+              Math.max(loaded.workspace.currentPdfPageNumber || loaded.document.currentPdfPageNumber || 1, 1),
+              Math.max(loaded.document.pageCount || restoredPack.pages.length || 1, 1),
+            ),
+          );
+          if (loaded.pdfBlob?.blob) {
+            replacePdfObjectUrl(URL.createObjectURL(loaded.pdfBlob.blob));
+          } else if (loaded.document.pdfBlobId) {
+            setJobStatus(restoredCopy.persistence.pdfMissing);
+            setSaveState({ kind: "error", message: restoredCopy.persistence.pdfMissing, updatedAt: Date.now() });
+          }
+        }
+
+        if (loaded.selectedContext?.payload) {
+          setSelectedContext(loaded.selectedContext.payload as unknown as SelectedContext);
+        }
+
+        const restoredMessages = loaded.messages.map(chatMessageToThreadMessageLike);
+        setPersistedMessages(restoredMessages);
+        setAgentRuntimeKey(`${loaded.thread?.id || "thread"}:${restoredMessages.length}:${loaded.workspace.updatedAt}`);
+        setSaveState({ kind: "saved", message: restoredCopy.persistence.restored, updatedAt: Date.now() });
+        void refreshStorageEstimate().catch(() => undefined);
+      } catch (error) {
+        if (!cancelled) {
+          setSaveState({ kind: "error", message: (error as Error).message || getAppCopy(uiPreferences.language).persistence.restoreFailed, updatedAt: Date.now() });
+          setJobStatus((error as Error).message || getAppCopy(uiPreferences.language).persistence.restoreFailed);
+        }
+      } finally {
+        if (!cancelled) {
+          restoredOnceRef.current = true;
+          setIsRestoringWorkspace(false);
+        }
+      }
+    };
+
+    void restoreWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => () => {
+    if (currentPdfObjectUrlRef.current) {
+      URL.revokeObjectURL(currentPdfObjectUrlRef.current);
+      currentPdfObjectUrlRef.current = "";
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isRestoringWorkspace || !restoredOnceRef.current) return undefined;
+    const timer = window.setTimeout(() => {
+      void persistOperation(() => saveSettings(uiPreferences, workspaceId || "global")).catch(() => undefined);
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [isRestoringWorkspace, persistOperation, uiPreferences, workspaceId]);
+
+  useEffect(() => {
+    if (isRestoringWorkspace || !restoredOnceRef.current || !workspaceId) return undefined;
+    const timer = window.setTimeout(() => {
+      void persistOperation(async () => {
+        await saveWorkspacePatch(workspaceId, {
+          currentPdfPageNumber: currentPdfPageNo,
+          currentGeneratedPageIndex: currentIndex,
+          layoutState: currentLayoutState(),
+          settingsSnapshot: uiPreferences,
+        });
+        if (documentId) {
+          await saveDocumentPatch(documentId, {
+            currentPdfPageNumber: currentPdfPageNo,
+            pageCount: pdfPageCount || pack.document.page_count || pack.pages.length,
+          });
+        }
+      }).catch(() => undefined);
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [
+    currentIndex,
+    currentLayoutState,
+    currentPdfPageNo,
+    documentId,
+    isRestoringWorkspace,
+    pack.document.page_count,
+    pack.pages.length,
+    pdfPageCount,
+    persistOperation,
+    uiPreferences,
+    workspaceId,
+  ]);
+
+  useEffect(() => {
+    if (isRestoringWorkspace || !restoredOnceRef.current || !workspaceId || !documentId) return undefined;
+    const timer = window.setTimeout(() => {
+      void persistOperation(async () => {
+        if (selectedContext) {
+          await saveSelectedContext({
+            workspaceId,
+            documentId,
+            context: asPersistedRecord(selectedContextPayload(selectedContext)) as Record<string, unknown> & {
+              id?: string;
+              text?: string;
+              sourceType?: string;
+              pdfPageNumber?: number;
+              generatedPageNumber?: number;
+              sectionTitle?: string;
+              selectionRects?: Record<string, unknown>[];
+            },
+          });
+        } else {
+          await clearPersistedSelectedContext(workspaceId, documentId);
+        }
+      }).catch(() => undefined);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [documentId, isRestoringWorkspace, persistOperation, selectedContext, workspaceId]);
+
+  useEffect(() => {
+    if (isRestoringWorkspace || !restoredOnceRef.current || !workspaceId || !documentId) return undefined;
+    const timer = window.setTimeout(() => {
+      void persistOperation(() => saveGeneratedPagesFromPack({ workspaceId, documentId, pack })).catch(() => undefined);
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [documentId, isRestoringWorkspace, pack, persistOperation, workspaceId]);
+
+  useEffect(() => {
+    if (isRestoringWorkspace || !restoredOnceRef.current) return undefined;
+    const flushSnapshot = () => {
+      void forceSaveSnapshot().catch(() => undefined);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") flushSnapshot();
+    };
+    window.addEventListener("pagehide", flushSnapshot);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("pagehide", flushSnapshot);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [forceSaveSnapshot, isRestoringWorkspace]);
 
   useEffect(() => {
     if (!commandMenuOpen) return undefined;
@@ -1389,34 +1994,65 @@ export default function App() {
   useEffect(() => () => stopOAuthTimers(), [stopOAuthTimers]);
 
   const loadPdf = (file: File) => {
-    if (pdfUrl) URL.revokeObjectURL(pdfUrl);
     const url = URL.createObjectURL(file);
-    setPdfUrl(url);
+    replacePdfObjectUrl(url);
     setPdfPageCount(null);
     setCurrentPageNo(1);
     setSelectedContext(null);
     setPdfTextContext(null);
-    setPack((current) => ({
-      ...current,
-      document: {
-        ...current.document,
-        title: file.name.replace(/\.pdf$/i, ""),
-        source_pdf_url: file.name,
-      },
-    }));
+    setContexts([]);
+    setAttachments([]);
+    setPersistedMessages([]);
+    const title = file.name.replace(/\.pdf$/i, "") || file.name || "Untitled PDF";
+    setPack(createDraftPagePack(title, file.name, 1));
+
+    void persistOperation(async () => {
+      const saved = await savePdfBlob({
+        workspaceId,
+        file,
+        settingsSnapshot: uiPreferences,
+        layoutState: currentLayoutState(),
+      });
+      setWorkspaceId(saved.workspace.id);
+      setDocumentId(saved.document.id);
+      setThreadId(saved.thread.id);
+      setPersistedMessages([]);
+      setAgentRuntimeKey(`${saved.thread.id}:0:${Date.now()}`);
+      setPack(createDraftPagePack(saved.document.title, saved.document.fileName, Math.max(saved.document.pageCount || 1, 1), saved.document.id));
+      return saved;
+    }, copy.persistence.uploadSaved).catch((error) => {
+      setJobStatus((error as Error).message || copy.persistence.failed);
+    });
   };
 
   const handlePdfDocumentReady = useCallback((pageCount: number) => {
     setPdfPageCount(pageCount);
     setCurrentPageNo((current) => Math.min(Math.max(current, 1), Math.max(pageCount, 1)));
-    setPack((current) => ({
-      ...current,
-      document: {
-        ...current.document,
-        page_count: pageCount,
-      },
-    }));
-  }, []);
+    setPack((current) => {
+      if (current.pages.every((item) => item.status === "draft" && !item.teaching.speaker_notes_md)) {
+        return createDraftPagePack(current.document.title, current.document.source_pdf_url, pageCount, current.document.id);
+      }
+      return {
+        ...current,
+        document: {
+          ...current.document,
+          page_count: pageCount,
+        },
+      };
+    });
+    if (workspaceId) {
+      void persistOperation(async () => {
+        await saveWorkspacePatch(workspaceId, { currentPdfPageNumber: currentPdfPageNo });
+        if (documentId) {
+          await saveDocumentPatch(documentId, {
+            pageCount,
+            currentPdfPageNumber: currentPdfPageNo,
+            status: "ready",
+          });
+        }
+      }).catch(() => undefined);
+    }
+  }, [currentPdfPageNo, documentId, persistOperation, workspaceId]);
 
   const handlePdfContextReady = useCallback((context: PdfContextPayload) => {
     setPdfTextContext(context);
@@ -1428,9 +2064,28 @@ export default function App() {
       try {
         const next = normalizePack(JSON.parse(String(reader.result)), copy);
         setPack(next);
+        replacePdfObjectUrl("");
+        setPdfPageCount(null);
         setPdfTextContext(null);
         setCurrentPageNo(next.pages[0]?.page_no || 1);
+        setSelectedContext(null);
+        setContexts([]);
+        setAttachments([]);
+        setPersistedMessages([]);
         setJobStatus(copy.status.jsonImported);
+        void persistOperation(async () => {
+          const saved = await saveImportedPagePack({
+            workspaceId,
+            pack: next,
+            settingsSnapshot: uiPreferences,
+            layoutState: currentLayoutState(),
+          });
+          setWorkspaceId(saved.workspace.id);
+          setDocumentId(saved.document.id);
+          setThreadId(saved.thread.id);
+          setAgentRuntimeKey(`${saved.thread.id}:0:${Date.now()}`);
+          return saved;
+        }, copy.persistence.saved).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
       } catch (error) {
         setJobStatus((error as Error).message);
       }
@@ -1449,6 +2104,107 @@ export default function App() {
     link.remove();
     URL.revokeObjectURL(url);
   };
+
+  const exportCurrentWorkspace = useCallback(() => {
+    if (!workspaceId) {
+      openSettings("storage");
+      return;
+    }
+    void persistOperation(async () => {
+      await forceSaveSnapshot();
+      const payload = await exportWorkspace(workspaceId);
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${payload.workspace.title || "pagepair-workspace"}-workspace.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }, copy.persistence.workspaceExported).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+  }, [copy.persistence.failed, copy.persistence.workspaceExported, forceSaveSnapshot, openSettings, persistOperation, workspaceId]);
+
+  const importWorkspaceBackup = useCallback((file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      void persistOperation(async () => {
+        const payload = JSON.parse(String(reader.result)) as ExportedWorkspace;
+        await importWorkspace(payload);
+      }, copy.persistence.workspaceImported)
+        .then(() => {
+          window.setTimeout(() => window.location.reload(), 80);
+        })
+        .catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+    };
+    reader.onerror = () => setJobStatus(reader.error?.message || copy.persistence.failed);
+    reader.readAsText(file);
+  }, [copy.persistence.failed, copy.persistence.workspaceImported, persistOperation]);
+
+  const clearCurrentWorkspace = useCallback(() => {
+    if (!workspaceId) return;
+    void persistOperation(async () => {
+      await clearWorkspace(workspaceId);
+      resetLocalWorkspaceState();
+    }, copy.persistence.workspaceCleared)
+      .then(() => void refreshStorageEstimate().catch(() => undefined))
+      .catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+  }, [copy.persistence.failed, copy.persistence.workspaceCleared, persistOperation, refreshStorageEstimate, resetLocalWorkspaceState, workspaceId]);
+
+  const resetCurrentWorkspace = useCallback(() => {
+    if (workspaceId) {
+      void clearWorkspace(workspaceId).catch(() => undefined);
+    }
+    resetLocalWorkspaceState();
+    setSaveState({ kind: "draft", message: copy.persistence.localDraft, updatedAt: Date.now() });
+    void refreshStorageEstimate().catch(() => undefined);
+  }, [copy.persistence.localDraft, refreshStorageEstimate, resetLocalWorkspaceState, workspaceId]);
+
+  const enablePersistentStorage = useCallback(() => {
+    void persistOperation(async () => {
+      const granted = await requestPersistentStorage();
+      await refreshStorageEstimate();
+      setPersistentStorageState(
+        granted === true
+          ? "persisted"
+          : granted === false
+            ? "best-effort"
+            : "unsupported",
+      );
+      setJobStatus(granted ? copy.persistence.persistentEnabled : copy.persistence.persistentUnavailable);
+    }, copy.persistence.saved).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+  }, [
+    copy.persistence.failed,
+    copy.persistence.persistentEnabled,
+    copy.persistence.persistentUnavailable,
+    copy.persistence.saved,
+    persistOperation,
+    refreshStorageEstimate,
+  ]);
+
+  const repairLocalStorage = useCallback(() => {
+    void persistOperation(async () => {
+      const result = await repairWorkspaceStorage(workspaceId);
+      await refreshStorageEstimate();
+      setJobStatus(copy.persistence.storageRepaired(storageRepairCount(result)));
+    }, copy.persistence.saved).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+  }, [copy.persistence, persistOperation, refreshStorageEstimate, workspaceId]);
+
+  const startNewPersistedConversation = useCallback(() => {
+    setPersistedMessages([]);
+    setAgentRuntimeKey(`thread:local:${Date.now()}`);
+    if (!workspaceId) return;
+    void persistOperation(async () => {
+      const thread = await createChatThread({
+        workspaceId,
+        documentId: documentId || undefined,
+        title: "Main chat",
+      });
+      setThreadId(thread.id);
+      setAgentRuntimeKey(`${thread.id}:0:${Date.now()}`);
+      if (documentId) await clearPersistedSelectedContext(workspaceId, documentId);
+    }).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+  }, [copy.persistence.failed, documentId, persistOperation, workspaceId]);
 
   const movePage = (delta: number) => {
     setCurrentPageNo((current) => Math.min(Math.max(current + delta, 1), pdfNavigationPageCount));
@@ -1494,6 +2250,16 @@ export default function App() {
           </div>
         </div>
         <div className="topbar-actions">
+          <button
+            className={`save-status-pill ${isRestoringWorkspace ? "saving" : saveState.kind}`}
+            type="button"
+            aria-label={copy.persistence.saveStatusLabel}
+            title={saveState.kind === "error" || saveState.kind === "quota" ? copy.persistence.retrySave : copy.persistence.saveStatusLabel}
+            onClick={handleSaveStatusClick}
+          >
+            {isRestoringWorkspace || saveState.kind === "saving" ? <Clock /> : saveState.kind === "saved" ? <Check /> : <span aria-hidden="true" />}
+            <span>{isRestoringWorkspace ? copy.persistence.saving : saveState.message || copy.persistence.localDraft}</span>
+          </button>
           <div className="layout-switcher" role="group" aria-label={copy.topbar.layoutSwitcherAria}>
             <IconButton label={copy.topbar.restoreWorkbench} active={fullWorkbench} onClick={() => setPanels(fullPanelVisibility)}>
               <Columns3 />
@@ -1571,6 +2337,17 @@ export default function App() {
                 event.currentTarget.value = "";
               }}
             />
+            <input
+              ref={workspaceImportInputRef}
+              className="command-menu-file-input"
+              type="file"
+              accept="application/json,.json"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) importWorkspaceBackup(file);
+                event.currentTarget.value = "";
+              }}
+            />
           </div>
           <button className="primary-button" type="button" onClick={() => setJobStatus(copy.status.generationQueued)}>
             <Zap />
@@ -1608,6 +2385,16 @@ export default function App() {
         providerStatus={authText}
         jobStatus={jobStatus}
         documentTitle={pack.document.title}
+        saveState={saveState}
+        storageEstimate={storageEstimate}
+        persistentStorageState={persistentStorageState}
+        hasWorkspace={Boolean(workspaceId)}
+        onRequestPersistentStorage={enablePersistentStorage}
+        onExportWorkspace={exportCurrentWorkspace}
+        onImportWorkspace={() => workspaceImportInputRef.current?.click()}
+        onClearWorkspace={clearCurrentWorkspace}
+        onRepairStorage={repairLocalStorage}
+        onResetWorkspace={resetCurrentWorkspace}
       />
 
       <SelectionToolbar
@@ -1738,9 +2525,11 @@ export default function App() {
 
           <Panel className="workspace-panel" hidden={!panels.agent} defaultSize={25} minSize={22}>
             <AgentPanel
+              key={agentRuntimeKey}
               contexts={contexts}
               attachments={attachments}
               selectedContext={selectedContext}
+              initialMessages={persistedMessages}
               pendingSelectionPrompt={pendingSelectionPrompt}
               setContexts={setContexts}
               setAttachments={setAttachments}
@@ -1756,6 +2545,8 @@ export default function App() {
               oauthMode={oauthMode}
               showSourcePills={uiPreferences.showSourcePills}
               pageAwareSuggestions={uiPreferences.pageAwareSuggestions}
+              persistChatMessage={persistChatMessage}
+              onNewConversation={startNewPersistedConversation}
             />
           </Panel>
         </PanelGroup>
@@ -1793,6 +2584,7 @@ function AgentPanel(props: {
   contexts: AgentContextItem[];
   attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
+  initialMessages: ThreadMessageLike[];
   pendingSelectionPrompt: QuickSelectionPrompt | null;
   setContexts: (fn: AgentContextItem[] | ((items: AgentContextItem[]) => AgentContextItem[])) => void;
   setAttachments: (fn: AgentAttachment[] | ((items: AgentAttachment[]) => AgentAttachment[])) => void;
@@ -1806,6 +2598,8 @@ function AgentPanel(props: {
   oauthMode: OAuthMode;
   showSourcePills: boolean;
   pageAwareSuggestions: boolean;
+  persistChatMessage?: (input: ChatPersistInput) => Promise<void>;
+  onNewConversation: () => void;
 }) {
   const copy = useAppCopy();
   const adapter = useMemo(
@@ -1817,10 +2611,11 @@ function AgentPanel(props: {
         copy,
         isBackendOffline: () => props.backendOffline,
         clearSelectedContext: () => props.setSelectedContext(null),
+        persistChatMessage: props.persistChatMessage,
       }),
-    [copy, props.backendOffline, props.getPage, props.getPack, props.getSnapshot, props.setSelectedContext],
+    [copy, props.backendOffline, props.getPage, props.getPack, props.getSnapshot, props.persistChatMessage, props.setSelectedContext],
   );
-  const runtime = useLocalRuntime(adapter);
+  const runtime = useLocalRuntime(adapter, { initialMessages: props.initialMessages });
   const page = props.getPage();
   const suggestions = pageSuggestions(page, props.pageAwareSuggestions, copy);
   const contextPreview = composerContextPreview(props.contexts, props.attachments, copy);
@@ -1838,6 +2633,7 @@ function AgentPanel(props: {
     if (props.pendingSelectionPrompt) {
       props.clearPendingSelectionPrompt(props.pendingSelectionPrompt.id);
     }
+    props.onNewConversation();
   }, [clearAgentContext, props, runtime]);
 
   const addImages = async (files: FileList | File[]) => {

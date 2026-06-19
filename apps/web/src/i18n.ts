@@ -26,6 +26,7 @@ export type AppCopy = {
       agent: string;
       pdf: string;
       account: string;
+      storage: string;
       advanced: string;
     };
     general: {
@@ -102,6 +103,39 @@ export type AppCopy = {
         unknown: string;
       };
     };
+    storage: {
+      saveStateLabel: string;
+      saveStateDescription: string;
+      workspaceCountLabel: string;
+      workspaceCountDescription: string;
+      documentCountLabel: string;
+      documentCountDescription: string;
+      usageLabel: string;
+      usageDescription: string;
+      persistentLabel: string;
+      persistentDescription: string;
+      persistentRequestButton: string;
+      exportLabel: string;
+      exportDescription: string;
+      exportButton: string;
+      importLabel: string;
+      importDescription: string;
+      importButton: string;
+      clearLabel: string;
+      clearDescription: string;
+      clearButton: string;
+      repairLabel: string;
+      repairDescription: string;
+      repairButton: string;
+      resetLabel: string;
+      resetDescription: string;
+      resetButton: string;
+      persisted: string;
+      bestEffort: string;
+      unsupported: string;
+      unknown: string;
+      noWorkspace: string;
+    };
     advanced: {
       debugLabel: string;
       debugDescription: string;
@@ -151,6 +185,25 @@ export type AppCopy = {
     connectionWaiting: string;
     connectionLocal: string;
     connectionReady: string;
+  };
+  persistence: {
+    saving: string;
+    saved: string;
+    failed: string;
+    quota: string;
+    localDraft: string;
+    restored: string;
+    pdfMissing: string;
+    restoreFailed: string;
+    retrySave: string;
+    saveStatusLabel: string;
+    uploadSaved: string;
+    workspaceCleared: string;
+    workspaceExported: string;
+    workspaceImported: string;
+    persistentEnabled: string;
+    persistentUnavailable: string;
+    storageRepaired: (count: number) => string;
   };
   topbar: {
     resizeHandle: string;
@@ -294,6 +347,7 @@ const zhCN: AppCopy = {
       agent: "助手",
       pdf: "PDF 阅读器",
       account: "账户 / 网关",
+      storage: "存储",
       advanced: "高级",
     },
     general: {
@@ -370,6 +424,39 @@ const zhCN: AppCopy = {
         unknown: "检查中",
       },
     },
+    storage: {
+      saveStateLabel: "保存状态",
+      saveStateDescription: "当前 workspace 的本地自动保存状态。",
+      workspaceCountLabel: "Workspace 数量",
+      workspaceCountDescription: "本机 IndexedDB 中保存的工作区。",
+      documentCountLabel: "文档数量",
+      documentCountDescription: "本机保存的 PDF / PagePair 文档。",
+      usageLabel: "本地占用",
+      usageDescription: "浏览器报告的 IndexedDB / Cache 等站点存储估算值。",
+      persistentLabel: "Persistent storage",
+      persistentDescription: "请求浏览器尽量不要在存储压力下清理本地草稿。",
+      persistentRequestButton: "启用持久存储",
+      exportLabel: "导出当前 workspace",
+      exportDescription: "导出 metadata、对话、讲解和 PDF Blob，便于备份。",
+      exportButton: "导出",
+      importLabel: "导入 workspace",
+      importDescription: "导入 PagePair workspace 备份并设为当前工作区。",
+      importButton: "导入",
+      clearLabel: "清空当前 workspace",
+      clearDescription: "删除当前 workspace 的 PDF、讲解、对话和选区。不可撤销。",
+      clearButton: "清空",
+      repairLabel: "检查并清理存储",
+      repairDescription: "删除孤儿 blob、无引用消息和损坏引用；PDF Blob 缺失的文档会标记为缺失。",
+      repairButton: "检查清理",
+      resetLabel: "重置当前 workspace",
+      resetDescription: "回到初始示例状态，但保留全局 UI 偏好。",
+      resetButton: "重置",
+      persisted: "已启用",
+      bestEffort: "普通本地存储",
+      unsupported: "浏览器不支持",
+      unknown: "未知",
+      noWorkspace: "暂无 workspace",
+    },
     advanced: {
       debugLabel: "Debug 模式",
       debugDescription: "在低噪声 footer 中显示任务状态和诊断信息。",
@@ -419,6 +506,25 @@ const zhCN: AppCopy = {
     connectionWaiting: "等待验证码",
     connectionLocal: "本地预览",
     connectionReady: "网关就绪",
+  },
+  persistence: {
+    saving: "正在保存...",
+    saved: "已保存",
+    failed: "保存失败，点击重试",
+    quota: "存储空间不足",
+    localDraft: "本地草稿",
+    restored: "已恢复本地 workspace",
+    pdfMissing: "PDF 文件缺失，metadata 已恢复",
+    restoreFailed: "恢复 workspace 失败",
+    retrySave: "重试保存",
+    saveStatusLabel: "保存状态",
+    uploadSaved: "PDF 已保存到本机",
+    workspaceCleared: "本地 workspace 已清空",
+    workspaceExported: "workspace 已导出",
+    workspaceImported: "workspace 已导入",
+    persistentEnabled: "浏览器已启用持久存储",
+    persistentUnavailable: "浏览器未授予持久存储，将继续使用普通本地保存",
+    storageRepaired: (count) => `存储检查完成，处理 ${count} 条异常记录`,
   },
   topbar: {
     resizeHandle: "调整面板宽度",
@@ -562,6 +668,7 @@ const enUS: AppCopy = {
       agent: "Assistant",
       pdf: "PDF Reader",
       account: "Account / Gateway",
+      storage: "Storage",
       advanced: "Advanced",
     },
     general: {
@@ -638,6 +745,39 @@ const enUS: AppCopy = {
         unknown: "Checking",
       },
     },
+    storage: {
+      saveStateLabel: "Save status",
+      saveStateDescription: "Local autosave state for the current workspace.",
+      workspaceCountLabel: "Workspaces",
+      workspaceCountDescription: "Workspaces stored in this browser's IndexedDB.",
+      documentCountLabel: "Documents",
+      documentCountDescription: "Saved PDF / PagePair documents on this device.",
+      usageLabel: "Local usage",
+      usageDescription: "Browser estimate across IndexedDB, Cache, and site storage.",
+      persistentLabel: "Persistent storage",
+      persistentDescription: "Ask the browser not to evict local drafts under storage pressure.",
+      persistentRequestButton: "Enable persistence",
+      exportLabel: "Export current workspace",
+      exportDescription: "Export metadata, chat, notes, and the PDF Blob for backup.",
+      exportButton: "Export",
+      importLabel: "Import workspace",
+      importDescription: "Import a PagePair workspace backup and open it.",
+      importButton: "Import",
+      clearLabel: "Clear current workspace",
+      clearDescription: "Delete the current workspace's PDF, notes, chat, and selections. This cannot be undone.",
+      clearButton: "Clear",
+      repairLabel: "Check and repair storage",
+      repairDescription: "Remove orphan blobs, unreferenced messages, and broken references; documents with missing PDF blobs are marked missing.",
+      repairButton: "Repair",
+      resetLabel: "Reset current workspace",
+      resetDescription: "Return to the initial sample state while keeping global UI preferences.",
+      resetButton: "Reset",
+      persisted: "Enabled",
+      bestEffort: "Best-effort local",
+      unsupported: "Unsupported",
+      unknown: "Unknown",
+      noWorkspace: "No workspace yet",
+    },
     advanced: {
       debugLabel: "Debug mode",
       debugDescription: "Show task status and diagnostics in the quiet footer.",
@@ -687,6 +827,25 @@ const enUS: AppCopy = {
     connectionWaiting: "Waiting for code",
     connectionLocal: "Local preview",
     connectionReady: "Gateway ready",
+  },
+  persistence: {
+    saving: "Saving...",
+    saved: "Saved",
+    failed: "Save failed, click to retry",
+    quota: "Storage is full",
+    localDraft: "Local draft",
+    restored: "Restored local workspace",
+    pdfMissing: "PDF file is missing; metadata restored",
+    restoreFailed: "Failed to restore workspace",
+    retrySave: "Retry save",
+    saveStatusLabel: "Save status",
+    uploadSaved: "PDF saved locally",
+    workspaceCleared: "Local workspace cleared",
+    workspaceExported: "Workspace exported",
+    workspaceImported: "Workspace imported",
+    persistentEnabled: "Persistent storage enabled",
+    persistentUnavailable: "Persistent storage was not granted; local save still works",
+    storageRepaired: (count) => `Storage check completed, handled ${count} invalid records`,
   },
   topbar: {
     resizeHandle: "Resize pane width",

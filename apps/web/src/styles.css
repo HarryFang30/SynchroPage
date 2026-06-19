@@ -351,6 +351,61 @@ svg {
   flex-shrink: 0;
 }
 
+.save-status-pill {
+  min-width: 0;
+  max-width: 154px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid color-mix(in oklch, var(--line) 60%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--background) 72%, transparent);
+  color: var(--muted);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 540;
+  white-space: nowrap;
+}
+
+.save-status-pill svg,
+.save-status-pill > span[aria-hidden="true"] {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.save-status-pill > span[aria-hidden="true"] {
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.save-status-pill span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.save-status-pill.saved {
+  color: color-mix(in oklch, var(--muted) 78%, var(--brand));
+}
+
+.save-status-pill.saving,
+.save-status-pill.draft {
+  color: color-mix(in oklch, var(--text) 66%, var(--muted));
+}
+
+.save-status-pill.error,
+.save-status-pill.quota {
+  border-color: color-mix(in oklch, var(--brand) 42%, var(--line));
+  background: color-mix(in oklch, var(--brand) 9%, var(--background));
+  color: color-mix(in oklch, var(--brand) 80%, var(--text-strong));
+}
+
+.save-status-pill:hover {
+  background: color-mix(in oklch, var(--secondary) 68%, transparent);
+}
+
 .command-menu {
   position: relative;
 }
@@ -2475,6 +2530,13 @@ output {
   justify-content: flex-end;
 }
 
+.settings-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .settings-select,
 .settings-number-input {
   width: 170px;
@@ -2556,9 +2618,11 @@ output {
 }
 
 .settings-status-value {
+  min-width: 0;
   color: color-mix(in oklch, var(--text) 82%, var(--muted));
   font-size: 13px;
   text-align: right;
+  overflow-wrap: anywhere;
 }
 
 :root[data-pagepair-resolved-theme="dark"] .chip,
