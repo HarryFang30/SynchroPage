@@ -786,68 +786,103 @@ svg {
 
 .page-rail {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   transition: opacity 180ms ease, transform 180ms ease;
 }
 
-.rail-tools {
-  padding: 16px 14px 13px;
-  border-bottom: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
-  background: color-mix(in oklch, var(--sidebar) 70%, var(--background));
+.rail-top {
+  padding: 14px 12px 10px;
+  background: color-mix(in oklch, var(--sidebar) 76%, var(--background));
 }
 
-.rail-heading {
+.rail-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
-.rail-heading > div {
+.rail-header > div:first-child {
   min-width: 0;
 }
 
-.rail-heading strong,
-.rail-kicker {
+.rail-header strong,
+.rail-header span {
   display: block;
 }
 
-.rail-heading strong {
+.rail-header strong {
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 17px;
-  font-weight: 760;
+  font-size: 15px;
+  font-weight: 720;
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.rail-kicker {
-  margin-bottom: 3px;
+.rail-header span {
+  margin-top: 2px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 680;
+  font-size: 11.5px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.rail-heading .mini-button {
-  width: 32px;
-  height: 32px;
-  border-color: transparent;
-  background: color-mix(in oklch, var(--secondary) 58%, transparent);
-  color: var(--text);
+.rail-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex: 0 0 auto;
+}
+
+.rail-icon-button,
+.rail-header-actions .mini-button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.rail-icon-button:hover,
+.rail-header-actions .mini-button:hover {
+  background: color-mix(in oklch, var(--secondary) 56%, transparent);
+  color: var(--text);
+  transform: none;
+}
+
+.rail-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.rail-icon-button svg,
+.rail-header-actions .mini-button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.rail-header-actions .mini-button {
+  border-color: transparent;
 }
 
 .search-box input {
   width: 100%;
-  height: 40px;
-  border: 1px solid color-mix(in oklch, var(--line) 66%, transparent);
-  border-radius: 10px;
+  height: 36px;
+  border: 1px solid color-mix(in oklch, var(--line) 52%, transparent);
+  border-radius: 8px;
   outline: 0;
-  background: color-mix(in oklch, var(--background) 80%, white);
+  background: color-mix(in oklch, var(--background) 74%, white);
   color: var(--text);
-  padding: 0 12px;
+  padding: 0 10px;
+  font-size: 13px;
   box-shadow: none;
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
 }
@@ -855,84 +890,124 @@ svg {
 .search-box input:focus {
   border-color: color-mix(in oklch, var(--brand) 42%, var(--line));
   background: var(--panel-strong);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand) 10%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--brand) 8%, transparent);
 }
 
-.rail-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
+.rail-nav {
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 8px 12px;
+}
+
+.rail-section {
+  display: grid;
+  gap: 2px;
   margin-top: 10px;
-  color: var(--muted);
-  font-size: 12px;
 }
 
-.rail-meta span:last-child {
+.rail-section:first-child {
+  margin-top: 0;
+}
+
+.rail-section-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px 4px;
+  color: color-mix(in oklch, var(--muted) 86%, var(--text));
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.rail-section-label small {
+  color: color-mix(in oklch, var(--muted) 66%, transparent);
+  font-size: 10.5px;
+  font-weight: 620;
+}
+
+.course-item,
+.document-item,
+.recent-item,
+.rail-footer button {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.course-item,
+.recent-item {
+  min-height: 36px;
+  display: grid;
+  align-items: center;
+  border-radius: 7px;
+}
+
+.course-item {
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.course-item svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.course-item span,
+.recent-item span {
+  min-width: 0;
   overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.course-item small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.course-item:hover,
+.document-item:hover,
+.recent-item:hover,
+.rail-footer button:hover {
+  background: color-mix(in oklch, var(--secondary) 46%, transparent);
+}
+
+.course-item.active,
+.document-item.active {
+  background: color-mix(in oklch, var(--secondary) 58%, transparent);
+  color: var(--text-strong);
+}
+
+.course-item.active svg {
+  color: color-mix(in oklch, var(--brand) 60%, var(--muted));
+}
+
 .document-list {
-  min-height: 0;
-  overflow: auto;
-  padding: 8px 8px 12px;
+  display: grid;
+  gap: 2px;
 }
 
 .document-item {
   position: relative;
-  width: 100%;
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 10px;
-  padding: 10px 9px 10px 8px;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
-}
-
-.document-item:hover {
-  background: color-mix(in oklch, var(--primary) 5%, transparent);
-}
-
-.document-item.active {
-  border-color: color-mix(in oklch, var(--primary) 16%, transparent);
-  background: color-mix(in oklch, var(--primary) 7%, var(--background));
-  box-shadow: none;
-}
-
-.document-item.active::before {
-  position: absolute;
-  inset: 9px auto 9px 0;
-  width: 3px;
-  border-radius: 999px;
-  background: color-mix(in oklch, var(--brand) 76%, var(--muted));
-  content: "";
-}
-
-.document-icon {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: color-mix(in oklch, var(--secondary) 52%, transparent);
-  color: var(--muted);
-}
-
-.document-icon svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.9;
-}
-
-.document-item.active .document-icon {
-  background: color-mix(in oklch, var(--brand-soft) 54%, white);
-  color: color-mix(in oklch, var(--brand) 76%, var(--text));
+  grid-template-columns: 14px minmax(0, 1fr) 10px;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 5px 8px 5px 14px;
+  border-radius: 7px;
 }
 
 .document-copy {
@@ -940,8 +1015,7 @@ svg {
 }
 
 .document-copy strong,
-.document-copy span,
-.document-copy small {
+.document-copy span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -951,38 +1025,152 @@ svg {
 .document-copy strong {
   color: var(--text-strong);
   font-size: 13px;
+  font-weight: 560;
   letter-spacing: 0;
 }
 
-.document-copy span,
-.document-copy small {
-  margin-top: 3px;
+.document-copy span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.document-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted) 54%, transparent);
+  justify-self: center;
+}
+
+.document-item.active .document-dot {
+  background: color-mix(in oklch, var(--brand) 76%, var(--muted));
+}
+
+.document-state {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+}
+
+.document-state.missing {
+  background: var(--destructive);
+}
+
+.rail-empty {
+  padding: 12px 8px;
   color: var(--muted);
   font-size: 12px;
 }
 
-.document-copy small {
-  color: color-mix(in oklch, var(--muted) 76%, transparent);
+.recent-item {
+  padding: 0 8px 0 28px;
 }
 
-.document-state {
-  min-height: 20px;
-  padding-top: 1px;
-  color: color-mix(in oklch, var(--brand) 68%, var(--muted));
-  font-size: 11px;
-  font-weight: 760;
+.rail-footer {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border-top: 1px solid color-mix(in oklch, var(--line) 58%, transparent);
+  background: color-mix(in oklch, var(--sidebar) 72%, var(--background));
+}
+
+.rail-footer button {
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: 7px;
+}
+
+.rail-footer span {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 560;
+}
+
+.rail-footer small {
+  max-width: 96px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.document-state.missing {
-  color: color-mix(in oklch, var(--danger) 78%, var(--muted));
+.course-dialog-overlay {
+  position: fixed;
+  z-index: 95;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: oklch(0.20 0.012 95 / 0.24);
+  backdrop-filter: blur(3px);
 }
 
-.rail-empty {
-  padding: 22px 12px;
-  color: var(--muted);
+.course-dialog {
+  width: min(360px, calc(100vw - 36px));
+  padding: 18px;
+  border: 1px solid color-mix(in oklch, var(--line) 64%, transparent);
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--popover) 94%, white);
+  box-shadow: 0 20px 56px oklch(0.25 0.018 95 / 0.24);
+}
+
+.course-dialog h2 {
+  margin: 0 0 14px;
+  color: var(--text-strong);
+  font-size: 17px;
+  line-height: 1.25;
+  font-weight: 680;
+}
+
+.course-dialog input {
+  width: 100%;
+  height: 38px;
+  border: 1px solid color-mix(in oklch, var(--line) 68%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background) 82%, white);
+  color: var(--text);
+  padding: 0 10px;
   font-size: 13px;
-  text-align: center;
+  outline: 0;
+}
+
+.course-dialog input:focus {
+  border-color: color-mix(in oklch, var(--brand) 42%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--brand) 9%, transparent);
+}
+
+.course-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.course-dialog-actions button {
+  min-height: 32px;
+  border: 1px solid color-mix(in oklch, var(--line) 68%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background) 84%, white);
+  color: var(--text);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 580;
+}
+
+.course-dialog-actions button:last-child {
+  border-color: color-mix(in oklch, var(--brand) 66%, var(--line));
+  background: color-mix(in oklch, var(--brand) 90%, white);
+  color: var(--primary-foreground);
+}
+
+.course-dialog-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .pdf-pane,
@@ -1101,7 +1289,7 @@ output {
 
 .pdf-frame.has-pdf {
   align-content: start;
-  overflow: auto;
+  overflow: hidden;
   place-items: start center;
 }
 
@@ -1112,7 +1300,8 @@ output {
 
 .pdf-js-viewer {
   width: 100%;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
   display: grid;
   align-content: start;
   justify-items: center;
@@ -1120,9 +1309,60 @@ output {
   padding: 2px 0 16px;
 }
 
+.pdf-scroll-viewer {
+  overflow: auto;
+  outline: 0;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+}
+
+.pdf-page-stack {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 32px;
+  padding: 8px 0 42px;
+}
+
+.pdf-page-shell {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  scroll-margin-top: 18px;
+}
+
+.pdf-page-label {
+  width: min(100%, 980px);
+  color: color-mix(in oklch, var(--muted) 70%, transparent);
+  font-size: 11px;
+  font-weight: 680;
+  letter-spacing: 0;
+  text-align: left;
+}
+
+.pdf-page-shell.active .pdf-page-label {
+  color: color-mix(in oklch, var(--brand) 72%, var(--muted));
+}
+
+.pdf-scroll-viewer.single-page .pdf-page-stack {
+  min-height: 100%;
+  align-content: center;
+}
+
+.pdf-page-placeholder {
+  max-width: 100%;
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--panel) 82%, white);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--line) 46%, transparent);
+}
+
 .pdf-page-layered {
   position: relative;
   flex: 0 0 auto;
+  max-width: 100%;
   overflow: hidden;
   border-radius: 7px;
   background: white;

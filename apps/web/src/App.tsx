@@ -29,6 +29,7 @@ import {
 import PdfJsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
 import {
   Check,
+  BookOpen,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -37,7 +38,6 @@ import {
   ExternalLink,
   FileInput,
   FileJson,
-  FileText,
   Image,
   Lock,
   Maximize2,
@@ -62,11 +62,14 @@ import rehypeKatex from "rehype-katex";
 import {
   type ChangeEvent,
   createContext,
+  forwardRef,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type RefObject,
   useCallback,
   useContext,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -89,12 +92,15 @@ import {
   clearWorkspace,
   classifyPersistenceError,
   createChatThread,
+  createCourseProject,
   estimateStorage,
   exportWorkspace,
   importWorkspace,
+  loadCourseProjects,
   loadLastWorkspace,
   loadWorkspaceDocument,
   loadWorkspaceDocuments,
+  loadWorkspaceProject,
   requestPersistentStorage,
   repairWorkspaceStorage,
   saveChatMessage,
@@ -108,6 +114,7 @@ import {
   updateStreamingMessage,
   type ChatMessageRecord,
   type ChatMessageStatus,
+  type CourseProjectRecord,
   type DocumentSidebarItem,
   type DocumentRecord,
   type ExportedWorkspace,
@@ -170,6 +177,12 @@ type PdfContextPayload = {
   edgePageCount: number;
   includedPageNumbers: number[];
   pages: PdfContextPage[];
+};
+
+type PdfViewMode = "continuous" | "single-page";
+
+type PdfScrollViewerHandle = {
+  scrollToPage: (pageNumber: number, behavior?: ScrollBehavior) => void;
 };
 
 type AgentContextItem = {
@@ -506,6 +519,7 @@ function workspaceLayoutSnapshot(input: {
   panels: PanelVisibility;
   activeTab: "notes" | "structure" | "json";
   query: string;
+  activeProjectId: string | null;
   contexts: AgentContextItem[];
   attachments: AgentAttachment[];
 }) {
@@ -513,6 +527,7 @@ function workspaceLayoutSnapshot(input: {
     panels: input.panels,
     activeTab: input.activeTab,
     query: input.query,
+    activeProjectId: input.activeProjectId || undefined,
     contexts: input.contexts,
     attachments: input.attachments,
   };
@@ -1294,9 +1309,13 @@ export default function App() {
   const [pdfTextContext, setPdfTextContext] = useState<PdfContextPayload | null>(null);
   const [pendingSelectionPrompt, setPendingSelectionPrompt] = useState<QuickSelectionPrompt | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [courseProjects, setCourseProjects] = useState<CourseProjectRecord[]>([]);
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [documentItems, setDocumentItems] = useState<DocumentSidebarItem[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [courseDialogOpen, setCourseDialogOpen] = useState(false);
+  const [courseDraftName, setCourseDraftName] = useState("");
   const [isRestoringWorkspace, setIsRestoringWorkspace] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "draft", message: copy.persistence.localDraft });
   const [storageEstimate, setStorageEstimate] = useState<StorageEstimate | null>(null);
@@ -1310,6 +1329,7 @@ export default function App() {
   const jsonImportInputRef = useRef<HTMLInputElement>(null);
   const workspaceImportInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
+  const pdfScrollViewerRef = useRef<PdfScrollViewerHandle>(null);
   const oauthPollTimerRef = useRef<number | null>(null);
   const oauthCountdownTimerRef = useRef<number | null>(null);
   const fullscreenIntentRef = useRef(false);
@@ -1345,16 +1365,45 @@ export default function App() {
           isActive: true,
         },
       ];
+  const sidebarProjects: CourseProjectRecord[] = courseProjects.length
+    ? courseProjects
+    : [
+        {
+          id: activeProjectId || "sample-course",
+          workspaceId: workspaceId || "sample",
+          name: copy.rail.defaultCourse,
+          description: "",
+          color: "clay",
+          icon: "book-open",
+          createdAt: 0,
+          updatedAt: 0,
+          lastOpenedAt: 0,
+          documentCount: sidebarDocuments.length,
+          activeDocumentId: documentId || pack.document.id,
+        },
+      ];
+  const currentProjectId = activeProjectId || sidebarProjects[0]?.id || null;
+  const activeProject = sidebarProjects.find((item) => item.id === currentProjectId) || sidebarProjects[0] || null;
   const normalizedDocumentQuery = query.trim().toLowerCase();
-  const filteredDocuments = sidebarDocuments.filter((item) =>
-    normalizedDocumentQuery
-      ? `${item.title} ${item.fileName}`.toLowerCase().includes(normalizedDocumentQuery)
-      : true,
+  const filteredProjects = sidebarProjects.filter((project) =>
+    normalizedDocumentQuery ? project.name.toLowerCase().includes(normalizedDocumentQuery) : true,
   );
+  const activeProjectDocuments = currentProjectId
+    ? sidebarDocuments.filter((item) => item.projectId === currentProjectId || (!item.projectId && currentProjectId === activeProject?.id))
+    : sidebarDocuments;
+  const documentsForSidebar = normalizedDocumentQuery
+    ? sidebarDocuments.filter((item) => `${item.title} ${item.fileName}`.toLowerCase().includes(normalizedDocumentQuery))
+    : activeProjectDocuments;
+  const recentDocuments = sidebarDocuments
+    .slice()
+    .sort((left, right) => (right.lastOpenedAt || right.updatedAt) - (left.lastOpenedAt || left.updatedAt))
+    .filter((item) => item.documentId !== documentId)
+    .slice(0, 4);
   const visiblePaneCount = 1 + Number(panels.rail) + Number(panels.notes) + Number(panels.agent);
   const pdfViewerSrc = pdfUrl
     ? `${pdfUrl}#page=${currentPdfPageNo}&toolbar=0&navpanes=0&scrollbar=0&view=FitH`
     : "";
+  const pdfViewMode: PdfViewMode = uiPreferences.pdfViewMode || "continuous";
   const { toolbar: selectionToolbar, clearSelection } = usePageSelection({
     documentTitle: pack.document.title,
     page,
@@ -1552,15 +1601,17 @@ export default function App() {
     panels,
     activeTab,
     query,
+    activeProjectId,
     contexts,
     attachments,
-  }), [activeTab, attachments, contexts, panels, query]);
+  }), [activeProjectId, activeTab, attachments, contexts, panels, query]);
 
   const forceSaveSnapshot = useCallback(async () => {
     await persistOperation(async () => {
       await saveSettings(uiPreferences, workspaceId || "global");
       if (!workspaceId) return;
       await saveWorkspacePatch(workspaceId, {
+        activeProjectId: activeProjectId || undefined,
         currentPdfPageNumber: currentPdfPageNo,
         currentGeneratedPageIndex: currentIndex,
         layoutState: currentLayoutState(),
@@ -1593,6 +1644,7 @@ export default function App() {
     }, copy.persistence.saved);
   }, [
     copy.persistence.saved,
+    activeProjectId,
     currentIndex,
     currentLayoutState,
     currentPdfPageNo,
@@ -1608,6 +1660,8 @@ export default function App() {
   const resetLocalWorkspaceState = useCallback(() => {
     replacePdfObjectUrl("");
     setWorkspaceId(null);
+    setActiveProjectId(null);
+    setCourseProjects([]);
     setDocumentId(null);
     setDocumentItems([]);
     setThreadId(null);
@@ -1625,15 +1679,22 @@ export default function App() {
   const refreshDocumentItems = useCallback(async (
     nextWorkspaceId = workspaceId,
     activeDocumentId = documentId,
+    nextActiveProjectId = activeProjectId,
   ) => {
     if (!nextWorkspaceId) {
       setDocumentItems([]);
+      setCourseProjects([]);
       return [];
     }
-    const items = await loadWorkspaceDocuments(nextWorkspaceId, activeDocumentId);
+    const [projects, items] = await Promise.all([
+      loadCourseProjects(nextWorkspaceId, nextActiveProjectId),
+      loadWorkspaceDocuments(nextWorkspaceId, activeDocumentId),
+    ]);
+    setCourseProjects(projects);
+    if (nextActiveProjectId) setActiveProjectId(nextActiveProjectId);
     setDocumentItems(items);
     return items;
-  }, [documentId, workspaceId]);
+  }, [activeProjectId, documentId, workspaceId]);
 
   const applyLoadedWorkspace = useCallback((
     loaded: LoadedWorkspace,
@@ -1643,6 +1704,8 @@ export default function App() {
     const restoredCopy = getAppCopy(restoredPreferences.language);
     setUiPreferences(restoredPreferences);
     setWorkspaceId(loaded.workspace.id);
+    setActiveProjectId(loaded.activeProject?.id || loaded.workspace.activeProjectId || null);
+    setCourseProjects(loaded.courseProjects);
     setDocumentId(loaded.document?.id || null);
     setDocumentItems(loaded.documentItems);
     setThreadId(loaded.thread?.id || null);
@@ -1653,12 +1716,14 @@ export default function App() {
         panels?: unknown;
         activeTab?: unknown;
         query?: unknown;
+        activeProjectId?: unknown;
         contexts?: unknown;
         attachments?: unknown;
       };
       if (isPanelVisibility(layout.panels)) setPanels(layout.panels);
       if (isActiveTab(layout.activeTab)) setActiveTab(layout.activeTab);
       if (typeof layout.query === "string") setQuery(layout.query);
+      if (typeof layout.activeProjectId === "string") setActiveProjectId(layout.activeProjectId);
       if (Array.isArray(layout.contexts)) setContexts(layout.contexts as AgentContextItem[]);
       if (Array.isArray(layout.attachments)) setAttachments(layout.attachments as AgentAttachment[]);
     } else {
@@ -1775,6 +1840,7 @@ export default function App() {
     const timer = window.setTimeout(() => {
       void persistOperation(async () => {
         await saveWorkspacePatch(workspaceId, {
+          activeProjectId: activeProjectId || undefined,
           currentPdfPageNumber: currentPdfPageNo,
           currentGeneratedPageIndex: currentIndex,
           layoutState: currentLayoutState(),
@@ -1793,6 +1859,7 @@ export default function App() {
     currentIndex,
     currentLayoutState,
     currentPdfPageNo,
+    activeProjectId,
     documentId,
     isRestoringWorkspace,
     pack.document.page_count,
@@ -1848,12 +1915,14 @@ export default function App() {
             pageCount: pdfPageCount || pack.document.page_count || pack.pages.length,
             currentPdfPageNumber: currentPdfPageNo,
             generatedPageCount,
+            projectId: item.projectId || activeProjectId || undefined,
             isActive: true,
           }
         : { ...item, isActive: false },
     ));
   }, [
     currentPdfPageNo,
+    activeProjectId,
     documentId,
     generatedPageCount,
     pack.document.source_pdf_url,
@@ -2100,13 +2169,15 @@ export default function App() {
     void persistOperation(async () => {
       const saved = await savePdfBlob({
         workspaceId,
+        projectId: activeProjectId,
         file,
         settingsSnapshot: uiPreferences,
         layoutState: currentLayoutState(),
       });
       setWorkspaceId(saved.workspace.id);
+      setActiveProjectId(saved.workspace.activeProjectId || saved.document.projectId || null);
       setDocumentId(saved.document.id);
-      await refreshDocumentItems(saved.workspace.id, saved.document.id);
+      await refreshDocumentItems(saved.workspace.id, saved.document.id, saved.workspace.activeProjectId || saved.document.projectId || null);
       setThreadId(saved.thread.id);
       setPersistedMessages([]);
       setAgentRuntimeKey(`${saved.thread.id}:0:${Date.now()}`);
@@ -2175,13 +2246,15 @@ export default function App() {
         void persistOperation(async () => {
           const saved = await saveImportedPagePack({
             workspaceId,
+            projectId: activeProjectId,
             pack: next,
             settingsSnapshot: uiPreferences,
             layoutState: currentLayoutState(),
           });
           setWorkspaceId(saved.workspace.id);
+          setActiveProjectId(saved.workspace.activeProjectId || saved.document.projectId || null);
           setDocumentId(saved.document.id);
-          await refreshDocumentItems(saved.workspace.id, saved.document.id);
+          await refreshDocumentItems(saved.workspace.id, saved.document.id, saved.workspace.activeProjectId || saved.document.projectId || null);
           setThreadId(saved.thread.id);
           setAgentRuntimeKey(`${saved.thread.id}:0:${Date.now()}`);
           return saved;
@@ -2324,8 +2397,64 @@ export default function App() {
     workspaceId,
   ]);
 
+  const switchProject = useCallback((nextProjectId: string) => {
+    if (!workspaceId || nextProjectId === activeProjectId) return;
+    void persistOperation(async () => {
+      await forceSaveSnapshot();
+      const loaded = await loadWorkspaceProject(workspaceId, nextProjectId);
+      applyLoadedWorkspace(loaded);
+      return loaded;
+    }, copy.persistence.restored).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+  }, [
+    activeProjectId,
+    applyLoadedWorkspace,
+    copy.persistence.failed,
+    copy.persistence.restored,
+    forceSaveSnapshot,
+    persistOperation,
+    workspaceId,
+  ]);
+
+  const createProjectFromDialog = useCallback(() => {
+    const name = courseDraftName.trim();
+    if (!workspaceId || !name) {
+      setCourseDialogOpen(false);
+      setCourseDraftName("");
+      return;
+    }
+    void persistOperation(async () => {
+      await forceSaveSnapshot();
+      const project = await createCourseProject({ workspaceId, name });
+      const loaded = await loadWorkspaceProject(workspaceId, project.id);
+      applyLoadedWorkspace(loaded);
+      setCourseDialogOpen(false);
+      setCourseDraftName("");
+      return project;
+    }, copy.persistence.saved).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+  }, [
+    applyLoadedWorkspace,
+    copy.persistence.failed,
+    copy.persistence.saved,
+    courseDraftName,
+    forceSaveSnapshot,
+    persistOperation,
+    workspaceId,
+  ]);
+
+  const handleActivePdfPageChange = useCallback((pageNumber: number) => {
+    setCurrentPageNo((current) => {
+      const nextPage = Math.min(Math.max(pageNumber, 1), pdfNavigationPageCount);
+      return current === nextPage ? current : nextPage;
+    });
+  }, [pdfNavigationPageCount]);
+
   const movePage = (delta: number) => {
-    setCurrentPageNo((current) => Math.min(Math.max(current + delta, 1), pdfNavigationPageCount));
+    const targetPage = Math.min(Math.max(currentPdfPageNo + delta, 1), pdfNavigationPageCount);
+    if (pdfUrl && pdfScrollViewerRef.current && pdfViewMode === "continuous") {
+      pdfScrollViewerRef.current.scrollToPage(targetPage, "smooth");
+      return;
+    }
+    setCurrentPageNo(targetPage);
   };
 
   const authText =
@@ -2522,52 +2651,136 @@ export default function App() {
         onSummarize={(context) => sendSelectionPrompt(context, "summarize")}
       />
 
+      {courseDialogOpen && (
+        <div className="course-dialog-overlay" role="presentation" onMouseDown={() => setCourseDialogOpen(false)}>
+          <div className="course-dialog" role="dialog" aria-modal="true" aria-label={copy.rail.courseDialogTitle} onMouseDown={(event) => event.stopPropagation()}>
+            <h2>{copy.rail.courseDialogTitle}</h2>
+            <input
+              autoFocus
+              value={courseDraftName}
+              onChange={(event) => setCourseDraftName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") createProjectFromDialog();
+                if (event.key === "Escape") setCourseDialogOpen(false);
+              }}
+              placeholder={copy.rail.courseNamePlaceholder}
+            />
+            <div className="course-dialog-actions">
+              <button type="button" onClick={() => setCourseDialogOpen(false)}>{copy.rail.cancel}</button>
+              <button type="button" disabled={!courseDraftName.trim()} onClick={createProjectFromDialog}>{copy.rail.createCourse}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="workspace" data-pane-count={visiblePaneCount}>
         <PanelGroup orientation="horizontal" className="workspace-panels">
           <Panel className="workspace-panel" hidden={!panels.rail} defaultSize={18} minSize={12}>
             <aside className="page-rail document-rail">
-              <div className="rail-tools">
-                <div className="rail-heading">
+              <div className="rail-top">
+                <div className="rail-header">
                   <div>
-                    <span className="rail-kicker">{copy.rail.currentWorkspace}</span>
-                    <strong>{copy.rail.documents}</strong>
+                    <strong>PagePair</strong>
+                    <span>{activeProject?.name || copy.rail.defaultCourse}</span>
                   </div>
-                  <FileButton label={copy.rail.uploadDocument} accept="application/pdf" onFile={loadPdf}>
-                    <Plus />
-                  </FileButton>
+                  <div className="rail-header-actions">
+                    <button
+                      className="rail-icon-button"
+                      type="button"
+                      disabled={!workspaceId}
+                      onClick={() => setCourseDialogOpen(true)}
+                      title={copy.rail.newCourse}
+                      aria-label={copy.rail.newCourse}
+                    >
+                      <Plus />
+                    </button>
+                    <FileButton label={copy.rail.uploadDocument} accept="application/pdf" onFile={loadPdf}>
+                      <Upload />
+                    </FileButton>
+                  </div>
                 </div>
                 <div className="search-box">
                   <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.rail.searchPlaceholder} />
                 </div>
-                <div className="rail-meta">
-                  <span>{copy.rail.documentCount(sidebarDocuments.length)}</span>
-                  <span>{copy.rail.currentPage(currentPdfPageNo)}</span>
-                </div>
               </div>
-              <div className="document-list">
-                {filteredDocuments.map((item) => (
-                  <button
-                    className={`document-item ${item.isActive ? "active" : ""}`}
-                    key={item.documentId}
-                    type="button"
-                    onClick={() => switchDocument(item.documentId)}
-                  >
-                    <span className="document-icon"><FileText /></span>
-                    <span className="document-copy">
-                      <strong>{item.title}</strong>
-                      <span>
-                        {copy.rail.documentMeta(Math.max(item.pageCount || 1, 1), item.generatedPageCount)}
-                      </span>
-                      <small>{item.fileName}</small>
-                    </span>
-                    <span className={`document-state ${item.status === "missing-file" ? "missing" : ""}`}>
-                      {item.status === "missing-file" ? copy.rail.missingFile : item.isActive ? copy.rail.activeDocument : ""}
-                    </span>
-                  </button>
-                ))}
-                {!filteredDocuments.length && (
-                  <div className="rail-empty">{copy.rail.emptyDocuments}</div>
+              <div className="rail-nav">
+                <section className="rail-section">
+                  <div className="rail-section-label">
+                    <span>{copy.rail.courses}</span>
+                    <small>{sidebarProjects.length}</small>
+                  </div>
+                  {filteredProjects.map((project) => (
+                    <button
+                      className={`course-item ${project.id === currentProjectId ? "active" : ""}`}
+                      key={project.id}
+                      type="button"
+                      onClick={() => switchProject(project.id)}
+                    >
+                      <BookOpen />
+                      <span>{project.name}</span>
+                      <small>{copy.rail.courseDocumentCount(project.documentCount)}</small>
+                    </button>
+                  ))}
+                </section>
+
+                <section className="rail-section">
+                  <div className="rail-section-label">
+                    <span>{copy.rail.documents}</span>
+                    <small>{copy.rail.documentCount(documentsForSidebar.length)}</small>
+                  </div>
+                  <div className="document-list">
+                    {documentsForSidebar.map((item) => (
+                      <button
+                        className={`document-item ${item.isActive ? "active" : ""}`}
+                        key={item.documentId}
+                        type="button"
+                        onClick={() => switchDocument(item.documentId)}
+                      >
+                        <span className="document-dot" />
+                        <span className="document-copy">
+                          <strong>{item.title}</strong>
+                          <span>{copy.rail.documentMeta(Math.max(item.pageCount || 1, 1), item.generatedPageCount)}</span>
+                        </span>
+                        <span className={`document-state ${item.status === "missing-file" ? "missing" : ""}`} />
+                      </button>
+                    ))}
+                    {!documentsForSidebar.length && (
+                      <div className="rail-empty">{normalizedDocumentQuery ? copy.rail.emptyDocuments : copy.rail.emptyCourseDocuments}</div>
+                    )}
+                  </div>
+                </section>
+
+                {!!recentDocuments.length && (
+                  <section className="rail-section">
+                    <div className="rail-section-label">
+                      <span>{copy.rail.recents}</span>
+                    </div>
+                    {recentDocuments.map((item) => (
+                      <button
+                        className="recent-item"
+                        key={item.documentId}
+                        type="button"
+                        onClick={() => switchDocument(item.documentId)}
+                      >
+                        <span>{item.title}</span>
+                      </button>
+                    ))}
+                  </section>
                 )}
+              </div>
+              <div className="rail-footer">
+                <button type="button" onClick={() => openSettings("general")}>
+                  <span>{copy.topbar.openSettings}</span>
+                  <small>{copy.settings.sections.general}</small>
+                </button>
+                <button type="button" onClick={() => openSettings("storage")}>
+                  <span>{copy.settings.sections.storage}</span>
+                  <small>{saveState.kind === "saved" ? copy.persistence.saved : saveState.message || copy.persistence.localDraft}</small>
+                </button>
+                <button type="button" onClick={() => openSettings("account")}>
+                  <span>{copy.settings.sections.account}</span>
+                  <small>{connectionText}</small>
+                </button>
               </div>
             </aside>
           </Panel>
@@ -2577,14 +2790,14 @@ export default function App() {
           <Panel className="workspace-panel" defaultSize={pdfOnly ? 100 : 30} minSize={24}>
             <section className="pdf-pane">
               <PaneToolbar
-                title={pdfUrl ? copy.common.sourcePdfPage(page.page_no) : copy.pdf.samplePdfPage}
+                title={pdfUrl ? copy.common.sourcePdfPage(currentPdfPageNo) : copy.pdf.samplePdfPage}
                 right={
                   <div className="toolbar-actions">
-                    <IconButton label={copy.pdf.previousPage} onClick={() => movePage(-1)}>
+                    <IconButton label={copy.pdf.previousPage} onClick={() => movePage(-1)} disabled={currentPdfPageNo <= 1}>
                       <ChevronLeft />
                     </IconButton>
                     <output>{currentPdfPageNo} / {pdfNavigationPageCount}</output>
-                    <IconButton label={copy.pdf.nextPage} onClick={() => movePage(1)}>
+                    <IconButton label={copy.pdf.nextPage} onClick={() => movePage(1)} disabled={currentPdfPageNo >= pdfNavigationPageCount}>
                       <ChevronRight />
                     </IconButton>
                     {isBrowserFullscreen && (
@@ -2597,16 +2810,20 @@ export default function App() {
               />
               <div className={`pdf-frame ${pdfUrl ? "has-pdf" : ""}`}>
                 {pdfUrl ? (
-                  <PdfPageRenderer
+                  <PdfScrollViewer
+                    ref={pdfScrollViewerRef}
                     documentId={pack.document.id}
                     documentTitle={pack.document.title}
                     fallbackSrc={pdfViewerSrc}
                     pageNumber={currentPdfPageNo}
                     url={pdfUrl}
+                    viewMode={pdfViewMode}
                     pdfContextFullPageLimit={uiPreferences.pdfContextFullPageLimit}
                     pdfContextEdgePageCount={uiPreferences.pdfContextEdgePageCount}
                     onDocumentReady={handlePdfDocumentReady}
+                    onActivePageChange={handleActivePdfPageChange}
                     onPdfContextReady={handlePdfContextReady}
+                    onViewerScroll={clearSelection}
                   />
                 ) : (
                   <SlidePreview page={page} />
@@ -2873,50 +3090,111 @@ function SelectionToolbar(props: {
   );
 }
 
-function PdfPageRenderer({
-  documentId,
-  documentTitle,
-  fallbackSrc,
-  pageNumber,
-  url,
-  pdfContextFullPageLimit,
-  pdfContextEdgePageCount,
-  onDocumentReady,
-  onPdfContextReady,
-}: {
+type PdfPageRenderStatus = "loading" | "ready" | "empty-text" | "error";
+
+type PdfScrollViewerProps = {
   documentId: string;
   documentTitle: string;
   fallbackSrc: string;
   pageNumber: number;
   url: string;
+  viewMode: PdfViewMode;
   pdfContextFullPageLimit: number;
   pdfContextEdgePageCount: number;
   onDocumentReady: (pageCount: number) => void;
+  onActivePageChange: (pageNumber: number) => void;
   onPdfContextReady: (context: PdfContextPayload) => void;
-}) {
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const pageRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const textLayerRef = useRef<HTMLDivElement>(null);
-  const viewportWidth = useElementWidth(viewportRef);
+  onViewerScroll?: () => void;
+};
+
+const pdfIntersectionThresholds = [0, 0.25, 0.5, 0.75, 1];
+
+const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(function PdfScrollViewer({
+  documentId,
+  documentTitle,
+  fallbackSrc,
+  pageNumber,
+  url,
+  viewMode,
+  pdfContextFullPageLimit,
+  pdfContextEdgePageCount,
+  onDocumentReady,
+  onActivePageChange,
+  onPdfContextReady,
+  onViewerScroll,
+}, ref) {
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const pageElementsRef = useRef(new Map<number, HTMLDivElement>());
+  const visiblePagesRef = useRef(new Map<number, { ratio: number; centerDistance: number }>());
+  const activePageTimerRef = useRef<number | null>(null);
+  const lastActivePageRef = useRef(pageNumber);
+  const restoredUrlRef = useRef("");
+  const viewportWidth = useElementWidth(scrollContainerRef);
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [documentError, setDocumentError] = useState("");
-  const [pageStatus, setPageStatus] = useState<"loading" | "ready" | "empty-text" | "error">("loading");
-  const [pageError, setPageError] = useState("");
-  const [viewportMeta, setViewportMeta] = useState({
-    width: 0,
-    height: 0,
-    scale: 1,
-    rotation: 0,
-    pageNumber,
-  });
+  const [renderWindowCenter, setRenderWindowCenter] = useState(pageNumber);
+  const pageCount = pdfDocument?.numPages || 0;
+  const safePageNumber = Math.min(Math.max(pageNumber, 1), Math.max(pageCount, 1));
+  const pageNumbers = viewMode === "single-page"
+    ? [safePageNumber]
+    : Array.from({ length: pageCount }, (_, index) => index + 1);
+
+  const scheduleActivePage = useCallback((nextPage: number) => {
+    if (lastActivePageRef.current === nextPage) return;
+    if (activePageTimerRef.current) window.clearTimeout(activePageTimerRef.current);
+    activePageTimerRef.current = window.setTimeout(() => {
+      lastActivePageRef.current = nextPage;
+      setRenderWindowCenter(nextPage);
+      onActivePageChange(nextPage);
+    }, 130);
+  }, [onActivePageChange]);
+
+  const chooseActivePage = useCallback(() => {
+    const candidates = Array.from(visiblePagesRef.current.entries())
+      .map(([pageNo, entry]) => ({ pageNo, ...entry }))
+      .filter((entry) => entry.ratio > 0.01);
+    if (!candidates.length) return;
+    candidates.sort((left, right) => {
+      const ratioDelta = right.ratio - left.ratio;
+      if (Math.abs(ratioDelta) > 0.08) return ratioDelta;
+      return left.centerDistance - right.centerDistance;
+    });
+    scheduleActivePage(candidates[0].pageNo);
+  }, [scheduleActivePage]);
+
+  const scrollToPage = useCallback((targetPage: number, behavior: ScrollBehavior = "smooth") => {
+    const pageNo = Math.min(Math.max(targetPage, 1), Math.max(pageCount, 1));
+    const root = scrollContainerRef.current;
+    const pageElement = pageElementsRef.current.get(pageNo);
+    setRenderWindowCenter(pageNo);
+    if (!root || !pageElement) {
+      onActivePageChange(pageNo);
+      return;
+    }
+    const rootRect = root.getBoundingClientRect();
+    const pageRect = pageElement.getBoundingClientRect();
+    const top = Math.max(0, root.scrollTop + pageRect.top - rootRect.top - 14);
+    root.scrollTo({ top, behavior });
+  }, [onActivePageChange, pageCount]);
+
+  useImperativeHandle(ref, () => ({ scrollToPage }), [scrollToPage]);
+
+  const registerPageElement = useCallback((pageNo: number) => (node: HTMLDivElement | null) => {
+    if (node) {
+      pageElementsRef.current.set(pageNo, node);
+    } else {
+      pageElementsRef.current.delete(pageNo);
+      visiblePagesRef.current.delete(pageNo);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     setPdfDocument(null);
     setDocumentError("");
-    setPageError("");
-    setPageStatus("loading");
+    visiblePagesRef.current.clear();
+    pageElementsRef.current.clear();
+    restoredUrlRef.current = "";
     const pdfWorker = PDFWorker.create({ port: new PdfJsWorker() });
     const loadingTask = getDocument({ url, worker: pdfWorker });
 
@@ -2939,17 +3217,182 @@ function PdfPageRenderer({
       .catch((error) => {
         if (cancelled) return;
         setDocumentError((error as Error).message || "PDF.js 无法加载该 PDF");
-        setPageStatus("error");
       });
 
     return () => {
       cancelled = true;
+      if (activePageTimerRef.current) window.clearTimeout(activePageTimerRef.current);
       void loadingTask.destroy().catch(() => undefined);
     };
   }, [documentId, documentTitle, onDocumentReady, onPdfContextReady, pdfContextEdgePageCount, pdfContextFullPageLimit, url]);
 
   useEffect(() => {
-    if (!pdfDocument || !canvasRef.current || !textLayerRef.current) return undefined;
+    lastActivePageRef.current = pageNumber;
+    setRenderWindowCenter(pageNumber);
+  }, [pageNumber]);
+
+  useEffect(() => {
+    if (!pdfDocument || !scrollContainerRef.current || viewMode !== "continuous") return undefined;
+    const observer = new IntersectionObserver((entries) => {
+      const rootRect = scrollContainerRef.current?.getBoundingClientRect();
+      for (const entry of entries) {
+        const element = entry.target as HTMLElement;
+        const pageNo = Number(element.dataset.pageContainerNumber || "");
+        if (!Number.isFinite(pageNo)) continue;
+        if (!entry.isIntersecting) {
+          visiblePagesRef.current.delete(pageNo);
+          continue;
+        }
+        const rootTop = entry.rootBounds?.top ?? rootRect?.top ?? 0;
+        const rootHeight = entry.rootBounds?.height ?? rootRect?.height ?? 0;
+        const rootCenter = rootTop + rootHeight / 2;
+        const pageCenter = entry.boundingClientRect.top + entry.boundingClientRect.height / 2;
+        visiblePagesRef.current.set(pageNo, {
+          ratio: entry.intersectionRatio,
+          centerDistance: Math.abs(pageCenter - rootCenter),
+        });
+      }
+      chooseActivePage();
+    }, {
+      root: scrollContainerRef.current,
+      threshold: pdfIntersectionThresholds,
+    });
+
+    const observedElements = Array.from(pageElementsRef.current.values());
+    observedElements.forEach((element) => observer.observe(element));
+    return () => observer.disconnect();
+  }, [chooseActivePage, pdfDocument, pageCount, viewMode]);
+
+  useEffect(() => {
+    if (!pdfDocument || !pageCount || !viewportWidth || restoredUrlRef.current === url) return undefined;
+    restoredUrlRef.current = url;
+    const targetPage = Math.min(Math.max(pageNumber, 1), pageCount);
+    const firstTimer = window.setTimeout(() => scrollToPage(targetPage, "auto"), 80);
+    const secondTimer = window.setTimeout(() => scrollToPage(targetPage, "auto"), 320);
+    return () => {
+      window.clearTimeout(firstTimer);
+      window.clearTimeout(secondTimer);
+    };
+  }, [pageCount, pageNumber, pdfDocument, scrollToPage, url, viewportWidth]);
+
+  const handleKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.defaultPrevented) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+    if (event.key === "PageDown") {
+      event.preventDefault();
+      scrollToPage(Math.min(safePageNumber + 1, Math.max(pageCount, 1)), "smooth");
+    } else if (event.key === "PageUp") {
+      event.preventDefault();
+      scrollToPage(Math.max(safePageNumber - 1, 1), "smooth");
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      scrollToPage(1, "smooth");
+    } else if (event.key === "End") {
+      event.preventDefault();
+      scrollToPage(Math.max(pageCount, 1), "smooth");
+    }
+  }, [pageCount, safePageNumber, scrollToPage]);
+
+  const handleScroll = useCallback(() => {
+    onViewerScroll?.();
+  }, [onViewerScroll]);
+
+  if (documentError) {
+    return (
+      <div className="pdf-native-fallback">
+        <iframe title="PDF 预览 fallback" src={fallbackSrc} />
+        <div className="pdf-layer-note error">PDF.js 渲染失败，已保留原生预览 fallback。{documentError}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`pdf-js-viewer pdf-scroll-viewer ${viewMode === "single-page" ? "single-page" : "continuous"}`}
+      ref={scrollContainerRef}
+      aria-label={`${documentTitle} PDF 阅读器`}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      onScroll={handleScroll}
+    >
+      {!pdfDocument && <div className="pdf-layer-note">正在加载 PDF...</div>}
+      {pdfDocument && (
+        <div className="pdf-page-stack" role="list" aria-label={`${documentTitle} PDF 页面`}>
+          {pageNumbers.map((pageNo) => {
+            const shouldRenderPage = viewMode === "single-page" || Math.abs(pageNo - renderWindowCenter) <= 2;
+            return (
+              <div
+                key={pageNo}
+                ref={registerPageElement(pageNo)}
+                className={`pdf-page-shell ${pageNo === safePageNumber ? "active" : ""}`}
+                data-page-container-number={pageNo}
+                role="listitem"
+              >
+                <div className="pdf-page-label">PDF p.{pageNo}</div>
+                {shouldRenderPage ? (
+                  <PdfPageLayer
+                    pdfDocument={pdfDocument}
+                    pageNumber={pageNo}
+                    viewportWidth={viewportWidth}
+                  />
+                ) : (
+                  <PdfPagePlaceholder viewportWidth={viewportWidth} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+});
+
+function PdfPagePlaceholder({ viewportWidth }: { viewportWidth: number }) {
+  const estimatedWidth = Math.min(Math.max((viewportWidth || 760) - 56, 280), 980);
+  return (
+    <div
+      className="pdf-page-placeholder"
+      aria-hidden="true"
+      style={{
+        width: `${estimatedWidth}px`,
+        aspectRatio: "8.5 / 11",
+      }}
+    />
+  );
+}
+
+function PdfPageLayer({
+  pdfDocument,
+  pageNumber,
+  viewportWidth,
+}: {
+  pdfDocument: PDFDocumentProxy;
+  pageNumber: number;
+  viewportWidth: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textLayerRef = useRef<HTMLDivElement>(null);
+  const [pageStatus, setPageStatus] = useState<PdfPageRenderStatus>("loading");
+  const [pageError, setPageError] = useState("");
+  const estimatedWidth = Math.min(Math.max((viewportWidth || 760) - 56, 280), 980);
+  const [viewportMeta, setViewportMeta] = useState({
+    width: estimatedWidth,
+    height: 0,
+    scale: 1,
+    rotation: 0,
+    pageNumber,
+  });
+
+  useEffect(() => {
+    setViewportMeta((current) => ({
+      ...current,
+      width: current.height ? current.width : estimatedWidth,
+    }));
+  }, [estimatedWidth]);
+
+  useEffect(() => {
+    if (!canvasRef.current || !textLayerRef.current) return undefined;
 
     let cancelled = false;
     let renderTask: RenderTask | null = null;
@@ -2967,7 +3410,7 @@ function PdfPageRenderer({
       if (cancelled) return;
 
       const baseViewport = pdfPage.getViewport({ scale: 1 });
-      const availableWidth = Math.max((viewportWidth || 760) - 34, 280);
+      const availableWidth = Math.max((viewportWidth || 760) - 56, 280);
       const scale = Math.min(2.2, Math.max(0.45, availableWidth / baseViewport.width));
       const viewport = pdfPage.getViewport({ scale });
       const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
@@ -3029,26 +3472,17 @@ function PdfPageRenderer({
     };
   }, [pageNumber, pdfDocument, viewportWidth]);
 
-  if (documentError) {
-    return (
-      <div className="pdf-native-fallback">
-        <iframe title="PDF 预览 fallback" src={fallbackSrc} />
-        <div className="pdf-layer-note error">PDF.js 渲染失败，已保留原生预览 fallback。{documentError}</div>
-      </div>
-    );
-  }
-
   return (
-    <div className="pdf-js-viewer" ref={viewportRef} aria-label={`${documentTitle} 第 ${pageNumber} 页`}>
+    <>
       <div
         className="pdf-page-layered"
-        ref={pageRef}
         data-page-number={viewportMeta.pageNumber}
         data-viewport-rotation={viewportMeta.rotation}
         data-viewport-scale={viewportMeta.scale}
         style={{
           width: viewportMeta.width ? `${viewportMeta.width}px` : undefined,
           height: viewportMeta.height ? `${viewportMeta.height}px` : undefined,
+          aspectRatio: viewportMeta.height ? undefined : "8.5 / 11",
         }}
       >
         <canvas ref={canvasRef} className="pdf-visual-layer" />
@@ -3059,7 +3493,7 @@ function PdfPageRenderer({
         <div className="pdf-layer-note">当前 PDF 页没有可选文本层。可以继续查看页面，OCR/text extraction 接口预留后续接入。</div>
       )}
       {pageStatus === "error" && <div className="pdf-layer-note error">{pageError || "PDF 当前页渲染失败"}</div>}
-    </div>
+    </>
   );
 }
 
@@ -3491,13 +3925,26 @@ function StructurePanel({ page }: { page: PageData }) {
   );
 }
 
-function IconButton({ label, active, onClick, children }: { label: string; active?: boolean; onClick?: () => void; children: ReactNode }) {
+function IconButton({
+  label,
+  active,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+  children: ReactNode;
+}) {
   return (
     <button
       className={`mini-button ${active ? "active" : ""}`}
       type="button"
       aria-label={label}
       aria-pressed={active === undefined ? undefined : active}
+      disabled={disabled}
       title={label}
       onClick={onClick}
     >

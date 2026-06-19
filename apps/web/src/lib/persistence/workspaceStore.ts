@@ -7,6 +7,7 @@ import {
   type ChatMessageRecord,
   type ChatMessageStatus,
   type ChatThreadRecord,
+  type CourseProjectRecord,
   type DocumentSidebarItem,
   type DocumentRecord,
   type ExportedWorkspace,
@@ -45,7 +46,14 @@ type LayoutPatch = PersistedJson & {
   panels?: PersistedJson;
   contexts?: unknown[];
   attachments?: unknown[];
+  activeProjectId?: string;
 };
+
+const defaultCourseProjectName = "默认课程";
+
+function defaultCourseProjectId(workspaceId: string) {
+  return `course_${workspaceId}_default`;
+}
 
 export function createRecordId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -97,9 +105,101 @@ export async function loadLastWorkspace() {
   return loadWorkspace(workspaceId);
 }
 
+async function ensureDefaultCourseProject(workspace: WorkspaceRecord) {
+  const projectId = workspace.activeProjectId || defaultCourseProjectId(workspace.id);
+  const now = Date.now();
+  const existing = await pagePairDb.courseProjects.get(projectId);
+  const documents = await pagePairDb.documents.where("workspaceId").equals(workspace.id).toArray();
+  if (!existing) {
+    const activeDocument = documents.find((document) => document.id === workspace.activeDocumentId) || documents[0];
+    const project: CourseProjectRecord = {
+      id: projectId,
+      workspaceId: workspace.id,
+      name: defaultCourseProjectName,
+      description: "",
+      color: "clay",
+      icon: "book-open",
+      createdAt: workspace.createdAt || now,
+      updatedAt: workspace.updatedAt || now,
+      lastOpenedAt: workspace.lastOpenedAt || now,
+      documentCount: documents.length,
+      activeDocumentId: activeDocument?.id,
+    };
+    await pagePairDb.courseProjects.put(project);
+  }
+  for (const document of documents.filter((item) => !item.projectId)) {
+    await pagePairDb.documents.update(document.id, {
+      projectId,
+      lastOpenedAt: document.lastOpenedAt || document.updatedAt || now,
+    });
+  }
+  if (!workspace.activeProjectId) {
+    await pagePairDb.workspaces.update(workspace.id, {
+      activeProjectId: projectId,
+      updatedAt: now,
+      version: persistenceSchemaVersion,
+    });
+  }
+  return projectId;
+}
+
+export async function loadCourseProjects(workspaceId: string, activeProjectId?: string | null) {
+  const workspace = await pagePairDb.workspaces.get(workspaceId);
+  if (!workspace) return [];
+  const ensuredActiveProjectId = activeProjectId || workspace.activeProjectId || await ensureDefaultCourseProject(workspace);
+  const [projects, documents] = await Promise.all([
+    pagePairDb.courseProjects.where("workspaceId").equals(workspaceId).toArray(),
+    pagePairDb.documents.where("workspaceId").equals(workspaceId).toArray(),
+  ]);
+  const documentCounts = documents.reduce((counts, document) => {
+    const projectId = document.projectId || ensuredActiveProjectId;
+    counts.set(projectId, (counts.get(projectId) || 0) + 1);
+    return counts;
+  }, new Map<string, number>());
+
+  return projects
+    .slice()
+    .sort((left, right) => (right.lastOpenedAt || right.updatedAt) - (left.lastOpenedAt || left.updatedAt))
+    .map((project) => ({
+      ...project,
+      documentCount: documentCounts.get(project.id) || 0,
+    }));
+}
+
+export async function createCourseProject(input: {
+  workspaceId: string;
+  name: string;
+  description?: string;
+}) {
+  const now = Date.now();
+  const name = input.name.trim() || defaultCourseProjectName;
+  const project: CourseProjectRecord = {
+    id: createRecordId("course"),
+    workspaceId: input.workspaceId,
+    name,
+    description: input.description || "",
+    color: "clay",
+    icon: "book-open",
+    createdAt: now,
+    updatedAt: now,
+    lastOpenedAt: now,
+    documentCount: 0,
+  };
+  await pagePairDb.transaction("rw", pagePairDb.courseProjects, pagePairDb.workspaces, async () => {
+    await pagePairDb.courseProjects.put(project);
+    await pagePairDb.workspaces.update(input.workspaceId, {
+      activeProjectId: project.id,
+      updatedAt: now,
+      lastOpenedAt: now,
+    });
+  });
+  return project;
+}
+
 export async function loadWorkspaceDocuments(
   workspaceId: string,
   activeDocumentId?: string | null,
+  projectId?: string | null,
 ): Promise<DocumentSidebarItem[]> {
   const [documents, generatedPages] = await Promise.all([
     pagePairDb.documents.where("workspaceId").equals(workspaceId).toArray(),
@@ -114,11 +214,13 @@ export async function loadWorkspaceDocuments(
 
   return documents
     .slice()
+    .filter((document) => (projectId ? document.projectId === projectId : true))
     .sort((left, right) => right.updatedAt - left.updatedAt)
     .map((document) => ({
       id: document.id,
       workspaceId: document.workspaceId,
       documentId: document.id,
+      projectId: document.projectId,
       title: document.title,
       fileName: document.fileName,
       mimeType: document.mimeType,
@@ -128,6 +230,8 @@ export async function loadWorkspaceDocuments(
       status: document.status,
       updatedAt: document.updatedAt,
       uploadedAt: document.uploadedAt,
+      lastOpenedAt: document.lastOpenedAt,
+      isStarred: document.isStarred,
       isActive: document.id === activeDocumentId,
     }));
 }
@@ -139,12 +243,26 @@ export async function loadWorkspace(workspaceId: string): Promise<LoadedWorkspac
     return null;
   }
 
-  let document = workspace.activeDocumentId
-    ? (await pagePairDb.documents.get(workspace.activeDocumentId)) || null
+  const activeProjectId = workspace.activeProjectId || await ensureDefaultCourseProject(workspace);
+  const courseProjects = await loadCourseProjects(workspace.id, activeProjectId);
+  const activeProject = courseProjects.find((project) => project.id === activeProjectId) || courseProjects[0] || null;
+  let document = activeProject?.activeDocumentId
+    ? (await pagePairDb.documents.get(activeProject.activeDocumentId)) || null
     : null;
+  if (document && activeProject && document.projectId !== activeProject.id) document = null;
+  if (!document && workspace.activeDocumentId) {
+    const candidate = await pagePairDb.documents.get(workspace.activeDocumentId);
+    document = candidate && (!activeProject || candidate.projectId === activeProject.id) ? candidate : null;
+  }
   if (!document) {
     const documents = await pagePairDb.documents.where("workspaceId").equals(workspace.id).sortBy("updatedAt");
-    document = documents.at(-1) || null;
+    const projectDocuments = activeProject ? documents.filter((item) => item.projectId === activeProject.id) : documents;
+    document = projectDocuments.at(-1) || documents.at(-1) || null;
+  }
+  if (document && !document.projectId) {
+    const projectId = activeProject?.id || activeProjectId;
+    await pagePairDb.documents.update(document.id, { projectId });
+    document = { ...document, projectId };
   }
   const pdfBlob = document?.pdfBlobId
     ? (await pagePairDb.fileBlobs.get(document.pdfBlobId)) || null
@@ -174,6 +292,7 @@ export async function loadWorkspace(workspaceId: string): Promise<LoadedWorkspac
   const documentItems = await loadWorkspaceDocuments(workspace.id, document?.id || workspace.activeDocumentId);
 
   await pagePairDb.workspaces.update(workspace.id, {
+    activeProjectId: activeProject?.id || activeProjectId,
     activeDocumentId: document?.id || workspace.activeDocumentId,
     activeThreadId: thread?.id || workspace.activeThreadId,
     lastOpenedAt: Date.now(),
@@ -183,9 +302,12 @@ export async function loadWorkspace(workspaceId: string): Promise<LoadedWorkspac
   return {
     workspace: {
       ...workspace,
+      activeProjectId: activeProject?.id || activeProjectId,
       activeDocumentId: document?.id || workspace.activeDocumentId,
       activeThreadId: thread?.id || workspace.activeThreadId,
     },
+    courseProjects,
+    activeProject,
     document,
     documentItems,
     pdfBlob,
@@ -209,6 +331,9 @@ export async function loadWorkspaceDocument(
   if (!document || document.workspaceId !== workspaceId) {
     throw new PersistenceError("not_found", "Document not found");
   }
+  const projectId = document.projectId || workspace.activeProjectId || await ensureDefaultCourseProject(workspace);
+  if (!document.projectId) await pagePairDb.documents.update(document.id, { projectId });
+  const project = (await pagePairDb.courseProjects.get(projectId)) || null;
 
   const pdfBlob = document.pdfBlobId
     ? (await pagePairDb.fileBlobs.get(document.pdfBlobId)) || null
@@ -238,24 +363,41 @@ export async function loadWorkspaceDocument(
   const now = Date.now();
   const nextWorkspace: WorkspaceRecord = {
     ...workspace,
+    activeProjectId: projectId,
     activeDocumentId: document.id,
     activeThreadId: thread.id,
     currentPdfPageNumber: document.currentPdfPageNumber || 1,
     updatedAt: now,
     lastOpenedAt: now,
   };
-  await pagePairDb.workspaces.update(workspace.id, {
-    activeDocumentId: document.id,
-    activeThreadId: thread.id,
-    currentPdfPageNumber: document.currentPdfPageNumber || 1,
-    updatedAt: now,
-    lastOpenedAt: now,
+  await pagePairDb.transaction("rw", pagePairDb.workspaces, pagePairDb.documents, pagePairDb.courseProjects, async () => {
+    await pagePairDb.documents.update(document.id, {
+      projectId,
+      lastOpenedAt: now,
+      updatedAt: now,
+    });
+    await pagePairDb.courseProjects.update(projectId, {
+      activeDocumentId: document.id,
+      lastOpenedAt: now,
+      updatedAt: now,
+    });
+    await pagePairDb.workspaces.update(workspace.id, {
+      activeProjectId: projectId,
+      activeDocumentId: document.id,
+      activeThreadId: thread.id,
+      currentPdfPageNumber: document.currentPdfPageNumber || 1,
+      updatedAt: now,
+      lastOpenedAt: now,
+    });
   });
   setLastWorkspaceId(workspace.id);
+  const courseProjects = await loadCourseProjects(workspace.id, projectId);
 
   return {
     workspace: nextWorkspace,
-    document,
+    courseProjects,
+    activeProject: courseProjects.find((item) => item.id === projectId) || project,
+    document: { ...document, projectId, lastOpenedAt: now, updatedAt: now },
     documentItems: await loadWorkspaceDocuments(workspace.id, document.id),
     pdfBlob,
     generatedPages,
@@ -263,6 +405,66 @@ export async function loadWorkspaceDocument(
     messages: messages.sort((left, right) => left.createdAt - right.createdAt),
     selectedContext,
     settings,
+  };
+}
+
+export async function loadWorkspaceProject(
+  workspaceId: string,
+  projectId: string,
+): Promise<LoadedWorkspace> {
+  const [workspace, project] = await Promise.all([
+    pagePairDb.workspaces.get(workspaceId),
+    pagePairDb.courseProjects.get(projectId),
+  ]);
+  if (!workspace) throw new PersistenceError("not_found", "Workspace not found");
+  if (!project || project.workspaceId !== workspaceId) {
+    throw new PersistenceError("not_found", "Course project not found");
+  }
+  const documents = await pagePairDb.documents.where("projectId").equals(projectId).sortBy("updatedAt");
+  const activeDocument =
+    (project.activeDocumentId ? documents.find((document) => document.id === project.activeDocumentId) : undefined) ||
+    documents.slice().sort((left, right) => (right.lastOpenedAt || right.updatedAt) - (left.lastOpenedAt || left.updatedAt))[0];
+  if (activeDocument) return loadWorkspaceDocument(workspaceId, activeDocument.id);
+
+  const now = Date.now();
+  await pagePairDb.transaction("rw", pagePairDb.workspaces, pagePairDb.courseProjects, async () => {
+    await pagePairDb.courseProjects.update(projectId, {
+      lastOpenedAt: now,
+      updatedAt: now,
+    });
+    await pagePairDb.workspaces.update(workspaceId, {
+      activeProjectId: projectId,
+      activeDocumentId: undefined,
+      activeThreadId: undefined,
+      updatedAt: now,
+      lastOpenedAt: now,
+    });
+  });
+  setLastWorkspaceId(workspace.id);
+  const [courseProjects, settings] = await Promise.all([
+    loadCourseProjects(workspaceId, projectId),
+    loadSettings(workspaceId),
+  ]);
+
+  return {
+    workspace: {
+      ...workspace,
+      activeProjectId: projectId,
+      activeDocumentId: undefined,
+      activeThreadId: undefined,
+      updatedAt: now,
+      lastOpenedAt: now,
+    },
+    courseProjects,
+    activeProject: courseProjects.find((item) => item.id === projectId) || { ...project, lastOpenedAt: now, updatedAt: now },
+    document: null,
+    documentItems: await loadWorkspaceDocuments(workspaceId, null),
+    pdfBlob: null,
+    generatedPages: [],
+    thread: null,
+    messages: [],
+    selectedContext: null,
+    settings: settings || null,
   };
 }
 
@@ -288,6 +490,7 @@ export async function ensureWorkspace(input: {
 
 export async function savePdfBlob(input: {
   workspaceId?: string | null;
+  projectId?: string | null;
   file: File;
   settingsSnapshot?: UiPreferences;
   layoutState?: LayoutPatch;
@@ -300,6 +503,7 @@ export async function savePdfBlob(input: {
     settingsSnapshot: input.settingsSnapshot,
     layoutState: input.layoutState,
   });
+  const projectId = input.projectId || workspace.activeProjectId || await ensureDefaultCourseProject(workspace);
   const documentId = createRecordId("doc");
   const blobId = createRecordId("blob");
   const threadId = createRecordId("thread");
@@ -307,6 +511,7 @@ export async function savePdfBlob(input: {
   const document: DocumentRecord = {
     id: documentId,
     workspaceId: workspace.id,
+    projectId,
     title,
     fileName: input.file.name || `${title}.pdf`,
     mimeType: input.file.type || "application/pdf",
@@ -315,6 +520,7 @@ export async function savePdfBlob(input: {
     pageCount: 0,
     uploadedAt: now,
     updatedAt: now,
+    lastOpenedAt: now,
     pdfBlobId: blobId,
     currentPdfPageNumber: 1,
     status: "ready",
@@ -338,13 +544,28 @@ export async function savePdfBlob(input: {
     updatedAt: now,
   };
 
-  await pagePairDb.transaction("rw", pagePairDb.workspaces, pagePairDb.documents, pagePairDb.fileBlobs, pagePairDb.chatThreads, pagePairDb.selectedContexts, async () => {
+  const project = await pagePairDb.courseProjects.get(projectId);
+  await pagePairDb.transaction("rw", [
+    pagePairDb.workspaces,
+    pagePairDb.courseProjects,
+    pagePairDb.documents,
+    pagePairDb.fileBlobs,
+    pagePairDb.chatThreads,
+    pagePairDb.selectedContexts,
+  ], async () => {
     await pagePairDb.documents.put(document);
     await pagePairDb.fileBlobs.put(fileBlob);
     await pagePairDb.chatThreads.put(thread);
     await pagePairDb.selectedContexts.where("workspaceId").equals(workspace.id).delete();
+    await pagePairDb.courseProjects.update(projectId, {
+      activeDocumentId: document.id,
+      documentCount: (project?.documentCount || 0) + 1,
+      updatedAt: now,
+      lastOpenedAt: now,
+    });
     await pagePairDb.workspaces.update(workspace.id, {
       title,
+      activeProjectId: projectId,
       activeDocumentId: document.id,
       activeThreadId: thread.id,
       currentGeneratedPageIndex: 0,
@@ -356,7 +577,7 @@ export async function savePdfBlob(input: {
     });
   });
   setLastWorkspaceId(workspace.id);
-  return { workspace: { ...workspace, activeDocumentId: document.id, activeThreadId: thread.id }, document, fileBlob, thread };
+  return { workspace: { ...workspace, activeProjectId: projectId, activeDocumentId: document.id, activeThreadId: thread.id }, document, fileBlob, thread };
 }
 
 export async function loadPdfBlob(blobId: string) {
@@ -411,6 +632,7 @@ export async function saveGeneratedPagesFromPack(input: {
 
 export async function saveImportedPagePack(input: {
   workspaceId?: string | null;
+  projectId?: string | null;
   pack: PagePackLike;
   settingsSnapshot?: UiPreferences;
   layoutState?: LayoutPatch;
@@ -423,11 +645,13 @@ export async function saveImportedPagePack(input: {
     settingsSnapshot: input.settingsSnapshot,
     layoutState: input.layoutState,
   });
+  const projectId = input.projectId || workspace.activeProjectId || await ensureDefaultCourseProject(workspace);
   const documentId = createRecordId("doc");
   const threadId = createRecordId("thread");
   const document: DocumentRecord = {
     id: documentId,
     workspaceId: workspace.id,
+    projectId,
     title,
     fileName: input.pack.document.source_pdf_url || `${title}.json`,
     mimeType: "application/json",
@@ -435,6 +659,7 @@ export async function saveImportedPagePack(input: {
     pageCount: input.pack.document.page_count || input.pack.pages.length,
     uploadedAt: now,
     updatedAt: now,
+    lastOpenedAt: now,
     currentPdfPageNumber: input.pack.pages[0]?.page_no || 1,
     status: "ready",
   };
@@ -447,12 +672,27 @@ export async function saveImportedPagePack(input: {
     updatedAt: now,
   };
 
-  await pagePairDb.transaction("rw", pagePairDb.workspaces, pagePairDb.documents, pagePairDb.generatedPages, pagePairDb.chatThreads, pagePairDb.selectedContexts, async () => {
+  const project = await pagePairDb.courseProjects.get(projectId);
+  await pagePairDb.transaction("rw", [
+    pagePairDb.workspaces,
+    pagePairDb.courseProjects,
+    pagePairDb.documents,
+    pagePairDb.generatedPages,
+    pagePairDb.chatThreads,
+    pagePairDb.selectedContexts,
+  ], async () => {
     await pagePairDb.documents.put(document);
     await pagePairDb.chatThreads.put(thread);
     await pagePairDb.selectedContexts.where("workspaceId").equals(workspace.id).delete();
+    await pagePairDb.courseProjects.update(projectId, {
+      activeDocumentId: document.id,
+      documentCount: (project?.documentCount || 0) + 1,
+      updatedAt: now,
+      lastOpenedAt: now,
+    });
     await pagePairDb.workspaces.update(workspace.id, {
       title,
+      activeProjectId: projectId,
       activeDocumentId: document.id,
       activeThreadId: thread.id,
       currentGeneratedPageIndex: 0,
@@ -465,7 +705,7 @@ export async function saveImportedPagePack(input: {
   });
   await saveGeneratedPagesFromPack({ workspaceId: workspace.id, documentId, pack: input.pack });
   setLastWorkspaceId(workspace.id);
-  return { workspace: { ...workspace, activeDocumentId: document.id, activeThreadId: thread.id }, document, thread };
+  return { workspace: { ...workspace, activeProjectId: projectId, activeDocumentId: document.id, activeThreadId: thread.id }, document, thread };
 }
 
 export async function saveGeneratedPage(record: GeneratedPageRecord) {
@@ -666,6 +906,7 @@ export async function repairWorkspaceStorage(workspaceId?: string | null): Promi
     "rw",
     [
       pagePairDb.workspaces,
+      pagePairDb.courseProjects,
       pagePairDb.documents,
       pagePairDb.fileBlobs,
       pagePairDb.generatedPages,
@@ -709,6 +950,7 @@ export async function clearWorkspace(workspaceId: string) {
     "rw",
     [
       pagePairDb.workspaces,
+      pagePairDb.courseProjects,
       pagePairDb.documents,
       pagePairDb.fileBlobs,
       pagePairDb.generatedPages,
@@ -720,6 +962,7 @@ export async function clearWorkspace(workspaceId: string) {
     async () => {
       await Promise.all([
         pagePairDb.documents.where("workspaceId").equals(workspaceId).delete(),
+        pagePairDb.courseProjects.where("workspaceId").equals(workspaceId).delete(),
         pagePairDb.fileBlobs.where("workspaceId").equals(workspaceId).delete(),
         pagePairDb.generatedPages.where("workspaceId").equals(workspaceId).delete(),
         pagePairDb.chatThreads.where("workspaceId").equals(workspaceId).delete(),
@@ -736,7 +979,8 @@ export async function clearWorkspace(workspaceId: string) {
 export async function exportWorkspace(workspaceId: string): Promise<ExportedWorkspace> {
   const workspace = await pagePairDb.workspaces.get(workspaceId);
   if (!workspace) throw new PersistenceError("not_found", "Workspace not found");
-  const [documents, fileBlobRecords, generatedPages, chatThreads, chatMessages, selectedContexts, settings] = await Promise.all([
+  const [courseProjects, documents, fileBlobRecords, generatedPages, chatThreads, chatMessages, selectedContexts, settings] = await Promise.all([
+    pagePairDb.courseProjects.where("workspaceId").equals(workspaceId).toArray(),
     pagePairDb.documents.where("workspaceId").equals(workspaceId).toArray(),
     pagePairDb.fileBlobs.where("workspaceId").equals(workspaceId).toArray(),
     pagePairDb.generatedPages.where("workspaceId").equals(workspaceId).toArray(),
@@ -767,6 +1011,7 @@ export async function exportWorkspace(workspaceId: string): Promise<ExportedWork
     exportedAt: Date.now(),
     counts: {
       workspaces: 1,
+      courseProjects: courseProjects.length,
       documents: documents.length,
       fileBlobs: fileBlobs.length,
       generatedPages: generatedPages.length,
@@ -779,6 +1024,7 @@ export async function exportWorkspace(workspaceId: string): Promise<ExportedWork
       fileBlobHashes,
     },
     workspace,
+    courseProjects,
     documents,
     fileBlobs: fileBlobs.map(({ hash: _hash, ...record }) => record),
     generatedPages,
@@ -830,6 +1076,7 @@ export async function importWorkspace(payload: ExportedWorkspace) {
         updatedAt: Date.now(),
         lastOpenedAt: Date.now(),
       });
+      if (payload.courseProjects?.length) await pagePairDb.courseProjects.bulkPut(payload.courseProjects);
       await pagePairDb.documents.bulkPut(payload.documents);
       if (fileBlobs.length) await pagePairDb.fileBlobs.bulkPut(fileBlobs);
       if (payload.generatedPages.length) await pagePairDb.generatedPages.bulkPut(payload.generatedPages);
@@ -847,6 +1094,7 @@ function validateWorkspaceExportPayload(payload: ExportedWorkspace) {
   assertExport(Boolean(payload && typeof payload === "object"), "corrupt_export", "Invalid workspace export");
   assertExport(payload.schema === "pagepair.workspace.export.v1", "corrupt_export", "Unsupported workspace export");
   assertExport(Boolean(payload.workspace?.id), "validation", "Workspace export is missing a workspace id");
+  if (!Array.isArray(payload.courseProjects)) payload.courseProjects = [];
   assertExport(Array.isArray(payload.documents), "validation", "Workspace export documents must be an array");
   assertExport(Array.isArray(payload.fileBlobs), "validation", "Workspace export fileBlobs must be an array");
   assertExport(Array.isArray(payload.generatedPages), "validation", "Workspace export generatedPages must be an array");
@@ -854,6 +1102,7 @@ function validateWorkspaceExportPayload(payload: ExportedWorkspace) {
   assertExport(Array.isArray(payload.chatMessages), "validation", "Workspace export chatMessages must be an array");
   assertExport(Array.isArray(payload.selectedContexts), "validation", "Workspace export selectedContexts must be an array");
 
+  assertUniqueIds("courseProjects", payload.courseProjects);
   assertUniqueIds("documents", payload.documents);
   assertUniqueIds("fileBlobs", payload.fileBlobs);
   assertUniqueIds("generatedPages", payload.generatedPages);
@@ -871,6 +1120,9 @@ function validateWorkspaceExportPayload(payload: ExportedWorkspace) {
 
   if (payload.counts) {
     assertExport(payload.counts.workspaces === 1, "validation", "Workspace export count mismatch");
+    if (typeof payload.counts.courseProjects === "number") {
+      assertExport(payload.counts.courseProjects === payload.courseProjects.length, "validation", "Course project count mismatch");
+    }
     assertExport(payload.counts.documents === payload.documents.length, "validation", "Document count mismatch");
     assertExport(payload.counts.fileBlobs === payload.fileBlobs.length, "validation", "PDF blob count mismatch");
     assertExport(payload.counts.generatedPages === payload.generatedPages.length, "validation", "Generated page count mismatch");
@@ -884,6 +1136,7 @@ function validateWorkspaceExportPayload(payload: ExportedWorkspace) {
 
 function validateWorkspaceExportRelations(payload: ExportedWorkspace) {
   const workspaceId = payload.workspace.id;
+  const projectIds = new Set(payload.courseProjects.map((record) => record.id));
   const documentIds = new Set(payload.documents.map((record) => record.id));
   const blobIds = new Set(payload.fileBlobs.map((record) => record.id));
   const threadIds = new Set(payload.chatThreads.map((record) => record.id));
@@ -891,12 +1144,24 @@ function validateWorkspaceExportRelations(payload: ExportedWorkspace) {
   if (payload.workspace.activeDocumentId) {
     assertExport(documentIds.has(payload.workspace.activeDocumentId), "validation", "Workspace activeDocumentId does not exist");
   }
+  if (payload.workspace.activeProjectId) {
+    assertExport(projectIds.has(payload.workspace.activeProjectId), "validation", "Workspace activeProjectId does not exist");
+  }
   if (payload.workspace.activeThreadId) {
     assertExport(threadIds.has(payload.workspace.activeThreadId), "validation", "Workspace activeThreadId does not exist");
   }
 
+  for (const project of payload.courseProjects) {
+    assertExport(project.workspaceId === workspaceId, "validation", `Course project ${project.id} points to a different workspace`);
+    if (project.activeDocumentId) {
+      assertExport(documentIds.has(project.activeDocumentId), "validation", `Course project ${project.id} references a missing document`);
+    }
+  }
   for (const document of payload.documents) {
     assertExport(document.workspaceId === workspaceId, "validation", `Document ${document.id} points to a different workspace`);
+    if (document.projectId) {
+      assertExport(projectIds.has(document.projectId), "validation", `Document ${document.id} references a missing course project`);
+    }
     if (document.pdfBlobId) {
       assertExport(blobIds.has(document.pdfBlobId), "validation", `Document ${document.id} references a missing PDF blob`);
     }

@@ -246,14 +246,23 @@ export type AppCopy = {
   rail: {
     searchPlaceholder: string;
     documents: string;
+    courses: string;
+    recents: string;
+    newCourse: string;
+    courseDialogTitle: string;
+    courseNamePlaceholder: string;
+    createCourse: string;
+    cancel: string;
+    defaultCourse: string;
+    emptyCourseDocuments: string;
     currentWorkspace: string;
     uploadDocument: string;
     emptyDocuments: string;
     activeDocument: string;
     missingFile: string;
-    documentCount: (count: number) => string;
     documentMeta: (pageCount: number, generatedCount: number) => string;
-    currentPage: (pageNo: number) => string;
+    documentCount: (count: number) => string;
+    courseDocumentCount: (count: number) => string;
   };
   pdf: {
     samplePdfPage: string;
@@ -589,16 +598,25 @@ const zhCN: AppCopy = {
     pageProgressAria: "页面进度",
   },
   rail: {
-    searchPlaceholder: "搜索文档 / PDF",
+    searchPlaceholder: "搜索课程 / 文档",
     documents: "文档",
+    courses: "课程",
+    recents: "最近",
+    newCourse: "新建课程",
+    courseDialogTitle: "新建课程",
+    courseNamePlaceholder: "课程名称",
+    createCourse: "创建",
+    cancel: "取消",
+    defaultCourse: "默认课程",
+    emptyCourseDocuments: "当前课程暂无文档",
     currentWorkspace: "当前工作区",
     uploadDocument: "上传 PDF",
     emptyDocuments: "没有匹配的文档",
     activeDocument: "当前",
     missingFile: "文件缺失",
     documentCount: (count) => `${count} 个文档`,
+    courseDocumentCount: (count) => `${count} 个文档`,
     documentMeta: (pageCount, generatedCount) => `${pageCount} 页 · ${generatedCount} 页讲解`,
-    currentPage: (pageNo) => `停在第 ${pageNo} 页`,
   },
   pdf: {
     samplePdfPage: "示例 PDF 页面",
@@ -934,16 +952,25 @@ const enUS: AppCopy = {
     pageProgressAria: "Page progress",
   },
   rail: {
-    searchPlaceholder: "Search documents / PDFs",
+    searchPlaceholder: "Search courses / documents",
     documents: "Documents",
+    courses: "Courses",
+    recents: "Recents",
+    newCourse: "New course",
+    courseDialogTitle: "New course",
+    courseNamePlaceholder: "Course name",
+    createCourse: "Create",
+    cancel: "Cancel",
+    defaultCourse: "Default course",
+    emptyCourseDocuments: "No documents in this course",
     currentWorkspace: "Current workspace",
     uploadDocument: "Upload PDF",
     emptyDocuments: "No matching documents",
     activeDocument: "Active",
     missingFile: "Missing file",
     documentCount: (count) => `${count} ${count === 1 ? "document" : "documents"}`,
+    courseDocumentCount: (count) => `${count} ${count === 1 ? "document" : "documents"}`,
     documentMeta: (pageCount, generatedCount) => `${pageCount} ${pageCount === 1 ? "page" : "pages"} · ${generatedCount} generated`,
-    currentPage: (pageNo) => `Last page ${pageNo}`,
   },
   pdf: {
     samplePdfPage: "Sample PDF page",

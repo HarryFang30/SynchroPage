@@ -1,6 +1,6 @@
 import type { UiPreferences } from "../../settings";
 
-export const persistenceSchemaVersion = 2;
+export const persistenceSchemaVersion = 3;
 export const lastWorkspaceStorageKey = "pagepair.lastWorkspaceId.v1";
 
 export type PersistedJson = Record<string, unknown>;
@@ -11,6 +11,7 @@ export type WorkspaceRecord = {
   createdAt: number;
   updatedAt: number;
   lastOpenedAt: number;
+  activeProjectId?: string;
   activeDocumentId?: string;
   activeThreadId?: string;
   currentGeneratedPageIndex: number;
@@ -20,8 +21,23 @@ export type WorkspaceRecord = {
   version: number;
 };
 
+export type CourseProjectRecord = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description?: string;
+  color?: string;
+  icon?: string;
+  createdAt: number;
+  updatedAt: number;
+  lastOpenedAt?: number;
+  documentCount: number;
+  activeDocumentId?: string;
+};
+
 export type DocumentRecord = {
   id: string;
+  projectId?: string;
   workspaceId: string;
   title: string;
   fileName: string;
@@ -31,15 +47,18 @@ export type DocumentRecord = {
   pageCount: number;
   uploadedAt: number;
   updatedAt: number;
+  lastOpenedAt?: number;
   pdfBlobId?: string;
   currentPdfPageNumber: number;
-  status: "draft" | "ready" | "missing-file" | "failed";
+  status: "draft" | "ready" | "processing" | "missing-file" | "failed";
+  isStarred?: boolean;
 };
 
 export type DocumentSidebarItem = {
   id: string;
   workspaceId: string;
   documentId: string;
+  projectId?: string;
   title: string;
   fileName: string;
   mimeType: string;
@@ -49,6 +68,8 @@ export type DocumentSidebarItem = {
   status: DocumentRecord["status"];
   updatedAt: number;
   uploadedAt: number;
+  lastOpenedAt?: number;
+  isStarred?: boolean;
   isActive: boolean;
 };
 
@@ -129,6 +150,8 @@ export type SettingsRecord = UiPreferences & {
 
 export type LoadedWorkspace = {
   workspace: WorkspaceRecord;
+  courseProjects: CourseProjectRecord[];
+  activeProject: CourseProjectRecord | null;
   document: DocumentRecord | null;
   documentItems: DocumentSidebarItem[];
   pdfBlob: FileBlobRecord | null;
@@ -168,6 +191,7 @@ export type WorkspaceExportCounts = {
   chatMessages: number;
   selectedContexts: number;
   settings: number;
+  courseProjects: number;
 };
 
 export type WorkspaceExportIntegrity = {
@@ -182,6 +206,7 @@ export type ExportedWorkspace = {
   counts: WorkspaceExportCounts;
   integrity: WorkspaceExportIntegrity;
   workspace: WorkspaceRecord;
+  courseProjects: CourseProjectRecord[];
   documents: DocumentRecord[];
   fileBlobs: Array<Omit<FileBlobRecord, "blob"> & { dataUrl: string }>;
   generatedPages: GeneratedPageRecord[];

@@ -1,6 +1,7 @@
 export type ThemeMode = "system" | "light" | "dark";
 export type AccentColor = "clay" | "graphite" | "sage";
 export type PdfBackground = "paper" | "plain" | "soft";
+export type PdfViewMode = "continuous" | "single-page";
 export type FontScale = "compact" | "default" | "large";
 export type ScrollbarStyle = "thin" | "subtle" | "native";
 export type Language = "zh-CN" | "en-US";
@@ -11,6 +12,7 @@ export type UiPreferences = {
   theme: ThemeMode;
   accentColor: AccentColor;
   pdfBackground: PdfBackground;
+  pdfViewMode: PdfViewMode;
   fontScale: FontScale;
   compactMode: boolean;
   showSourcePills: boolean;
@@ -30,6 +32,7 @@ export const defaultUiPreferences: UiPreferences = {
   theme: "system",
   accentColor: "clay",
   pdfBackground: "paper",
+  pdfViewMode: "continuous",
   fontScale: "default",
   compactMode: false,
   showSourcePills: true,
@@ -47,8 +50,10 @@ export function loadUiPreferences() {
     const stored = window.localStorage.getItem(uiPreferencesStorageKey);
     if (!stored) return defaultUiPreferences;
     const merged = { ...defaultUiPreferences, ...(JSON.parse(stored) as Partial<UiPreferences>) };
+    const pdfViewMode: PdfViewMode = merged.pdfViewMode === "single-page" ? "single-page" : "continuous";
     return {
       ...merged,
+      pdfViewMode,
       pdfContextFullPageLimit: clampNumber(merged.pdfContextFullPageLimit, defaultUiPreferences.pdfContextFullPageLimit, 1, 500),
       pdfContextEdgePageCount: clampNumber(merged.pdfContextEdgePageCount, defaultUiPreferences.pdfContextEdgePageCount, 1, 100),
     };
