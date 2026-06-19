@@ -62,6 +62,10 @@ export function createRecordId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function documentTitleFromFileName(fileName: string, fallback: string) {
+  return fileName.replace(/\.pdf$/i, "").trim() || fallback || fileName || "Untitled PDF";
+}
+
 export function getLastWorkspaceId() {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(lastWorkspaceStorageKey);
@@ -221,7 +225,9 @@ export async function loadWorkspaceDocuments(
       workspaceId: document.workspaceId,
       documentId: document.id,
       projectId: document.projectId,
-      title: document.title,
+      title: document.mimeType === "application/pdf"
+        ? documentTitleFromFileName(document.fileName, document.title)
+        : document.title,
       fileName: document.fileName,
       mimeType: document.mimeType,
       pageCount: document.pageCount,
@@ -597,6 +603,7 @@ export async function saveGeneratedPagesFromPack(input: {
   pack: PagePackLike;
 }) {
   const now = Date.now();
+  const document = await pagePairDb.documents.get(input.documentId);
   const records: GeneratedPageRecord[] = input.pack.pages.map((page, index) => {
     const teaching = page.teaching || {};
     const pageNo = Number(page.page_no || index + 1);
@@ -619,7 +626,9 @@ export async function saveGeneratedPagesFromPack(input: {
     await pagePairDb.generatedPages.where("documentId").equals(input.documentId).delete();
     if (records.length) await pagePairDb.generatedPages.bulkPut(records);
     await pagePairDb.documents.update(input.documentId, {
-      title: input.pack.document.title,
+      title: document?.mimeType === "application/pdf"
+        ? documentTitleFromFileName(document.fileName, document.title)
+        : input.pack.document.title,
       pageCount: Math.max(input.pack.document.page_count || 0, records.length),
       updatedAt: now,
     });

@@ -106,6 +106,7 @@ import {
   repairWorkspaceStorage,
   saveChatMessage,
   saveDocumentPatch,
+  saveGeneratedPage,
   saveGeneratedPagesFromPack,
   saveImportedPagePack,
   savePdfBlob,
@@ -150,6 +151,7 @@ type PageData = {
     text_md: string;
     ocr_used: boolean;
     parser: string;
+    page_type?: string;
   };
   teaching: {
     slide_title: string;
@@ -157,6 +159,14 @@ type PageData = {
     concepts: string[];
     visual_explanations: string[];
     prerequisites: string[];
+    contextual_bridge?: string;
+    formula_explanations?: string[];
+    evidence?: Array<{
+      kind: string;
+      quote_or_reference: string;
+    }>;
+    needs_review?: boolean;
+    needs_parser_fallback?: boolean;
     confidence: number;
   };
   status: string;
@@ -178,6 +188,14 @@ type PdfContextPayload = {
   edgePageCount: number;
   includedPageNumbers: number[];
   pages: PdfContextPage[];
+};
+
+type PdfDirectFileInput = {
+  filename: string;
+  mimeType: string;
+  size: number;
+  sha256?: string;
+  fileData: string;
 };
 
 type PdfViewMode = "continuous" | "single-page";
@@ -474,11 +492,18 @@ function createDraftPagePack(title: string, fileName: string, pageCount: number,
   };
 }
 
+function documentTitleFromRecord(document: DocumentRecord) {
+  const fileTitle = document.fileName.replace(/\.pdf$/i, "").trim();
+  if (document.mimeType === "application/pdf" && fileTitle) return fileTitle;
+  return document.title || fileTitle || document.fileName || "Untitled PDF";
+}
+
 function pagePackFromPersistence(
   document: DocumentRecord,
   generatedPages: GeneratedPageRecord[],
   copy: AppCopy,
 ): PagePack {
+  const documentTitle = documentTitleFromRecord(document);
   const rawPages = generatedPages
     .slice()
     .sort((left, right) => left.generatedPageIndex - right.generatedPageIndex)
@@ -489,7 +514,7 @@ function pagePackFromPersistence(
         schema: "lecture_pairpack.v1",
         document: {
           id: document.id,
-          title: document.title,
+          title: documentTitle,
           source_pdf_url: document.fileName,
           page_count: Math.max(document.pageCount || 0, rawPages.length),
         },
@@ -498,7 +523,7 @@ function pagePackFromPersistence(
       copy,
     );
   }
-  return createDraftPagePack(document.title, document.fileName, Math.max(document.pageCount || 1, 1), document.id);
+  return createDraftPagePack(documentTitle, document.fileName, Math.max(document.pageCount || 1, 1), document.id);
 }
 
 function settingsRecordToPreferences(record: Partial<UiPreferences> | null | undefined): UiPreferences {
@@ -617,7 +642,12 @@ function normalizePack(raw: unknown, copy: AppCopy): PagePack {
         notes?: string;
         concepts?: string[];
         visual_explanations?: string[];
+        formula_explanations?: string[];
         prerequisites?: string[];
+        contextual_bridge?: string;
+        evidence?: PageData["teaching"]["evidence"];
+        needs_review?: boolean;
+        needs_parser_fallback?: boolean;
         confidence?: number;
       };
       const teaching = (page.teaching || page) as Partial<PageData["teaching"]> & {
@@ -631,6 +661,7 @@ function normalizePack(raw: unknown, copy: AppCopy): PagePack {
           text_md: page.source?.text_md || page.page_text || "",
           ocr_used: Boolean(page.source?.ocr_used),
           parser: page.source?.parser || "imported",
+          page_type: page.source?.page_type,
         },
         teaching: {
           slide_title: teaching.slide_title || teaching.title || copy.errors.importedPageTitle(index),
@@ -640,6 +671,11 @@ function normalizePack(raw: unknown, copy: AppCopy): PagePack {
             ? teaching.visual_explanations
             : [],
           prerequisites: Array.isArray(teaching.prerequisites) ? teaching.prerequisites : [],
+          contextual_bridge: teaching.contextual_bridge || "",
+          formula_explanations: Array.isArray(teaching.formula_explanations) ? teaching.formula_explanations : [],
+          evidence: Array.isArray(teaching.evidence) ? teaching.evidence : [],
+          needs_review: Boolean(teaching.needs_review),
+          needs_parser_fallback: Boolean(teaching.needs_parser_fallback),
           confidence: Number(teaching.confidence ?? 0.72),
         },
         status: page.status || "ready",
@@ -798,6 +834,42 @@ function textContentToPlainText(textContent: { items?: unknown[] }) {
   return lines.join("\n").replace(/[ \t]+\n/g, "\n").trim();
 }
 
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return window.btoa(binary);
+}
+
+async function sha256ArrayBuffer(buffer: ArrayBuffer) {
+  if (!window.crypto?.subtle) return undefined;
+  const digest = await window.crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function pdfDirectFileInputFromUrl(url: string, filename: string): Promise<PdfDirectFileInput | null> {
+  if (!url) return null;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`PDF file read failed: HTTP ${response.status}`);
+  const blob = await response.blob();
+  if (!blob.size) return null;
+  const buffer = await blob.arrayBuffer();
+  const sha256 = await sha256ArrayBuffer(buffer).catch(() => undefined);
+  return {
+    filename: filename || "document.pdf",
+    mimeType: blob.type || "application/pdf",
+    size: blob.size,
+    sha256,
+    fileData: arrayBufferToBase64(buffer),
+  };
+}
+
 async function extractPdfContextFromDocument(
   document: PDFDocumentProxy,
   documentId: string,
@@ -828,6 +900,73 @@ async function extractPdfContextFromDocument(
     edgePageCount,
     includedPageNumbers,
     pages,
+  };
+}
+
+async function extractPdfPagesFromDocument(document: PDFDocumentProxy): Promise<PdfContextPage[]> {
+  const pages: PdfContextPage[] = [];
+  for (let pageNo = 1; pageNo <= document.numPages; pageNo += 1) {
+    const page = await document.getPage(pageNo);
+    const textContent = await page.getTextContent();
+    pages.push({
+      page_no: pageNo,
+      title: `PDF p.${pageNo}`,
+      text_md: textContentToPlainText(textContent),
+    });
+  }
+  return pages;
+}
+
+function fullPdfContextForTeachingGeneration(
+  pack: PagePack,
+  pageCount: number,
+  extractedPages: PdfContextPage[],
+): PdfContextPayload {
+  const extractedTextByPage = new Map(extractedPages.map((page) => [page.page_no, page.text_md]));
+  const packPagesByNumber = new Map(pack.pages.map((page) => [page.page_no, page]));
+  const pages = Array.from({ length: pageCount }, (_, index) => {
+    const pageNo = index + 1;
+    const packPage = packPagesByNumber.get(pageNo);
+    return {
+      page_no: pageNo,
+      title: packPage?.teaching.slide_title || `PDF p.${pageNo}`,
+      text_md: extractedTextByPage.get(pageNo) || packPage?.source.text_md || "",
+    };
+  });
+  return {
+    documentId: pack.document.id,
+    documentTitle: pack.document.title,
+    pageCount,
+    truncated: false,
+    truncationPolicy: "all-pages",
+    fullPageLimit: pageCount,
+    edgePageCount: pageCount,
+    includedPageNumbers: pages.map((page) => page.page_no),
+    pages,
+  };
+}
+
+function pdfContextFromExtractedPages(
+  documentId: string,
+  documentTitle: string,
+  pageCount: number,
+  settings: Pick<UiPreferences, "pdfContextFullPageLimit" | "pdfContextEdgePageCount">,
+  extractedPages: PdfContextPage[],
+): PdfContextPayload {
+  const { fullPageLimit, edgePageCount } = sanitizePdfContextSettings(settings);
+  const includedPageNumbers = pdfContextPageNumbers(pageCount, settings);
+  const wantedPages = new Set(includedPageNumbers);
+  const truncated = includedPageNumbers.length < pageCount;
+  return {
+    documentId,
+    documentTitle,
+    pageCount,
+    truncated,
+    truncationPolicy: truncated ? "first-last-edge" : "all-pages",
+    fullPageLimit,
+    edgePageCount,
+    includedPageNumbers,
+    pages: extractedPages.filter((page) => wantedPages.has(page.page_no)),
   };
 }
 
@@ -1285,6 +1424,74 @@ function chunkAssistantText(text: string) {
   return chunks?.length ? chunks : [text];
 }
 
+type GeneratedTeachingPageResponse = {
+  page: Partial<PageData> & {
+    source?: Partial<PageData["source"]>;
+    teaching?: Partial<PageData["teaching"]>;
+  };
+  model?: string;
+};
+
+function normalizeGeneratedPage(rawPage: GeneratedTeachingPageResponse["page"], fallback: PageData, copy: AppCopy): PageData {
+  const normalized = normalizePack(
+    {
+      schema: "lecture_pairpack.v1",
+      document: { id: "generated", title: "generated", source_pdf_url: "", page_count: 1 },
+      pages: [{ ...rawPage, page_no: rawPage.page_no || fallback.page_no }],
+    },
+    copy,
+  ).pages[0];
+  return {
+    ...fallback,
+    ...normalized,
+    page_no: fallback.page_no,
+    source: {
+      ...fallback.source,
+      ...normalized.source,
+      pdf_page_ref: normalized.source.pdf_page_ref || fallback.source.pdf_page_ref || `#page=${fallback.page_no}`,
+      text_md: normalized.source.text_md || fallback.source.text_md,
+      ocr_used: Boolean(normalized.source.ocr_used || fallback.source.ocr_used),
+      parser: normalized.source.parser || fallback.source.parser || "pdfjs",
+    },
+    teaching: {
+      ...fallback.teaching,
+      ...normalized.teaching,
+      slide_title: normalized.teaching.slide_title || fallback.teaching.slide_title || `PDF p.${fallback.page_no}`,
+      speaker_notes_md: normalized.teaching.speaker_notes_md || fallback.teaching.speaker_notes_md,
+      concepts: normalized.teaching.concepts.length ? normalized.teaching.concepts : fallback.teaching.concepts,
+      visual_explanations: normalized.teaching.visual_explanations.length ? normalized.teaching.visual_explanations : fallback.teaching.visual_explanations,
+      prerequisites: normalized.teaching.prerequisites.length ? normalized.teaching.prerequisites : fallback.teaching.prerequisites,
+      confidence: Number.isFinite(normalized.teaching.confidence) ? normalized.teaching.confidence : fallback.teaching.confidence,
+    },
+    status: normalized.status || "ready",
+  };
+}
+
+function mergePageIntoPack(pack: PagePack, page: PageData): PagePack {
+  const pages = pack.pages.some((item) => item.page_no === page.page_no)
+    ? pack.pages.map((item) => (item.page_no === page.page_no ? page : item))
+    : [...pack.pages, page];
+  return {
+    ...pack,
+    document: {
+      ...pack.document,
+      page_count: Math.max(pack.document.page_count || 0, pages.length, page.page_no),
+    },
+    pages: pages.slice().sort((left, right) => left.page_no - right.page_no),
+  };
+}
+
+function pageWithSourceText(page: PageData, sourceText: string): PageData {
+  return {
+    ...page,
+    source: {
+      ...page.source,
+      text_md: sourceText || page.source.text_md,
+      parser: page.source.parser || "pdfjs",
+    },
+  };
+}
+
 export default function App() {
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(() => loadUiPreferences());
   const copy = useMemo(() => getAppCopy(uiPreferences.language), [uiPreferences.language]);
@@ -1308,6 +1515,8 @@ export default function App() {
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [selectedContext, setSelectedContext] = useState<SelectedContext | null>(null);
   const [pdfTextContext, setPdfTextContext] = useState<PdfContextPayload | null>(null);
+  const [pdfExtractedPages, setPdfExtractedPages] = useState<PdfContextPage[]>([]);
+  const [isGeneratingNotes, setIsGeneratingNotes] = useState(false);
   const [pendingSelectionPrompt, setPendingSelectionPrompt] = useState<QuickSelectionPrompt | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -1619,6 +1828,7 @@ export default function App() {
         settingsSnapshot: uiPreferences,
       });
       if (documentId) {
+        if (pack.document.id !== documentId) return;
         await saveDocumentPatch(documentId, {
           currentPdfPageNumber: currentPdfPageNo,
           pageCount: pdfPageCount || pack.document.page_count || pack.pages.length,
@@ -1670,6 +1880,7 @@ export default function App() {
     setCurrentPageNo(1);
     setSelectedContext(null);
     setPdfTextContext(null);
+    setPdfExtractedPages([]);
     setContexts([]);
     setAttachments([]);
     setPersistedMessages([]);
@@ -1711,6 +1922,7 @@ export default function App() {
     setDocumentItems(loaded.documentItems);
     setThreadId(loaded.thread?.id || null);
     setPdfTextContext(null);
+    setPdfExtractedPages([]);
 
     if (options.restoreLayout) {
       const layout = (loaded.workspace.layoutState || {}) as {
@@ -1756,6 +1968,7 @@ export default function App() {
       replacePdfObjectUrl("");
       setPack(samplePacks[restoredPreferences.language]);
       setPdfPageCount(null);
+      setPdfExtractedPages([]);
       setCurrentPageNo(1);
     }
 
@@ -1847,7 +2060,7 @@ export default function App() {
           layoutState: currentLayoutState(),
           settingsSnapshot: uiPreferences,
         });
-        if (documentId) {
+        if (documentId && pack.document.id === documentId) {
           await saveDocumentPatch(documentId, {
             currentPdfPageNumber: currentPdfPageNo,
             pageCount: pdfPageCount || pack.document.page_count || pack.pages.length,
@@ -1863,6 +2076,7 @@ export default function App() {
     activeProjectId,
     documentId,
     isRestoringWorkspace,
+    pack.document.id,
     pack.document.page_count,
     pack.pages.length,
     pdfPageCount,
@@ -1898,7 +2112,7 @@ export default function App() {
   }, [documentId, isRestoringWorkspace, persistOperation, selectedContext, workspaceId]);
 
   useEffect(() => {
-    if (isRestoringWorkspace || !restoredOnceRef.current || !workspaceId || !documentId) return undefined;
+    if (isRestoringWorkspace || !restoredOnceRef.current || !workspaceId || !documentId || pack.document.id !== documentId) return undefined;
     const timer = window.setTimeout(() => {
       void persistOperation(() => saveGeneratedPagesFromPack({ workspaceId, documentId, pack })).catch(() => undefined);
     }, 900);
@@ -1906,7 +2120,7 @@ export default function App() {
   }, [documentId, isRestoringWorkspace, pack, persistOperation, workspaceId]);
 
   useEffect(() => {
-    if (!documentId) return;
+    if (!documentId || pack.document.id !== documentId) return;
     setDocumentItems((items) => items.map((item) =>
       item.documentId === documentId
         ? {
@@ -1926,6 +2140,7 @@ export default function App() {
     activeProjectId,
     documentId,
     generatedPageCount,
+    pack.document.id,
     pack.document.source_pdf_url,
     pack.document.title,
     pack.document.page_count,
@@ -2157,13 +2372,17 @@ export default function App() {
   const loadPdf = (file: File) => {
     const url = URL.createObjectURL(file);
     replacePdfObjectUrl(url);
+    setDocumentId(null);
+    setThreadId(null);
     setPdfPageCount(null);
     setCurrentPageNo(1);
     setSelectedContext(null);
     setPdfTextContext(null);
+    setPdfExtractedPages([]);
     setContexts([]);
     setAttachments([]);
     setPersistedMessages([]);
+    setDocumentItems((items) => items.map((item) => ({ ...item, isActive: false })));
     const title = file.name.replace(/\.pdf$/i, "") || file.name || "Untitled PDF";
     setPack(createDraftPagePack(title, file.name, 1));
 
@@ -2204,29 +2423,31 @@ export default function App() {
         },
       };
     });
-    if (documentId) {
+    if (documentId && pack.document.id === documentId) {
       setDocumentItems((items) => items.map((item) =>
         item.documentId === documentId
           ? { ...item, pageCount, currentPdfPageNumber: currentPdfPageNo, generatedPageCount, status: "ready" }
           : item,
       ));
     }
-    if (workspaceId) {
+    if (workspaceId && documentId && pack.document.id === documentId) {
       void persistOperation(async () => {
         await saveWorkspacePatch(workspaceId, { currentPdfPageNumber: currentPdfPageNo });
-        if (documentId) {
-          await saveDocumentPatch(documentId, {
-            pageCount,
-            currentPdfPageNumber: currentPdfPageNo,
-            status: "ready",
-          });
-        }
+        await saveDocumentPatch(documentId, {
+          pageCount,
+          currentPdfPageNumber: currentPdfPageNo,
+          status: "ready",
+        });
       }).catch(() => undefined);
     }
-  }, [currentPdfPageNo, documentId, generatedPageCount, persistOperation, workspaceId]);
+  }, [currentPdfPageNo, documentId, generatedPageCount, pack.document.id, persistOperation, workspaceId]);
 
   const handlePdfContextReady = useCallback((context: PdfContextPayload) => {
     setPdfTextContext(context);
+  }, []);
+
+  const handlePdfPagesTextReady = useCallback((pages: PdfContextPage[]) => {
+    setPdfExtractedPages(pages);
   }, []);
 
   const loadJson = (file: File) => {
@@ -2234,15 +2455,19 @@ export default function App() {
     reader.onload = () => {
       try {
         const next = normalizePack(JSON.parse(String(reader.result)), copy);
-        setPack(next);
         replacePdfObjectUrl("");
+        setDocumentId(null);
+        setThreadId(null);
         setPdfPageCount(null);
         setPdfTextContext(null);
+        setPdfExtractedPages([]);
         setCurrentPageNo(next.pages[0]?.page_no || 1);
         setSelectedContext(null);
         setContexts([]);
         setAttachments([]);
         setPersistedMessages([]);
+        setDocumentItems((items) => items.map((item) => ({ ...item, isActive: false })));
+        setPack(next);
         setJobStatus(copy.status.jsonImported);
         void persistOperation(async () => {
           const saved = await saveImportedPagePack({
@@ -2258,6 +2483,16 @@ export default function App() {
           await refreshDocumentItems(saved.workspace.id, saved.document.id, saved.workspace.activeProjectId || saved.document.projectId || null);
           setThreadId(saved.thread.id);
           setAgentRuntimeKey(`${saved.thread.id}:0:${Date.now()}`);
+          setPack({
+            ...next,
+            document: {
+              ...next.document,
+              id: saved.document.id,
+              title: saved.document.title,
+              source_pdf_url: saved.document.fileName,
+              page_count: saved.document.pageCount || next.document.page_count,
+            },
+          });
           return saved;
         }, copy.persistence.saved).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
       } catch (error) {
@@ -2458,6 +2693,160 @@ export default function App() {
     setCurrentPageNo(targetPage);
   };
 
+  const handleGenerateNotes = useCallback(() => {
+    if (isGeneratingNotes) return;
+    const totalPages = Math.max(pdfPageCount || pack.document.page_count || pack.pages.length || pdfExtractedPages.length, 1);
+    if (pdfUrl && pdfExtractedPages.length < totalPages) {
+      setJobStatus(copy.status.pdfTextExtracting(pdfExtractedPages.length, totalPages));
+      return;
+    }
+    const sourceTextByPage = new Map<number, string>();
+    for (const page of pdfExtractedPages) {
+      sourceTextByPage.set(page.page_no, page.text_md);
+    }
+    for (const page of pack.pages) {
+      if (!sourceTextByPage.has(page.page_no) && page.source.text_md) {
+        sourceTextByPage.set(page.page_no, page.source.text_md);
+      }
+    }
+
+    let workingPack: PagePack = {
+      ...pack,
+      document: {
+        ...pack.document,
+        page_count: totalPages,
+      },
+      pages: Array.from({ length: totalPages }, (_, index) => {
+        const pageNo = index + 1;
+        const existing = pack.pages.find((item) => item.page_no === pageNo) || createDraftPagePack(pack.document.title, pack.document.source_pdf_url, totalPages, pack.document.id).pages[index];
+        return pageWithSourceText(existing, sourceTextByPage.get(pageNo) || "");
+      }),
+    };
+
+    setIsGeneratingNotes(true);
+    setPanels((current) => ({ ...current, notes: true }));
+    setActiveTab("notes");
+    setJobStatus(copy.status.generationPreparingCache(totalPages));
+    setPack(workingPack);
+
+    void (async () => {
+      let completed = 0;
+      try {
+        const documentContext = fullPdfContextForTeachingGeneration(workingPack, totalPages, pdfExtractedPages);
+        const documentFile = pdfUrl
+          ? await pdfDirectFileInputFromUrl(pdfUrl, workingPack.document.source_pdf_url || workingPack.document.title).catch(() => null)
+          : null;
+        setJobStatus(copy.status.generationStarted(totalPages));
+        for (let index = 0; index < totalPages; index += 1) {
+          const pageNo = index + 1;
+          const basePage = workingPack.pages.find((item) => item.page_no === pageNo) || createDraftPagePack(pack.document.title, pack.document.source_pdf_url, totalPages, pack.document.id).pages[index];
+          const runningPage: PageData = { ...basePage, status: "running" };
+          workingPack = mergePageIntoPack(workingPack, runningPage);
+          setPack(workingPack);
+          setCurrentPageNo((current) => current || pageNo);
+          setJobStatus(copy.status.generationPage(index + 1, totalPages, pageNo));
+
+          try {
+            const previousPage = workingPack.pages.find((item) => item.page_no === pageNo - 1);
+            const nextPage = workingPack.pages.find((item) => item.page_no === pageNo + 1);
+            const response = await requestJson<GeneratedTeachingPageResponse>(
+              "/api/generate/page",
+              {
+                method: "POST",
+                body: JSON.stringify({
+                  model: "gpt-5.5",
+                  document: workingPack.document,
+                  documentContext,
+                  documentFile,
+                  page: runningPage,
+                  pageCount: totalPages,
+                  previousPage: previousPage
+                    ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
+                    : null,
+                  nextPage: nextPage
+                    ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
+                    : null,
+                }),
+              },
+              copy.errors.accountNotFound,
+            );
+            const generatedPage = normalizeGeneratedPage(response.page, runningPage, copy);
+            workingPack = mergePageIntoPack(workingPack, generatedPage);
+            setPack(workingPack);
+            completed += 1;
+            if (workspaceId && documentId && workingPack.document.id === documentId) {
+              await saveGeneratedPage({
+                id: `${documentId}:page:${generatedPage.page_no}`,
+                workspaceId,
+                documentId,
+                generatedPageIndex: generatedPage.page_no - 1,
+                sourcePdfPageNumber: generatedPage.page_no,
+                title: generatedPage.teaching.slide_title,
+                markdown: generatedPage.teaching.speaker_notes_md,
+                json: asPersistedRecord(generatedPage),
+                confidence: generatedPage.teaching.confidence,
+                status: generatedPage.status === "failed" ? "failed" : "completed",
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              });
+            }
+          } catch (error) {
+            const message = (error as Error).message || copy.agent.generationFailed;
+            const failedPage: PageData = {
+              ...runningPage,
+              status: "failed",
+              teaching: {
+                ...runningPage.teaching,
+                slide_title: runningPage.teaching.slide_title || `PDF p.${pageNo}`,
+                speaker_notes_md: `## 本页讲解生成失败\n\n${message}`,
+                confidence: 0,
+                needs_review: true,
+              },
+            };
+            workingPack = mergePageIntoPack(workingPack, failedPage);
+            setPack(workingPack);
+            setJobStatus(copy.status.generationPageFailed(pageNo, message));
+            if (workspaceId && documentId && workingPack.document.id === documentId) {
+              await saveGeneratedPage({
+                id: `${documentId}:page:${pageNo}`,
+                workspaceId,
+                documentId,
+                generatedPageIndex: pageNo - 1,
+                sourcePdfPageNumber: pageNo,
+                title: failedPage.teaching.slide_title,
+                markdown: failedPage.teaching.speaker_notes_md,
+                json: asPersistedRecord(failedPage),
+                confidence: 0,
+                status: "failed",
+                errorSummary: message,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              });
+            }
+          }
+        }
+        if (workspaceId && documentId && workingPack.document.id === documentId) {
+          await saveGeneratedPagesFromPack({ workspaceId, documentId, pack: workingPack });
+          await refreshDocumentItems(workspaceId, documentId, activeProjectId);
+        }
+        setJobStatus(copy.status.generationDone(completed, totalPages));
+      } finally {
+        setIsGeneratingNotes(false);
+      }
+    })();
+  }, [
+    activeProjectId,
+    copy,
+    documentId,
+    isGeneratingNotes,
+    pack,
+    pdfExtractedPages,
+    pdfPageCount,
+    pdfUrl,
+    refreshDocumentItems,
+    workspaceId,
+  ]);
+
   const authText =
     oauthMode === "connected"
       ? copy.auth.gatewayConnected(oauthAccount)
@@ -2597,7 +2986,7 @@ export default function App() {
               }}
             />
           </div>
-          <button className="primary-button" type="button" onClick={() => setJobStatus(copy.status.generationQueued)}>
+          <button className="primary-button" type="button" onClick={handleGenerateNotes} disabled={isGeneratingNotes}>
             <Zap />
             {copy.topbar.generate}
           </button>
@@ -2824,6 +3213,7 @@ export default function App() {
                     onDocumentReady={handlePdfDocumentReady}
                     onActivePageChange={handleActivePdfPageChange}
                     onPdfContextReady={handlePdfContextReady}
+                    onPdfPagesTextReady={handlePdfPagesTextReady}
                     onViewerScroll={clearSelection}
                   />
                 ) : (
@@ -3116,6 +3506,7 @@ type PdfScrollViewerProps = {
   onDocumentReady: (pageCount: number) => void;
   onActivePageChange: (pageNumber: number) => void;
   onPdfContextReady: (context: PdfContextPayload) => void;
+  onPdfPagesTextReady: (pages: PdfContextPage[]) => void;
   onViewerScroll?: () => void;
 };
 
@@ -3133,6 +3524,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
   onDocumentReady,
   onActivePageChange,
   onPdfContextReady,
+  onPdfPagesTextReady,
   onViewerScroll,
 }, ref) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -3147,6 +3539,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
   const [renderWindowCenter, setRenderWindowCenter] = useState(pageNumber);
   const onDocumentReadyRef = useRef(onDocumentReady);
   const onPdfContextReadyRef = useRef(onPdfContextReady);
+  const onPdfPagesTextReadyRef = useRef(onPdfPagesTextReady);
   const pageCount = pdfDocument?.numPages || 0;
   const safePageNumber = Math.min(Math.max(pageNumber, 1), Math.max(pageCount, 1));
   const pageNumbers = viewMode === "single-page"
@@ -3205,7 +3598,8 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
   useEffect(() => {
     onDocumentReadyRef.current = onDocumentReady;
     onPdfContextReadyRef.current = onPdfContextReady;
-  }, [onDocumentReady, onPdfContextReady]);
+    onPdfPagesTextReadyRef.current = onPdfPagesTextReady;
+  }, [onDocumentReady, onPdfContextReady, onPdfPagesTextReady]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3224,12 +3618,17 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
         }
         setPdfDocument(document);
         onDocumentReadyRef.current(document.numPages);
-        void extractPdfContextFromDocument(document, documentId, documentTitle, {
-          pdfContextFullPageLimit,
-          pdfContextEdgePageCount,
-        })
-          .then((context) => {
-            if (!cancelled) onPdfContextReadyRef.current(context);
+        void extractPdfPagesFromDocument(document)
+          .then((pages) => {
+            if (cancelled) return;
+            onPdfPagesTextReadyRef.current(pages);
+            onPdfContextReadyRef.current(pdfContextFromExtractedPages(
+              documentId,
+              documentTitle,
+              document.numPages,
+              { pdfContextFullPageLimit, pdfContextEdgePageCount },
+              pages,
+            ));
           })
           .catch(() => undefined);
       })

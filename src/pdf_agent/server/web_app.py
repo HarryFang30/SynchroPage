@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import mimetypes
 import os
@@ -32,15 +33,24 @@ DEFAULT_AGENT_MODEL = os.environ.get("PDF_AGENT_MODEL", "gpt-5.5")
 MAX_CONTEXT_ITEMS = 10
 MAX_CONTEXT_CHARS = 16_000
 MAX_PDF_CONTEXT_CHARS = 120_000
+MAX_TEACHING_CACHE_CHARS = 750_000
 PDF_CONTEXT_FULL_PAGE_LIMIT = 50
 PDF_CONTEXT_EDGE_PAGE_COUNT = 10
 MAX_TRANSCRIPT_MESSAGES = 8
 MAX_IMAGE_ATTACHMENTS = 8
 MAX_IMAGE_DATA_URL_CHARS = 8_000_000
+MAX_PDF_FILE_DATA_CHARS = 80_000_000
 
 AGENT_INSTRUCTIONS = """You are the AI agent panel inside PagePair Reader.
 Use the current PDF/page context, selected text, formulas, and image attachments as primary evidence.
 Answer in the user's language, preserve LaTeX formulas, cite page numbers when available, and keep the response useful for study, review, or editing."""
+
+TEACHING_GENERATOR_INSTRUCTIONS = """You are the PagePair per-page teaching generator.
+Generate page-aligned study notes for one PDF page at a time.
+Return strict JSON only. Do not wrap JSON in Markdown fences.
+Use the user's language. Preserve formulas in LaTeX using $...$ or $$...$$.
+Render tables as GitHub-Flavored Markdown tables inside speaker_notes_md when the source page contains tabular content.
+Do not invent facts that are not supported by the source page text. If the page has no extractable text, mark it as needs_parser_fallback."""
 
 
 class HttpError(RuntimeError):
@@ -130,6 +140,108 @@ class AgentChatGateway:
             raise HttpError(502, redacted_gateway_error(str(exc)), code="network_error") from exc
 
 
+class TeachingGenerationGateway:
+    def __init__(
+        self,
+        manager: OpenAIOAuthManager,
+        *,
+        model: str = DEFAULT_AGENT_MODEL,
+        timeout_seconds: float = 180.0,
+    ) -> None:
+        self.manager = manager
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+
+    async def generate_page(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        auth = await build_chatgpt_codex_auth(self.manager, session_id=_string_or_none(body.get("session_id")))
+        document_file_used = bool(_pdf_file_input(body.get("documentFile")))
+        payload = build_codex_responses_payload(
+            _build_teaching_generation_payload(body, default_model=self.model),
+            force_stream=True,
+            include_reasoning_encrypted_content=True,
+            strip_unsupported_fields=True,
+        )
+        try:
+            text, content_type, payload = await self._post_payload_with_cache_fallback(
+                codex_responses_url(base_url=auth.upstream_base_url),
+                payload,
+                auth.headers,
+            )
+        except HttpError as exc:
+            if not document_file_used or exc.status not in {400, 413, 415, 422}:
+                raise
+            fallback_body = dict(body)
+            fallback_body.pop("documentFile", None)
+            document_file_used = False
+            payload = build_codex_responses_payload(
+                _build_teaching_generation_payload(fallback_body, default_model=self.model),
+                force_stream=True,
+                include_reasoning_encrypted_content=True,
+                strip_unsupported_fields=True,
+            )
+            text, content_type, payload = await self._post_payload_with_cache_fallback(
+                codex_responses_url(base_url=auth.upstream_base_url),
+                payload,
+                auth.headers,
+            )
+        content = _extract_gateway_text(text, content_type)
+        if not content:
+            raise HttpError(502, "OpenAI gateway returned an empty generation response", code="empty_gateway_response")
+        page = _parse_generated_page(content, body)
+        return {
+            "page": page,
+            "account_id": auth.account_id,
+            "model": payload.get("model"),
+            "cache": {
+                "prompt_cache_key": payload.get("prompt_cache_key"),
+                "prompt_cache_retention": payload.get("prompt_cache_retention"),
+                "document_file_input": document_file_used,
+            },
+        }
+
+    async def _post_payload_with_cache_fallback(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+    ) -> tuple[str, str, dict[str, Any]]:
+        try:
+            text, content_type = await asyncio.to_thread(self._post_responses, url, payload, headers)
+            return text, content_type, payload
+        except HttpError as exc:
+            if exc.status not in {400, 422} or not (
+                payload.get("prompt_cache_key") or payload.get("prompt_cache_retention")
+            ):
+                raise
+            fallback_payload = dict(payload)
+            fallback_payload.pop("prompt_cache_key", None)
+            fallback_payload.pop("prompt_cache_retention", None)
+            text, content_type = await asyncio.to_thread(self._post_responses, url, fallback_payload, headers)
+            return text, content_type, fallback_payload
+
+    def _post_responses(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, str]:
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Accept": "text/event-stream, application/json",
+                "Content-Type": "application/json",
+                **headers,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                text = response.read().decode("utf-8", errors="replace")
+                return text, response.headers.get("Content-Type", "")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise HttpError(exc.code, redacted_gateway_error(detail), code="upstream_error") from exc
+        except urllib.error.URLError as exc:
+            raise HttpError(502, redacted_gateway_error(str(exc)), code="network_error") from exc
+
+
 class PdfAgentHttpServer(ThreadingHTTPServer):
     def __init__(
         self,
@@ -139,12 +251,14 @@ class PdfAgentHttpServer(ThreadingHTTPServer):
         web_root: Path,
         oauth_api: OpenAIOAuthApi,
         chat_gateway: AgentChatGateway,
+        teaching_gateway: TeachingGenerationGateway,
         runner: AsyncRunner,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.web_root = web_root
         self.oauth_api = oauth_api
         self.chat_gateway = chat_gateway
+        self.teaching_gateway = teaching_gateway
         self.runner = runner
 
 
@@ -186,6 +300,9 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/agent/chat":
                 body = self._read_json()
                 self._send_json(self.server.runner.run(self.server.chat_gateway.chat(body)))
+            elif path == "/api/generate/page":
+                body = self._read_json()
+                self._send_json(self.server.runner.run(self.server.teaching_gateway.generate_page(body)))
             else:
                 raise HttpError(404, f"Route not found: {path}", code="not_found")
         except Exception as exc:
@@ -264,12 +381,14 @@ def create_server(
     runner = AsyncRunner()
     oauth_api = OpenAIOAuthApi(manager)
     chat_gateway = AgentChatGateway(manager, model=model)
+    teaching_gateway = TeachingGenerationGateway(manager, model=model)
     return PdfAgentHttpServer(
         (host, port),
         PdfAgentRequestHandler,
         web_root=web_root or _default_web_root(),
         oauth_api=oauth_api,
         chat_gateway=chat_gateway,
+        teaching_gateway=teaching_gateway,
         runner=runner,
     )
 
@@ -309,6 +428,271 @@ def _build_responses_payload(body: Mapping[str, Any], *, default_model: str) -> 
         "instructions": AGENT_INSTRUCTIONS,
         "input": [{"role": "user", "content": content}],
     }
+
+
+def _build_teaching_generation_payload(body: Mapping[str, Any], *, default_model: str) -> dict[str, Any]:
+    model = _clean_model(body.get("model")) or default_model
+    content: list[dict[str, Any]] = []
+    pdf_file = _pdf_file_input(body.get("documentFile"))
+    if pdf_file:
+        content.append(pdf_file)
+    cache_prefix = _build_teaching_cache_prefix(body)
+    if cache_prefix:
+        content.append({"type": "input_text", "text": cache_prefix})
+    content.append({"type": "input_text", "text": _build_teaching_generation_prompt(body)})
+    payload: dict[str, Any] = {
+        "model": model,
+        "instructions": TEACHING_GENERATOR_INSTRUCTIONS,
+        "input": [{"role": "user", "content": content}],
+    }
+    cache_key = _prompt_cache_key(body)
+    if cache_key:
+        payload["prompt_cache_key"] = cache_key
+    if model.startswith("gpt-5.5"):
+        payload["prompt_cache_retention"] = "24h"
+    return payload
+
+
+def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
+    document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
+    page = body.get("page") if isinstance(body.get("page"), Mapping) else {}
+    source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
+    teaching = page.get("teaching") if isinstance(page.get("teaching"), Mapping) else {}
+    previous_page = body.get("previousPage") if isinstance(body.get("previousPage"), Mapping) else {}
+    next_page = body.get("nextPage") if isinstance(body.get("nextPage"), Mapping) else {}
+    page_no = _int_value(page.get("page_no"), 1)
+    page_count = _int_value(body.get("pageCount"), _int_value(document.get("page_count"), 0))
+    source_text = str(source.get("text_md") or "").strip()
+    existing_notes = str(teaching.get("speaker_notes_md") or "").strip()
+
+    sections = [
+        "Generate one PagePair teaching page JSON for the given PDF page.",
+        "",
+        "Output shape:",
+        json.dumps(_teaching_page_output_contract(page_no), ensure_ascii=False, indent=2),
+        "",
+        "Rules:",
+        "- Return JSON only, no Markdown fences and no prose outside JSON.",
+        "- Keep page_no exactly equal to the input page number.",
+        "- source.text_md must preserve the source page text you received.",
+        "- speaker_notes_md must be Markdown suitable for side-by-side learning.",
+        "- Use headings, short paragraphs, bullet lists, Markdown tables, and LaTeX math when helpful.",
+        "- If the page contains formulas, explain symbols and intuition in speaker_notes_md and formula_explanations.",
+        "- If the page contains table-like content, reconstruct a concise Markdown table when possible.",
+        "- If source text is empty or unreadable, do not hallucinate; set needs_parser_fallback=true, needs_review=true, confidence<=0.35.",
+        "",
+        "Document:",
+        f"title: {_string_value(document.get('title'), 'Untitled PDF')}",
+        f"id: {_string_value(document.get('id'), 'unknown')}",
+        f"page_count: {page_count}",
+        "",
+        "Target page:",
+        f"page_no: {page_no}",
+        f"pdf_page_ref: {_string_value(source.get('pdf_page_ref'), f'#page={page_no}')}",
+        "",
+        "Neighbor context:",
+        f"previous_page_title: {_string_value(previous_page.get('title'), '')}",
+        f"next_page_title: {_string_value(next_page.get('title'), '')}",
+        "",
+        "Existing notes, if regenerating:",
+        _truncate(existing_notes, 4000) if existing_notes else "[none]",
+        "",
+        "Extracted source text for this exact PDF page:",
+        _truncate(source_text, MAX_CONTEXT_CHARS) if source_text else "[No embedded text extracted for this page.]",
+    ]
+    return "\n".join(sections)
+
+
+def _build_teaching_cache_prefix(body: Mapping[str, Any]) -> str:
+    document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
+    context = body.get("documentContext") if isinstance(body.get("documentContext"), Mapping) else {}
+    pages = context.get("pages")
+    if not isinstance(pages, list):
+        return ""
+    page_count = _int_value(context.get("pageCount"), len(pages))
+    chunks = [
+        "PAGEPAIR CACHEABLE DOCUMENT CONTEXT",
+        "This section is intentionally identical for every page-generation request for this PDF so prompt caching can reuse it.",
+        "Use this whole-document context to understand course structure, symbols, terminology, and cross-page dependencies.",
+        "When explaining a target page, prioritize that target page, but use this document context for prerequisites and continuity.",
+        "",
+        f"document_id: {_string_value(document.get('id') or context.get('documentId'), 'unknown')}",
+        f"document_title: {_string_value(document.get('title') or context.get('documentTitle'), 'Untitled PDF')}",
+        f"page_count: {page_count}",
+        "",
+        "FULL PDF TEXT CONTEXT BY ORIGINAL PAGE NUMBER:",
+    ]
+    for item in pages:
+        if not isinstance(item, Mapping):
+            continue
+        page_no = _int_value(item.get("page_no"), 0)
+        if page_no <= 0:
+            continue
+        title = _string_value(item.get("title"), f"PDF p.{page_no}")
+        text = str(item.get("text_md") or "").strip() or "[No embedded text extracted for this page.]"
+        chunks.append(f"\n[p.{page_no}] {title}\n{text}")
+    return _truncate("\n".join(chunks), MAX_TEACHING_CACHE_CHARS)
+
+
+def _pdf_file_input(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    file_data = str(value.get("fileData") or value.get("file_data") or "").strip()
+    if not file_data:
+        return None
+    if file_data.startswith("data:") and "," in file_data:
+        file_data = file_data.split(",", 1)[1].strip()
+    if not file_data or len(file_data) > MAX_PDF_FILE_DATA_CHARS:
+        return None
+    filename = _string_value(value.get("filename") or value.get("fileName"), "document.pdf")
+    if not filename.lower().endswith(".pdf"):
+        filename = f"{filename}.pdf"
+    return {
+        "type": "input_file",
+        "filename": filename,
+        "file_data": file_data,
+    }
+
+
+def _prompt_cache_key(body: Mapping[str, Any]) -> str:
+    document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
+    context = body.get("documentContext") if isinstance(body.get("documentContext"), Mapping) else {}
+    document_file = body.get("documentFile") if isinstance(body.get("documentFile"), Mapping) else {}
+    document_id = _cache_key_part(_string_value(document.get("id") or context.get("documentId"), "document"))
+    digest = _string_value(document_file.get("sha256"), "")
+    if not digest:
+        stable_context = {
+            "documentId": _string_value(document.get("id") or context.get("documentId"), ""),
+            "documentTitle": _string_value(document.get("title") or context.get("documentTitle"), ""),
+            "pageCount": _int_value(context.get("pageCount") or document.get("page_count"), 0),
+            "pages": context.get("pages") if isinstance(context.get("pages"), list) else [],
+        }
+        serialized = json.dumps(stable_context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return f"pagepair:{document_id}:{_cache_key_part(digest)[:32]}"
+
+
+def _cache_key_part(value: str) -> str:
+    cleaned = "".join(
+        character
+        if character.isascii() and (character.isalnum() or character in {"-", "_"})
+        else "_"
+        for character in value
+    )
+    return cleaned[:48] or "unknown"
+
+
+def _teaching_page_output_contract(page_no: int) -> dict[str, Any]:
+    return {
+        "page_no": page_no,
+        "source": {
+            "pdf_page_ref": f"#page={page_no}",
+            "text_md": "same source text received for this page",
+            "ocr_used": False,
+            "parser": "pdfjs",
+            "page_type": "title|agenda|concept|example|figure|table|formula|exercise|summary|blank|unknown",
+        },
+        "teaching": {
+            "slide_title": "short page title",
+            "speaker_notes_md": "Markdown teaching notes with LaTeX and Markdown tables when useful",
+            "concepts": ["key concept"],
+            "prerequisites": ["needed prior knowledge"],
+            "contextual_bridge": "how this page connects to nearby pages, or empty string",
+            "visual_explanations": ["figure/table explanation if applicable"],
+            "formula_explanations": ["formula explanation if applicable"],
+            "evidence": [{"kind": "title|keyword|formula|figure|table|caption|layout|other", "quote_or_reference": "visible evidence from this page"}],
+            "confidence": 0.82,
+            "needs_review": False,
+            "needs_parser_fallback": False,
+        },
+        "status": "ready",
+    }
+
+
+def _parse_generated_page(content: str, body: Mapping[str, Any]) -> dict[str, Any]:
+    value = _json_from_model_text(content)
+    page_input = body.get("page") if isinstance(body.get("page"), Mapping) else {}
+    source_input = page_input.get("source") if isinstance(page_input.get("source"), Mapping) else {}
+    page_no = _int_value(page_input.get("page_no"), 1)
+
+    candidate: Any = value
+    if isinstance(value, Mapping) and isinstance(value.get("page"), Mapping):
+        candidate = value["page"]
+    elif isinstance(value, Mapping) and isinstance(value.get("pages"), list) and value["pages"]:
+        candidate = value["pages"][0]
+    if not isinstance(candidate, Mapping):
+        raise HttpError(502, "Generation response did not contain a page JSON object", code="invalid_generation_json")
+
+    source = candidate.get("source") if isinstance(candidate.get("source"), Mapping) else {}
+    teaching = candidate.get("teaching") if isinstance(candidate.get("teaching"), Mapping) else {}
+    source_text = str(source.get("text_md") or source_input.get("text_md") or "").strip()
+    no_text = not source_text
+    needs_fallback = bool(teaching.get("needs_parser_fallback")) or no_text
+    needs_review = bool(teaching.get("needs_review")) or needs_fallback
+    confidence = _float_value(teaching.get("confidence"), 0.28 if no_text else 0.78)
+    if needs_fallback:
+        confidence = min(confidence, 0.35)
+
+    notes = str(teaching.get("speaker_notes_md") or "").strip()
+    if no_text and not notes:
+        notes = (
+            "## 当前页暂无法生成可靠讲解\n\n"
+            "这一页没有可提取的 PDF 文本层。本轮不会编造内容；请后续接入 OCR 或手动补充页面文本后再重新生成。"
+        )
+
+    evidence = teaching.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        evidence = [{"kind": "other", "quote_or_reference": "PDF.js extracted page text" if source_text else "No embedded text layer"}]
+
+    return {
+        "page_no": page_no,
+        "source": {
+            "pdf_page_ref": _string_value(source.get("pdf_page_ref") or source_input.get("pdf_page_ref"), f"#page={page_no}"),
+            "text_md": source_text,
+            "ocr_used": bool(source.get("ocr_used") or source_input.get("ocr_used") or False),
+            "parser": _string_value(source.get("parser") or source_input.get("parser"), "pdfjs"),
+            "page_type": _page_type_value(source.get("page_type")),
+        },
+        "teaching": {
+            "slide_title": _string_value(teaching.get("slide_title"), f"PDF p.{page_no}"),
+            "speaker_notes_md": notes,
+            "concepts": _string_list(teaching.get("concepts")),
+            "prerequisites": _string_list(teaching.get("prerequisites")),
+            "contextual_bridge": _string_value(teaching.get("contextual_bridge"), ""),
+            "visual_explanations": _string_list(teaching.get("visual_explanations")),
+            "formula_explanations": _string_list(teaching.get("formula_explanations")),
+            "evidence": _evidence_list(evidence),
+            "confidence": max(0.0, min(confidence, 1.0)),
+            "needs_review": needs_review,
+            "needs_parser_fallback": needs_fallback,
+        },
+        "status": "needs_review" if needs_review else "ready",
+    }
+
+
+def _json_from_model_text(content: str) -> Any:
+    text = content.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start_candidates = [index for index in (text.find("{"), text.find("[")) if index >= 0]
+        if not start_candidates:
+            raise HttpError(502, "Generation response was not valid JSON", code="invalid_generation_json")
+        start = min(start_candidates)
+        end = max(text.rfind("}"), text.rfind("]"))
+        if end <= start:
+            raise HttpError(502, "Generation response was not valid JSON", code="invalid_generation_json")
+        try:
+            return json.loads(text[start : end + 1])
+        except json.JSONDecodeError as exc:
+            raise HttpError(502, f"Generation response was not valid JSON: {exc}", code="invalid_generation_json") from exc
 
 
 def _build_agent_prompt(body: Mapping[str, Any]) -> str:
@@ -800,6 +1184,40 @@ def _int_value(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _float_value(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _page_type_value(value: Any) -> str:
+    allowed = {"title", "agenda", "concept", "example", "figure", "table", "formula", "exercise", "summary", "blank", "unknown"}
+    cleaned = str(value or "").strip()
+    return cleaned if cleaned in allowed else "unknown"
+
+
+def _evidence_list(value: Any) -> list[dict[str, str]]:
+    allowed = {"title", "keyword", "formula", "figure", "table", "caption", "layout", "other"}
+    if not isinstance(value, list):
+        return [{"kind": "other", "quote_or_reference": "Generated from page source text"}]
+    evidence: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        kind = str(item.get("kind") or "other").strip()
+        quote = str(item.get("quote_or_reference") or "").strip()
+        if quote:
+            evidence.append({"kind": kind if kind in allowed else "other", "quote_or_reference": quote})
+    return evidence or [{"kind": "other", "quote_or_reference": "Generated from page source text"}]
 
 
 def _truncate(value: str, max_chars: int) -> str:

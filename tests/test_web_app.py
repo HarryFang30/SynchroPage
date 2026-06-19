@@ -8,6 +8,7 @@ from pathlib import Path
 from pdf_agent.server.web_app import (
     HttpError,
     _build_responses_payload,
+    _build_teaching_generation_payload,
     _extract_gateway_text,
     _resolve_static_path,
 )
@@ -129,6 +130,49 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("User question:\n\n解释这段", prompt)
         self.assertNotIn("[p.11] Page 11", prompt)
         self.assertNotIn("[p.30] Page 30", prompt)
+
+    def test_teaching_generation_payload_uses_stable_cache_prefix_before_target_page(self) -> None:
+        payload = _build_teaching_generation_payload(
+            {
+                "model": "gpt-5.5",
+                "document": {"id": "doc_1", "title": "T7 Verilog HDL", "page_count": 2},
+                "documentFile": {
+                    "filename": "t7.pdf",
+                    "fileData": "JVBERi0x",
+                    "sha256": "a" * 64,
+                },
+                "documentContext": {
+                    "documentId": "doc_1",
+                    "documentTitle": "T7 Verilog HDL",
+                    "pageCount": 2,
+                    "pages": [
+                        {"page_no": 1, "title": "Intro", "text_md": "counter overview"},
+                        {"page_no": 2, "title": "Enable", "text_md": "count enable signal"},
+                    ],
+                },
+                "pageCount": 2,
+                "page": {
+                    "page_no": 2,
+                    "source": {"text_md": "count enable signal", "pdf_page_ref": "#page=2"},
+                    "teaching": {"slide_title": "Enable", "speaker_notes_md": ""},
+                },
+            },
+            default_model="fallback",
+        )
+
+        self.assertEqual(payload["model"], "gpt-5.5")
+        self.assertEqual(payload["prompt_cache_retention"], "24h")
+        self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_1:"))
+        content = payload["input"][0]["content"]
+        self.assertEqual(content[0]["type"], "input_file")
+        self.assertEqual(content[0]["filename"], "t7.pdf")
+        self.assertEqual(content[1]["type"], "input_text")
+        self.assertIn("PAGEPAIR CACHEABLE DOCUMENT CONTEXT", content[1]["text"])
+        self.assertIn("[p.1] Intro", content[1]["text"])
+        self.assertIn("[p.2] Enable", content[1]["text"])
+        self.assertEqual(content[2]["type"], "input_text")
+        self.assertIn("Target page:", content[2]["text"])
+        self.assertIn("page_no: 2", content[2]["text"])
 
     def test_extracts_streaming_response_text(self) -> None:
         stream = "\n".join(

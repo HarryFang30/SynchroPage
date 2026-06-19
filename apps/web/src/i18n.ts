@@ -181,6 +181,12 @@ export type AppCopy = {
     jsonImported: string;
     layoutReset: string;
     generationQueued: string;
+    generationPreparingCache: (total: number) => string;
+    generationStarted: (total: number) => string;
+    generationPage: (current: number, total: number, pageNo: number) => string;
+    generationPageFailed: (pageNo: number, message: string) => string;
+    generationDone: (completed: number, total: number) => string;
+    pdfTextExtracting: (ready: number, total: number) => string;
   };
   errors: {
     accountNotFound: string;
@@ -535,6 +541,12 @@ const zhCN: AppCopy = {
     jsonImported: "已导入 PagePair JSON",
     layoutReset: "工作区布局已重置",
     generationQueued: "生成任务已交给后端 harness",
+    generationPreparingCache: (total) => `正在准备 ${total} 页 PDF 缓存上下文`,
+    generationStarted: (total) => `开始生成 ${total} 页讲解`,
+    generationPage: (current, total, pageNo) => `正在生成第 ${pageNo} 页讲解（${current}/${total}）`,
+    generationPageFailed: (pageNo, message) => `第 ${pageNo} 页讲解生成失败：${message}`,
+    generationDone: (completed, total) => `讲解生成完成：${completed}/${total} 页`,
+    pdfTextExtracting: (ready, total) => `正在读取 PDF 文本层，已就绪 ${ready}/${total} 页，请稍后再生成`,
   },
   errors: {
     accountNotFound: "请先连接 OpenAI OAuth 后再发送。",
@@ -889,6 +901,12 @@ const enUS: AppCopy = {
     jsonImported: "Imported PagePair JSON",
     layoutReset: "Workspace layout reset",
     generationQueued: "Generation task sent to the backend harness",
+    generationPreparingCache: (total) => `Preparing cacheable PDF context for ${total} pages`,
+    generationStarted: (total) => `Generating notes for ${total} pages`,
+    generationPage: (current, total, pageNo) => `Generating notes for page ${pageNo} (${current}/${total})`,
+    generationPageFailed: (pageNo, message) => `Page ${pageNo} generation failed: ${message}`,
+    generationDone: (completed, total) => `Notes generated: ${completed}/${total} pages`,
+    pdfTextExtracting: (ready, total) => `Reading PDF text layer: ${ready}/${total} pages ready. Try generating again shortly.`,
   },
   errors: {
     accountNotFound: "Connect OpenAI OAuth before sending.",
