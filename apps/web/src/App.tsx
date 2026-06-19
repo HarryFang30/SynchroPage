@@ -1020,13 +1020,13 @@ const markdownRemarkPlugins = [
 const markdownRehypePlugins = [[rehypeKatex, { strict: false, throwOnError: false }]] as const;
 
 function preprocessMathMarkdown(text: string) {
-  const normalized = normalizeMathDelimiters(escapeCurrencyDollars(text));
+  const normalized = repairBinaryTransitionMathSpillover(normalizeMathDelimiters(escapeCurrencyDollars(text)));
   return normalized
     .split(/(```[\s\S]*?```)/g)
     .map((segment) => {
       if (segment.startsWith("```")) return segment;
       return segment
-        .split(/(\$\$[\s\S]*?\$\$|\$[^$\n]+\$)/g)
+        .split(/(\$\$[\s\S]*?\$\$|\$(?!\$)(?:\\.|[^$])*\$)/g)
         .map((part) => {
           if (part.startsWith("$")) return sanitizeMathMarkdownSegment(part);
           return wrapBareCircuitMath(part);
@@ -1034,6 +1034,13 @@ function preprocessMathMarkdown(text: string) {
         .join("");
     })
     .join("");
+}
+
+function repairBinaryTransitionMathSpillover(text: string) {
+  return text.replace(
+    /\$((?:[01]{2,}|\\cdots)(?:\s*(?:\\to|\\rightarrow|→)\s*(?:[01]{2,}|\\cdots))+)(\s*)([。；，、](?=[\u3400-\u9fff]))/g,
+    (_match, expression: string, spacing: string, punctuation: string) => `$${expression}$${spacing}${punctuation}`,
+  );
 }
 
 function sanitizeMathMarkdownSegment(segment: string) {
@@ -1046,7 +1053,7 @@ function sanitizeMathMarkdownSegment(segment: string) {
 function sanitizeKatexBody(body: string) {
   let normalized = body.replace(/\\(?=\d)/g, "");
   if (!/\\(?:text|mathrm|operatorname)\s*\{/.test(normalized)) {
-    normalized = normalized.replace(/([\u3400-\u9fff]+)/g, "\\text{$1}");
+    normalized = normalized.replace(/([\u3400-\u9fff，。、；：！？、]+)/g, "\\text{$1}");
   }
   return normalized;
 }

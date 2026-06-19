@@ -176,6 +176,14 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("page_no: 2", content[2]["text"])
 
     def test_generated_page_normalizes_mixed_language_latex_ranges(self) -> None:
+        bad_notes = (
+            r"计数范围是 $0 到 \2^n-1$。"
+            "\n"
+            r"三位计数器会 $000 数到 \111，然后回到 \000$。"
+            "\n"
+            r"状态转移：$000 \to 001 \to 010 \to \cdots \to 111 \to 000"
+            "\n。表中的状态如下。"
+        )
         page = _parse_generated_page(
             json.dumps(
                 {
@@ -183,7 +191,7 @@ class WebAppTest(unittest.TestCase):
                     "source": {"text_md": "n-bit counter range", "pdf_page_ref": "#page=1"},
                     "teaching": {
                         "slide_title": "Counter range",
-                        "speaker_notes_md": "计数范围是 $0 到 \\2^n-1$。",
+                        "speaker_notes_md": bad_notes,
                         "concepts": ["counter"],
                         "confidence": 0.9,
                     },
@@ -198,6 +206,11 @@ class WebAppTest(unittest.TestCase):
         )
 
         self.assertIn("$0 \\text{到} 2^n-1$", page["teaching"]["speaker_notes_md"])
+        self.assertIn("$000 \\text{数到} 111\\text{，然后回到} 000$", page["teaching"]["speaker_notes_md"])
+        self.assertIn(
+            "$000 \\to 001 \\to 010 \\to \\cdots \\to 111 \\to 000$\n。表中的",
+            page["teaching"]["speaker_notes_md"],
+        )
 
     def test_extracts_streaming_response_text(self) -> None:
         stream = "\n".join(

@@ -52,6 +52,8 @@ Return strict JSON only. Do not wrap JSON in Markdown fences.
 Use the user's language. Preserve formulas in LaTeX using $...$ or $$...$$.
 Do not put natural-language Chinese text directly inside math delimiters. Write ranges like $0$ 到 $2^n - 1$, or use $0 \\text{ 到 } 2^n - 1$.
 Never escape digits in LaTeX; write 2^n, not \\2^n.
+Never escape binary strings; write 000, 111, not \\000 or \\111.
+For binary counting sequences, write $000 \\to 001 \\to 010 \\to \\cdots \\to 111 \\to 000$ and close math before Chinese prose.
 Render tables as GitHub-Flavored Markdown tables inside speaker_notes_md when the source page contains tabular content.
 Do not invent facts that are not supported by the source page text. If the page has no extractable text, mark it as needs_parser_fallback."""
 
@@ -489,6 +491,8 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
         "- Use headings, short paragraphs, bullet lists, Markdown tables, and LaTeX math when helpful.",
         "- For mixed language and math, keep prose outside math delimiters when possible: write $0$ 到 $2^n - 1$, not $0 到 \\2^n-1$.",
         "- Never escape digits in LaTeX. Use 2^n, not \\2^n.",
+        "- Never escape binary strings. Use 000 and 111, not \\000 or \\111.",
+        "- For binary counting sequences, close math before Chinese prose: $000 \\to 001 \\to 010 \\to \\cdots \\to 111 \\to 000$。表中的...",
         "- If the page contains formulas, explain symbols and intuition in speaker_notes_md and formula_explanations.",
         "- If the page contains table-like content, reconstruct a concise Markdown table when possible.",
         "- If source text is empty or unreadable, do not hallucinate; set needs_parser_fallback=true, needs_review=true, confidence<=0.35.",
@@ -716,7 +720,16 @@ def _normalize_markdown_math(value: str) -> str:
 
 
 def _normalize_markdown_math_segment(value: str) -> str:
-    return re.sub(r"(\$\$[\s\S]*?\$\$|\$[^$\n]+\$)", _normalize_math_match, value)
+    value = _repair_binary_transition_math_spillover(value)
+    return re.sub(r"(\$\$[\s\S]*?\$\$|\$(?!\$)(?:\\.|[^$])*\$)", _normalize_math_match, value)
+
+
+def _repair_binary_transition_math_spillover(value: str) -> str:
+    return re.sub(
+        r"\$((?:[01]{2,}|\\cdots)(?:\s*(?:\\to|\\rightarrow|→)\s*(?:[01]{2,}|\\cdots))+)(\s*)([。；，、](?=[\u3400-\u9fff]))",
+        lambda match: f"${match.group(1)}${match.group(2)}{match.group(3)}",
+        value,
+    )
 
 
 def _normalize_math_match(match: re.Match[str]) -> str:
@@ -731,7 +744,7 @@ def _normalize_math_match(match: re.Match[str]) -> str:
 def _normalize_katex_body(value: str) -> str:
     normalized = re.sub(r"\\(?=\d)", "", value)
     if not re.search(r"\\(?:text|mathrm|operatorname)\s*\{", normalized):
-        normalized = re.sub(r"([\u3400-\u9fff]+)", r"\\text{\1}", normalized)
+        normalized = re.sub(r"([\u3400-\u9fff，。、；：！？、]+)", r"\\text{\1}", normalized)
     return normalized
 
 
