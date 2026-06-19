@@ -1,10 +1,12 @@
 # PDF Agent
 
-工业级课程 PDF Agent 工作区：将 PDF 转换为页级对齐的 `lecture_pairpack.v1` 结构化产物，提供 React/TypeScript PagePair Reader，并通过 OpenAI OAuth Gateway 驱动右侧 IDE 风格 AI Agent Panel。
+工业级课程 PDF Agent 工作区：将 PDF 转换为页级对齐的 `lecture_pairpack.v1` 结构化产物，提供 React/TypeScript PagePair Reader，并通过 OpenAI OAuth Gateway 驱动右侧 IDE / Cursor / Codex 风格 AI Agent Panel。
+
+当前前端是 local-first workspace：PDF Blob、讲解页、Agent 对话、PDF 选区上下文、当前页、设置和布局都会保存到 IndexedDB，刷新后自动恢复。
 
 ## 项目能力
 
-- `apps/web`：现代化 React Reader，支持 PDF/页面预览、逐页讲解、结构化字段、JSON 检查、上下文 chips、图片附件和 `@assistant-ui/react` Agent Panel。
+- `apps/web`：现代化 React Reader，支持 PDF.js canvas/text-layer 预览、真实 PDF 文字选区、逐页讲解、结构化字段、JSON 检查、上下文 chips、图片附件、`@assistant-ui/react` Agent Panel 和 local-first persistence。
 - `src/pdf_agent`：Python 后端，负责 OpenAI OAuth、ChatGPT Codex Gateway 请求、上下文组装、本地 HTTP server。
 - `contracts/schemas`：版本化 JSON Schema，用于约束模型输出。
 - `config`：OAuth、prompt、harness 策略配置。
@@ -17,6 +19,7 @@
 apps/
   web/                         React + TypeScript PagePair Reader 前端
     src/                       App 组件、assistant-ui adapter、CSS 视觉系统
+      lib/persistence/         Dexie/IndexedDB schema、store、migration、import/export、repair
 config/
   auth/                        OpenAI OAuth 与 Gateway 配置
   harness/                     重试、fallback、批处理、观测策略
@@ -56,6 +59,7 @@ tests/
 - Python 3.11 或更新版本。
 - Node.js 20 或更新版本。当前开发机使用 Node `v24.6.0`、npm `11.12.1`。
 - Ruby 可选。`scripts/check.sh` 会在 Ruby 存在时用它校验 YAML 语法。
+- 浏览器需要支持 IndexedDB。建议使用 Chrome / Edge / Safari 当前稳定版。
 - 首次安装前端依赖和真实 OpenAI OAuth / 模型调用需要网络。
 
 ## 安装
@@ -137,7 +141,7 @@ http://127.0.0.1:5173/
 
 流程：
 
-1. 打开 Reader 后点击顶部锁形图标。
+1. 打开 Reader 后点击顶部「更多」菜单中的「连接 OpenAI OAuth」。
 2. 前端调用 `POST /auth/openai/start`。
 3. 后端创建 OpenAI device code。
 4. 页面打开 OpenAI verification URL，并在浏览器允许时复制 user code。
@@ -160,21 +164,87 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 
 1. 用上传按钮导入 PDF。
 2. 如果已有生成结果，用 JSON 按钮导入 `lecture_pairpack.v1` 文件。
-3. 通过左侧页列表或顶部进度条切换页面。
-4. 中间区域查看原 PDF/页面预览。
-5. 右侧讲解区在「讲解 / 结构 / JSON」之间切换。
-6. 在 Agent 面板中加入当前页、选中文本、公式或图片。
-7. 在 composer 中提问，后端会带上当前页、上下文 chips、最近对话和图片附件。
+3. 通过左侧页列表或 PDF pane toolbar 切换页面。
+4. 中间区域查看原 PDF 页面；当前实现优先走 PDF.js canvas + transparent text layer，失败时回退原生 PDF 预览。
+5. 讲解区在「讲解 / 结构 / JSON」之间切换。
+6. 在 PDF 页面真实可见文字上拖选文本，浮动工具条可「添加到对话 / 解释选中内容 / 总结选中内容」。
+7. 在 Agent 面板中加入当前页、PDF 选区、公式或图片。
+8. 在 composer 中提问，后端会带上当前 PDF context、选中文字、页码位置、上下文 chips、最近对话和图片附件。
 
 前端发送给 `/api/agent/chat` 的 payload 包含：
 
 - document metadata；
 - current page；
 - recent messages；
+- `selectedContext`，包含 PDF 页码、选区文本、rects、viewport scale；
+- `pdfContext`，长 PDF 会按 Settings 中的页数阈值截取前后页；
 - `quote`、`pdf_reference` 等 context parts；
 - image attachments data URL。
 
 后端会转换为 Responses 风格的多模态请求，包括 `input_text` 和 `input_image`。
+
+## 本地保存与恢复
+
+前端使用 Dexie + IndexedDB 作为 local-first persistence layer。不要把 PDF、聊天或生成内容存进 `localStorage`；`localStorage` 只保存很小的 fallback，例如 `lastWorkspaceId` 和 UI preference fallback。
+
+保存位置：
+
+```text
+IndexedDB database: pagepair-reader
+localStorage key: pagepair.lastWorkspaceId.v1
+```
+
+主要表：
+
+```text
+workspaces        workspace metadata、active document/thread、当前页、layout snapshot、settings snapshot
+documents         PDF/PagePair document metadata、页数、当前 PDF 页、pdfBlobId
+fileBlobs         PDF Blob 本体
+generatedPages    逐页讲解 markdown/json/status
+chatThreads       Agent 对话线程
+chatMessages      user/assistant/system 消息、selectedContext、sourceRefs、streaming status
+selectedContexts  composer 中尚未发送的 PDF/讲解/助手选区
+settings          theme、语言、debug、PDF context 截断策略等 UI 设置
+```
+
+自动保存触发点：
+
+- PDF 上传成功后保存 Blob + Document + Workspace。
+- PDF 页码切换、讲解页变化、Settings/layout 变化会 debounce 保存。
+- Agent 消息发送前先保存 user message；assistant 消息从 pending、streaming 到 completed/failed/stopped 都会持续保存。
+- selected context 添加到 composer 时保存，清空时删除。
+- 页面隐藏或刷新前会尝试 flush 当前 workspace 快照。
+
+恢复流程：
+
+1. 启动时读取 `lastWorkspaceId`。
+2. 加载 workspace、active document、PDF Blob、generated pages、active chat thread 和 messages。
+3. 从 Blob 重新创建 object URL 并交给现有 PDF renderer。
+4. 恢复 current PDF page、settings、layout、selected context 和 Agent 初始消息。
+5. 如果 metadata 存在但 Blob 缺失，会显示恢复失败状态，不会静默白屏。
+
+Settings → 存储 提供：
+
+- 保存状态；
+- workspace / document 数量；
+- 本地存储占用估算；
+- persistent storage 状态和启用按钮；
+- 导出当前 workspace；
+- 导入 workspace；
+- 清空当前 workspace；
+- 检查并清理存储；
+- 重置当前 workspace。
+
+导出 workspace 会包含 metadata、PDF Blob data URL、讲解页、聊天、选区、settings、table counts 和 PDF Blob SHA-256 hash。导入时会先校验 schema、引用关系、counts、Blob 大小和 hash，再在单个 IndexedDB transaction 中写入，最后切换 `lastWorkspaceId`。
+
+当前持久化实现借鉴了 Cherry Studio 的几个工程实践：
+
+- schema 和 service 分层；
+- Dexie migration scaffold；
+- 导入前 validate、导入时 transaction commit；
+- 统一错误分类；
+- storage repair / orphan cleanup；
+- page hide flush。
 
 ## 本地 API
 
@@ -207,7 +277,14 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 npm --prefix apps/web run build
 ```
 
-`npm --prefix apps/web run build` 可能出现 Vite chunk-size warning，因为 assistant-ui 和 markdown renderer 被打进主 bundle。这个 warning 不影响本地运行。
+前端单独校验：
+
+```bash
+npm --prefix apps/web run check
+npm --prefix apps/web run build
+```
+
+`npm --prefix apps/web run build` 可能出现 Vite chunk-size warning，因为 assistant-ui、pdf.js 和 markdown renderer 被打进主 bundle。这个 warning 不影响本地运行。
 
 ## 关键文档
 
@@ -235,4 +312,6 @@ npm --prefix apps/web run build
 - 契约 schema 只做增量演进；破坏性变更新建版本目录。
 - 长任务持久化应接在 `src/pdf_agent/harness/session_store.py` 后面。
 - 真实模型凭据只允许后端读取，浏览器永远只拿应用状态和 device code。
-- 如果需要生产级 PDF 选区，单独接 `pdf.js` canvas/text layer，不引入完整 ebook engine。
+- PDF 预览和选区走受控 PDF.js canvas/text layer；不要回退到旁边/下面额外 reflow 原文层。
+- 前端 workspace 数据必须通过 `apps/web/src/lib/persistence` 访问，不要把 IndexedDB 操作散落到组件里。
+- PDF Blob、chat、generated pages 不允许塞进 `localStorage`。
