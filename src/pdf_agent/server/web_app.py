@@ -917,33 +917,48 @@ def _build_user_request(input_text: str, selected_context: Any, pdf_context: Any
         return cleaned_input
     user_question = cleaned_input or "Please answer using the selected text."
     source_lines = _selected_source_lines(selected_context, pdf_context)
-    return "\n\n".join(
-        [
-            "Selected source:",
-            *source_lines,
-            "Selected text:",
-            selected_text,
-            "User question:",
-            user_question,
-        ]
-    )
+    sections = [
+        "Selected source:",
+        *source_lines,
+        "Selected explanation text:" if _selected_context_source_type(selected_context) == "generated-explanation" else "Selected text:",
+        selected_text,
+    ]
+    pdf_source_text = _selected_pdf_source_text(selected_context)
+    if pdf_source_text:
+        sections.extend(["Corresponding original PDF page text:", pdf_source_text])
+    sections.extend(["User question:", user_question])
+    return "\n\n".join(sections)
 
 
 def _selected_source_lines(selected_context: Any, pdf_context: Any) -> list[str]:
     if not isinstance(selected_context, Mapping):
         return []
+    source_type = _selected_context_source_type(selected_context)
+    generated_page_no = _int_value(selected_context.get("generatedPageNumber"), 0)
+    pdf_source = selected_context.get("pdfSource") if isinstance(selected_context.get("pdfSource"), Mapping) else {}
+    pdf_source_page_no = _int_value(pdf_source.get("pageNumber") if isinstance(pdf_source, Mapping) else None, 0)
     page_no = _int_value(
         selected_context.get("pdfPageNumber")
+        or pdf_source_page_no
         or selected_context.get("generatedPageNumber")
         or selected_context.get("pageNumber"),
         0,
     )
     lines: list[str] = []
+    if source_type == "generated-explanation" and generated_page_no:
+        lines.append(f"Selected explanation page: {generated_page_no}")
     if page_no:
-        lines.append(f"PDF page: {page_no}")
+        lines.append(f"Corresponding original PDF page: {page_no}" if source_type == "generated-explanation" else f"PDF page: {page_no}")
     section = _string_value(selected_context.get("sectionTitle"), "")
     if section:
         lines.append(f"Source: {section}")
+    if isinstance(pdf_source, Mapping):
+        title = _string_value(pdf_source.get("title"), "")
+        ref = _string_value(pdf_source.get("ref"), "")
+        if title:
+            lines.append(f"PDF page title: {title}")
+        if ref:
+            lines.append(f"PDF page reference: {ref}")
     if not isinstance(pdf_context, Mapping):
         return lines
 
@@ -972,6 +987,21 @@ def _selected_context_text(value: Any) -> str:
     if not isinstance(value, Mapping):
         return ""
     return _truncate(str(value.get("text") or "").strip(), MAX_CONTEXT_CHARS)
+
+
+def _selected_context_source_type(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return "unknown"
+    return _string_value(value.get("sourceType"), "unknown")
+
+
+def _selected_pdf_source_text(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    pdf_source = value.get("pdfSource")
+    if not isinstance(pdf_source, Mapping):
+        return ""
+    return _truncate(str(pdf_source.get("text") or "").strip(), MAX_CONTEXT_CHARS)
 
 
 def _pdf_document_context(value: Any) -> str:
@@ -1083,6 +1113,8 @@ def _selected_context(value: Any) -> str:
     source_type = _string_value(value.get("sourceType"), "unknown")
     document_title = _string_value(value.get("documentTitle"), "")
     section_title = _string_value(value.get("sectionTitle"), "")
+    pdf_source = value.get("pdfSource") if isinstance(value.get("pdfSource"), Mapping) else {}
+    pdf_source_page = _string_value(pdf_source.get("pageNumber") if isinstance(pdf_source, Mapping) else "", "")
     page_number = _string_value(
         value.get("pdfPageNumber") or value.get("generatedPageNumber") or value.get("pageNumber"),
         "",
@@ -1090,11 +1122,23 @@ def _selected_context(value: Any) -> str:
     meta = [f"type={source_type}"]
     if page_number:
         meta.append(f"page={page_number}")
+    if source_type == "generated-explanation" and pdf_source_page:
+        meta.append(f"corresponding_pdf_page={pdf_source_page}")
     if document_title:
         meta.append(f"document={document_title}")
     if section_title:
         meta.append(f"section={section_title}")
-    return f"Selected context ({', '.join(meta)})\n{text}"
+    result = f"Selected context ({', '.join(meta)})\n{text}"
+    pdf_source_text = _selected_pdf_source_text(value)
+    if pdf_source_text:
+        pdf_source_title = _string_value(pdf_source.get("title") if isinstance(pdf_source, Mapping) else "", "")
+        pdf_label = f"Corresponding PDF source"
+        if pdf_source_page:
+            pdf_label += f" p.{pdf_source_page}"
+        if pdf_source_title:
+            pdf_label += f" · {pdf_source_title}"
+        result += f"\n\n{pdf_label}\n{pdf_source_text}"
+    return result
 
 
 def _context_items(value: Any) -> list[str]:

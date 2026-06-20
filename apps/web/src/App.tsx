@@ -28,6 +28,7 @@ import {
 } from "pdfjs-dist";
 import PdfJsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
 import {
+  Archive,
   Check,
   BookOpen,
   ChevronDown,
@@ -232,6 +233,14 @@ type SelectedContextSourceType =
   | "page"
   | "unknown";
 
+type SelectedPdfSource = {
+  pageNumber: number;
+  title?: string;
+  text?: string;
+  ref?: string;
+  parser?: string;
+};
+
 type SelectedContext = {
   id: string;
   text: string;
@@ -256,6 +265,7 @@ type SelectedContext = {
   }>;
   viewportScale?: number;
   viewportRotation?: number;
+  pdfSource?: SelectedPdfSource;
   createdAt: number;
 };
 
@@ -719,6 +729,19 @@ function selectedContextToAgentContext(context: SelectedContext, copy: AppCopy):
   };
 }
 
+function selectedContextPdfSourceContext(context: SelectedContext, copy: AppCopy): AgentContextItem | null {
+  const pdfSource = context.pdfSource;
+  if (!pdfSource?.pageNumber || !pdfSource.text?.trim()) return null;
+  return {
+    id: `${context.id}:pdf-source`,
+    type: "pdf_reference",
+    title: copy.common.sourcePdfPage(pdfSource.pageNumber),
+    source: pdfSource.title || pdfSource.ref || copy.common.sourcePdfPage(pdfSource.pageNumber),
+    page_no: pdfSource.pageNumber,
+    text: pdfSource.text,
+  };
+}
+
 function selectedContextPayload(context: SelectedContext) {
   return {
     id: context.id,
@@ -734,6 +757,7 @@ function selectedContextPayload(context: SelectedContext) {
     selectionRects: context.selectionRects,
     viewportScale: context.viewportScale,
     viewportRotation: context.viewportRotation,
+    pdfSource: context.pdfSource,
   };
 }
 
@@ -801,9 +825,19 @@ function buildSelectedQuestionPrompt(
   const userQuestion = question.trim() || copy.agent.continuePrompt;
   if (!selectedContext?.text.trim()) return userQuestion;
   const selectedPage = selectedContextPageNumber(selectedContext);
+  const pdfSource = selectedContext.pdfSource;
   const sourceLines = [
-    selectedPage ? `PDF page: ${selectedPage}` : null,
+    selectedContext.sourceType === "generated-explanation" && selectedContext.generatedPageNumber
+      ? `Selected explanation page: ${selectedContext.generatedPageNumber}`
+      : null,
+    selectedPage
+      ? selectedContext.sourceType === "generated-explanation"
+        ? `Corresponding original PDF page: ${selectedPage}`
+        : `PDF page: ${selectedPage}`
+      : null,
     selectedContext.sectionTitle ? `Source: ${selectedContext.sectionTitle}` : null,
+    pdfSource?.title ? `PDF page title: ${pdfSource.title}` : null,
+    pdfSource?.ref ? `PDF page reference: ${pdfSource.ref}` : null,
   ].filter((line): line is string => Boolean(line));
   if (pdfContext?.truncated) {
     const includedPages = formatPageRanges(pdfContext.includedPageNumbers);
@@ -819,14 +853,26 @@ function buildSelectedQuestionPrompt(
       );
     }
   }
-  return [
+  const promptSections = [
     "Selected source:",
     ...sourceLines,
-    "Selected text:",
+    selectedContext.sourceType === "generated-explanation" ? "Selected explanation text:" : "Selected text:",
     selectedContext.text.trim(),
-    "User question:",
-    userQuestion,
-  ].join("\n\n");
+  ];
+  if (pdfSource?.text?.trim()) {
+    promptSections.push(
+      "Corresponding original PDF page text:",
+      truncatePromptContext(pdfSource.text),
+    );
+  }
+  promptSections.push("User question:", userQuestion);
+  return promptSections.join("\n\n");
+}
+
+function truncatePromptContext(text: string, max = 6000) {
+  const value = text.trim();
+  if (value.length <= max) return value;
+  return `${value.slice(0, max)}\n\n[Truncated to keep the selected prompt concise.]`;
 }
 
 function sanitizePdfContextSettings(settings: Pick<UiPreferences, "pdfContextFullPageLimit" | "pdfContextEdgePageCount">) {
@@ -1181,6 +1227,9 @@ function usePageSelection(args: {
     const pdfPageNumber = Number(pdfPageLayer?.dataset.pageNumber || args.page.page_no);
     const viewportScale = Number(pdfPageLayer?.dataset.viewportScale || "");
     const viewportRotation = Number(pdfPageLayer?.dataset.viewportRotation || "");
+    const isPdfSelection = source.sourceType === "pdf-page" && Number.isFinite(pdfPageNumber);
+    const isNotesSelection = source.sourceType === "generated-explanation";
+    const sourcePdfPageNumber = isPdfSelection ? pdfPageNumber : args.page.page_no;
     const pageRect = pdfPageLayer?.getBoundingClientRect();
     const selectionRects = Array.from(range.getClientRects())
       .filter((item) => item.width > 0 && item.height > 0)
@@ -1195,9 +1244,9 @@ function usePageSelection(args: {
       text,
       sourceType: source.sourceType,
       documentTitle: args.documentTitle,
-      pageNumber: source.sourceType === "pdf-page" && Number.isFinite(pdfPageNumber) ? pdfPageNumber : args.page.page_no,
-      pdfPageNumber: source.sourceType === "pdf-page" && Number.isFinite(pdfPageNumber) ? pdfPageNumber : undefined,
-      generatedPageNumber: source.sourceType === "generated-explanation" ? args.page.page_no : undefined,
+      pageNumber: sourcePdfPageNumber,
+      pdfPageNumber: isPdfSelection || isNotesSelection ? sourcePdfPageNumber : undefined,
+      generatedPageNumber: isNotesSelection ? args.page.page_no : undefined,
       sectionTitle: source.label,
       rect: {
         x: rect.left,
@@ -1208,6 +1257,15 @@ function usePageSelection(args: {
       selectionRects,
       viewportScale: source.sourceType === "pdf-page" && Number.isFinite(viewportScale) ? viewportScale : undefined,
       viewportRotation: source.sourceType === "pdf-page" && Number.isFinite(viewportRotation) ? viewportRotation : undefined,
+      pdfSource: isNotesSelection
+        ? {
+            pageNumber: sourcePdfPageNumber,
+            title: args.page.teaching.slide_title || `PDF p.${sourcePdfPageNumber}`,
+            text: args.page.source.text_md,
+            ref: args.page.source.pdf_page_ref,
+            parser: args.page.source.parser,
+          }
+        : undefined,
       createdAt: Date.now(),
     };
 
@@ -1292,6 +1350,9 @@ function createPdfAgentAdapter(args: {
       const selectedAgentContext = snapshot.selectedContext
         ? selectedContextToAgentContext(snapshot.selectedContext, args.copy)
         : null;
+      const selectedPdfSourceContext = snapshot.selectedContext
+        ? selectedContextPdfSourceContext(snapshot.selectedContext, args.copy)
+        : null;
       const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
       const latestUserText = latestUser ? messageText(latestUser) : "";
       const promptInput = buildSelectedQuestionPrompt(latestUserText, snapshot.selectedContext, snapshot.pdfContext, args.copy);
@@ -1300,6 +1361,7 @@ function createPdfAgentAdapter(args: {
       const selectedContextRecord = snapshot.selectedContext ? asPersistedRecord(selectedContextPayload(snapshot.selectedContext)) : null;
       const sourceRefs = [
         ...(selectedAgentContext ? [asPersistedRecord(selectedAgentContext)] : []),
+        ...(selectedPdfSourceContext ? [asPersistedRecord(selectedPdfSourceContext)] : []),
         ...snapshot.contexts.map((context) => asPersistedRecord(context)),
       ];
       let persistQueue = Promise.resolve();
@@ -1355,6 +1417,21 @@ function createPdfAgentAdapter(args: {
                 page_no: selectedAgentContext.page_no,
                 document_id: pack.document.id,
                 source_type: snapshot.selectedContext?.sourceType,
+                pdf_source: snapshot.selectedContext?.pdfSource || null,
+              },
+            }
+          : null,
+        selectedPdfSourceContext
+          ? {
+              type: "pdf_reference",
+              title: selectedPdfSourceContext.title,
+              text: selectedPdfSourceContext.text,
+              source: {
+                kind: selectedPdfSourceContext.source,
+                page_no: selectedPdfSourceContext.page_no,
+                document_id: pack.document.id,
+                source_type: "pdf-page",
+                relation: "corresponding_pdf_source_for_selected_explanation",
               },
             }
           : null,
@@ -1390,7 +1467,11 @@ function createPdfAgentAdapter(args: {
         input: promptInput,
         parts,
         attachments: snapshot.attachments,
-        context: selectedAgentContext ? [selectedAgentContext, ...snapshot.contexts] : snapshot.contexts,
+        context: [
+          ...(selectedAgentContext ? [selectedAgentContext] : []),
+          ...(selectedPdfSourceContext ? [selectedPdfSourceContext] : []),
+          ...snapshot.contexts,
+        ],
         selectedContext: snapshot.selectedContext ? selectedContextPayload(snapshot.selectedContext) : null,
         pdfContext: snapshot.pdfContext,
       };
@@ -1631,8 +1712,8 @@ export default function App() {
   const pdfNavigationPageCount = Math.max(pdfUrl ? pdfPageCount || pack.document.page_count || pack.pages.length : pack.pages.length, 1);
   const currentPdfPageNo = Math.min(Math.max(currentPageNo, 1), pdfNavigationPageCount);
   const page =
-    pack.pages.find((item) => item.page_no === currentPageNo) ||
-    pack.pages[Math.min(Math.max(currentPageNo - 1, 0), Math.max(pack.pages.length - 1, 0))] ||
+    pack.pages.find((item) => item.page_no === currentPdfPageNo) ||
+    pack.pages[Math.min(Math.max(currentPdfPageNo - 1, 0), Math.max(pack.pages.length - 1, 0))] ||
     samplePacks[uiPreferences.language].pages[0];
   const currentIndex = Math.max(0, pack.pages.findIndex((item) => item.page_no === page.page_no));
   const generatedPageCount = pack.pages.filter((item) => hasCompletedTeaching(item)).length;
@@ -1953,6 +2034,7 @@ export default function App() {
               generatedPageNumber?: number;
               sectionTitle?: string;
               selectionRects?: Record<string, unknown>[];
+              pdfSource?: Record<string, unknown>;
             },
           });
         } else {
@@ -2208,6 +2290,7 @@ export default function App() {
               generatedPageNumber?: number;
               sectionTitle?: string;
               selectionRects?: Record<string, unknown>[];
+              pdfSource?: Record<string, unknown>;
             },
           });
         } else {
@@ -2775,6 +2858,39 @@ export default function App() {
     copy.persistence.restored,
     forceSaveSnapshot,
     persistOperation,
+    workspaceId,
+  ]);
+
+  const openDocumentFromKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>, nextDocumentId: string) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    switchDocument(nextDocumentId);
+  }, [switchDocument]);
+
+  const archiveDocumentToCurrentProject = useCallback((item: DocumentSidebarItem) => {
+    if (!workspaceId || !currentProjectId || !activeProject) {
+      setJobStatus(copy.rail.archiveUnavailable);
+      return;
+    }
+    if (item.projectId === currentProjectId) {
+      setJobStatus(copy.rail.alreadyArchivedToCourse(item.title, activeProject.name));
+      return;
+    }
+    void persistOperation(async () => {
+      await saveDocumentPatch(item.documentId, { projectId: currentProjectId });
+      await refreshDocumentItems(workspaceId, documentId, currentProjectId);
+      return item;
+    }, copy.rail.archivedToCourse(item.title, activeProject.name)).catch((error) => {
+      setJobStatus((error as Error).message || copy.persistence.failed);
+    });
+  }, [
+    activeProject,
+    copy.persistence.failed,
+    copy.rail,
+    currentProjectId,
+    documentId,
+    persistOperation,
+    refreshDocumentItems,
     workspaceId,
   ]);
 
@@ -3346,11 +3462,13 @@ export default function App() {
                   </div>
                   <div className="document-list">
                     {documentsForSidebar.map((item) => (
-                      <button
+                      <div
                         className={`document-item ${item.isActive ? "active" : ""}`}
                         key={item.documentId}
-                        type="button"
+                        role="button"
+                        tabIndex={0}
                         onClick={() => switchDocument(item.documentId)}
+                        onKeyDown={(event) => openDocumentFromKeyboard(event, item.documentId)}
                       >
                         <span className="document-dot" />
                         <span className="document-copy">
@@ -3358,7 +3476,22 @@ export default function App() {
                           <span>{copy.rail.documentMeta(Math.max(item.pageCount || 1, 1), item.generatedPageCount)}</span>
                         </span>
                         <span className={`document-state ${item.status === "missing-file" ? "missing" : ""}`} />
-                      </button>
+                        {item.projectId !== currentProjectId && (
+                          <button
+                            className="document-archive-button"
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              archiveDocumentToCurrentProject(item);
+                            }}
+                            title={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
+                            aria-label={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
+                          >
+                            <Archive />
+                          </button>
+                        )}
+                      </div>
                     ))}
                     {!documentsForSidebar.length && (
                       <div className="rail-empty">{normalizedDocumentQuery ? copy.rail.emptyDocuments : copy.rail.emptyCourseDocuments}</div>
@@ -3372,14 +3505,31 @@ export default function App() {
                       <span>{copy.rail.recents}</span>
                     </div>
                     {recentDocuments.map((item) => (
-                      <button
+                      <div
                         className="recent-item"
                         key={item.documentId}
-                        type="button"
+                        role="button"
+                        tabIndex={0}
                         onClick={() => switchDocument(item.documentId)}
+                        onKeyDown={(event) => openDocumentFromKeyboard(event, item.documentId)}
                       >
                         <span>{item.title}</span>
-                      </button>
+                        {item.projectId !== currentProjectId && (
+                          <button
+                            className="document-archive-button"
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              archiveDocumentToCurrentProject(item);
+                            }}
+                            title={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
+                            aria-label={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
+                          >
+                            <Archive />
+                          </button>
+                        )}
+                      </div>
                     ))}
                   </section>
                 )}
@@ -3457,7 +3607,6 @@ export default function App() {
                 title={copy.notes.title}
                 right={
                   <div className="notes-toolbar-right">
-                    <span className="source-pill">{copy.common.sourcePdfPage(page.page_no)}</span>
                     <div className="generation-details-control">
                       <button
                         className="source-pill generation-progress-trigger"
@@ -3470,7 +3619,7 @@ export default function App() {
                         <span className="generation-progress-mini" aria-hidden="true">
                           <span style={{ width: `${Math.round((currentPdfPageNo / pdfNavigationPageCount) * 100)}%` }} />
                         </span>
-                        <span>{copy.common.explanationProgress(currentPdfPageNo, pdfNavigationPageCount)}</span>
+                        <span className="generation-progress-text">{copy.common.explanationProgress(currentPdfPageNo, pdfNavigationPageCount)}</span>
                       </button>
                       {generationDetailsOpen && (
                         <GenerationDetailsPopover
@@ -3489,7 +3638,12 @@ export default function App() {
                           className={`tab-button ${activeTab === tab ? "active" : ""}`}
                           onClick={() => setActiveTab(tab)}
                         >
-                          {tab === "notes" ? copy.notes.tabNotes : tab === "structure" ? copy.notes.tabStructure : copy.notes.tabJson}
+                          <span className="tab-label-full">
+                            {tab === "notes" ? copy.notes.tabNotes : tab === "structure" ? copy.notes.tabStructure : copy.notes.tabJson}
+                          </span>
+                          <span className="tab-label-short" aria-hidden="true">
+                            {tab === "notes" ? copy.notes.tabNotesShort : tab === "structure" ? copy.notes.tabStructureShort : copy.notes.tabJsonShort}
+                          </span>
                         </button>
                       ))}
                     </div>

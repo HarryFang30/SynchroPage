@@ -1085,6 +1085,7 @@ svg {
   background: transparent;
   color: var(--text);
   text-align: left;
+  cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
 }
 
@@ -1155,7 +1156,7 @@ svg {
   align-items: center;
   gap: 6px;
   min-height: 44px;
-  padding: 5px 8px 5px 14px;
+  padding: 5px 34px 5px 14px;
   border-radius: 7px;
 }
 
@@ -1206,6 +1207,43 @@ svg {
   background: var(--destructive);
 }
 
+.document-archive-button {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--secondary) 72%, var(--background));
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.document-archive-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.document-item:hover .document-archive-button,
+.document-item:focus-within .document-archive-button,
+.recent-item:hover .document-archive-button,
+.recent-item:focus-within .document-archive-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.document-archive-button:hover {
+  background: color-mix(in oklch, var(--brand) 18%, var(--secondary));
+  color: color-mix(in oklch, var(--brand) 72%, var(--text));
+}
+
 .rail-empty {
   padding: 12px 8px;
   color: var(--muted);
@@ -1213,7 +1251,8 @@ svg {
 }
 
 .recent-item {
-  padding: 0 8px 0 28px;
+  position: relative;
+  padding: 0 34px 0 28px;
 }
 
 .rail-footer {
@@ -1329,6 +1368,10 @@ svg {
   grid-template-rows: 52px minmax(0, 1fr);
 }
 
+.notes-pane {
+  container-type: inline-size;
+}
+
 .pdf-pane {
   grid-template-rows: 52px minmax(0, 1fr) auto;
 }
@@ -1349,6 +1392,7 @@ svg {
 .pane-toolbar,
 .agent-toolbar {
   min-width: 0;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1361,9 +1405,11 @@ svg {
 
 .toolbar-title {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 8px;
+  overflow: hidden;
   color: var(--text-strong);
   font-size: 13px;
   font-weight: 760;
@@ -1704,7 +1750,8 @@ output {
 .slide-figure span:nth-child(4) { height: 42%; background: var(--coral); }
 
 .tab-group {
-  flex-shrink: 0;
+  min-width: 0;
+  flex: 0 1 auto;
   display: flex;
   gap: 4px;
   padding: 3px;
@@ -1716,13 +1763,25 @@ output {
 
 .tab-button {
   height: 28px;
-  min-width: 46px;
+  min-width: 0;
+  max-width: 82px;
   padding: 0 10px;
   border-color: transparent;
   background: transparent;
   color: var(--muted);
   font-size: 12px;
   font-weight: 760;
+}
+
+.tab-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-label-short {
+  display: none;
 }
 
 .tab-button.active {
@@ -1796,20 +1855,33 @@ output {
 
 .notes-toolbar-right {
   min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 7px;
+  overflow: hidden;
 }
 
 .generation-details-control {
   position: relative;
+  min-width: 0;
   flex: 0 0 auto;
 }
 
 .generation-progress-trigger {
+  min-width: 0;
+  max-width: 118px;
   gap: 8px;
   cursor: pointer;
+}
+
+.generation-progress-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .generation-progress-trigger:hover,
@@ -1819,6 +1891,7 @@ output {
 }
 
 .generation-progress-mini {
+  flex: 0 0 auto;
   width: 34px;
   height: 4px;
   overflow: hidden;
@@ -1832,6 +1905,52 @@ output {
   border-radius: inherit;
   background: color-mix(in oklch, var(--brand) 82%, var(--gold));
   transition: width 180ms ease;
+}
+
+@container (max-width: 560px) {
+  .notes-toolbar-right {
+    gap: 4px;
+  }
+
+  .generation-progress-trigger {
+    width: 34px;
+    height: 28px;
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .generation-progress-text {
+    display: none;
+  }
+
+  .generation-progress-mini {
+    width: 18px;
+  }
+
+  .tab-group {
+    gap: 2px;
+    padding: 2px;
+  }
+
+  .tab-button {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+  }
+
+  .tab-label-full {
+    display: none;
+  }
+
+  .tab-label-short {
+    display: inline;
+  }
+}
+
+@container (max-width: 320px) {
+  .notes-pane .toolbar-title span:last-child {
+    display: none;
+  }
 }
 
 .generation-details-popover {

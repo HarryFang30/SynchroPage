@@ -287,6 +287,10 @@ export type AppCopy = {
     emptyDocuments: string;
     activeDocument: string;
     missingFile: string;
+    archiveToCourse: (courseName: string) => string;
+    archivedToCourse: (documentTitle: string, courseName: string) => string;
+    alreadyArchivedToCourse: (documentTitle: string, courseName: string) => string;
+    archiveUnavailable: string;
     documentMeta: (pageCount: number, generatedCount: number) => string;
     documentCount: (count: number) => string;
     courseDocumentCount: (count: number) => string;
@@ -304,6 +308,9 @@ export type AppCopy = {
     tabNotes: string;
     tabStructure: string;
     tabJson: string;
+    tabNotesShort: string;
+    tabStructureShort: string;
+    tabJsonShort: string;
   };
   agent: {
     addImage: string;
@@ -668,6 +675,10 @@ const zhCN: AppCopy = {
     emptyDocuments: "没有匹配的文档",
     activeDocument: "当前",
     missingFile: "文件缺失",
+    archiveToCourse: (courseName) => `归档到 ${courseName}`,
+    archivedToCourse: (documentTitle, courseName) => `已将「${documentTitle}」归档到 ${courseName}`,
+    alreadyArchivedToCourse: (documentTitle, courseName) => `「${documentTitle}」已在 ${courseName}`,
+    archiveUnavailable: "请先选择一个课程",
     documentCount: (count) => `${count} 个文档`,
     courseDocumentCount: (count) => `${count} 个文档`,
     documentMeta: (pageCount, generatedCount) => `${pageCount} 页 · ${generatedCount} 页讲解`,
@@ -685,6 +696,9 @@ const zhCN: AppCopy = {
     tabNotes: "讲解",
     tabStructure: "结构",
     tabJson: "JSON",
+    tabNotesShort: "讲",
+    tabStructureShort: "构",
+    tabJsonShort: "J",
   },
   agent: {
     addImage: "加入图片",
@@ -1049,6 +1063,10 @@ const enUS: AppCopy = {
     emptyDocuments: "No matching documents",
     activeDocument: "Active",
     missingFile: "Missing file",
+    archiveToCourse: (courseName) => `Archive to ${courseName}`,
+    archivedToCourse: (documentTitle, courseName) => `Archived "${documentTitle}" to ${courseName}`,
+    alreadyArchivedToCourse: (documentTitle, courseName) => `"${documentTitle}" is already in ${courseName}`,
+    archiveUnavailable: "Select a course first",
     documentCount: (count) => `${count} ${count === 1 ? "document" : "documents"}`,
     courseDocumentCount: (count) => `${count} ${count === 1 ? "document" : "documents"}`,
     documentMeta: (pageCount, generatedCount) => `${pageCount} ${pageCount === 1 ? "page" : "pages"} · ${generatedCount} generated`,
@@ -1066,6 +1084,9 @@ const enUS: AppCopy = {
     tabNotes: "Notes",
     tabStructure: "Structure",
     tabJson: "JSON",
+    tabNotesShort: "N",
+    tabStructureShort: "S",
+    tabJsonShort: "J",
   },
   agent: {
     addImage: "Add image",
