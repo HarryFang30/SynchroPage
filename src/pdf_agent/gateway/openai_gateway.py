@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -157,7 +158,42 @@ def parse_codex_models(value: Any) -> list[FetchedModel]:
 
 
 def redacted_gateway_error(text: str, *, max_chars: int = 512) -> str:
-    return redact_secret_text(text, max_chars=max_chars)
+    return redact_secret_text(_friendly_gateway_error(text) or text, max_chars=max_chars)
+
+
+def _friendly_gateway_error(text: str) -> str:
+    try:
+        value = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        return ""
+    error = value.get("error") if isinstance(value, dict) else None
+    if not isinstance(error, dict):
+        return ""
+    error_type = str(error.get("type") or error.get("code") or "").strip()
+    message = str(error.get("message") or "").strip()
+    if error_type == "usage_limit_reached":
+        reset_hint = _format_reset_hint(error.get("resets_in_seconds"))
+        suffix = f" Try again in about {reset_hint}." if reset_hint else ""
+        return f"OpenAI usage limit reached for this account.{suffix}"
+    if message and error_type:
+        return f"{message} ({error_type})"
+    return message
+
+
+def _format_reset_hint(value: Any) -> str:
+    try:
+        seconds = max(0, int(float(value)))
+    except (TypeError, ValueError):
+        return ""
+    hours, remainder = divmod(seconds, 3600)
+    minutes = (remainder + 59) // 60
+    if hours and minutes:
+        return f"{hours}h {minutes}m"
+    if hours:
+        return f"{hours}h"
+    if minutes:
+        return f"{minutes}m"
+    return "under 1m"
 
 
 def _with_include(value: Any, required: str) -> list[str]:

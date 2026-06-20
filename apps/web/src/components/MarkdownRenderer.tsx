@@ -19,6 +19,23 @@ const latexInlineDelimiter = /\\{1,2}\(([^\n]+?)\\{1,2}\)/g;
 const latexDisplayDelimiter = /\\{1,2}\[([\s\S]+?)\\{1,2}\]/g;
 const mathTag = /\[\/math\]([\s\S]*?)\[\/math\]/g;
 const inlineTag = /\[\/inline\]([\s\S]*?)\[\/inline\]/g;
+const markdownMathSpan = /(\$\$[\s\S]*?\$\$|\$(?!\$)(?:\\.|[^$])*\$)/g;
+const bareLatexEnvironment = /\\begin\{([A-Za-z*]+)\}[\s\S]*?\\end\{\1\}/g;
+const latexCommandNames = new Set([
+  "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon", "Phi", "Psi", "Omega",
+  "Leftarrow", "Rightarrow", "Leftrightarrow",
+  "alpha", "approx", "arg", "bar", "begin", "beta", "bmod", "bmatrix", "binom", "cap", "cases",
+  "cdot", "cdots", "chi", "choose", "cos", "cup", "delta", "dfrac", "div", "dot", "dots", "ddot",
+  "end", "epsilon", "equiv", "eta", "exists", "exp", "forall", "frac", "gamma", "ge", "geq",
+  "hat", "in", "infty", "int", "iota", "kappa", "lambda", "land", "ldots", "le", "left",
+  "leftarrow", "leftrightarrow", "leq", "lim", "ln", "log", "lor", "mapsto", "mathrm", "mathbf",
+  "mathit", "matrix", "max", "min", "mod", "mp", "mu", "nabla", "neg", "neq", "notin", "nu",
+  "omega", "operatorname", "overline", "phi", "pi", "pm", "pmatrix", "pmod", "prod", "psi",
+  "qquad", "quad", "rho", "right", "rightarrow", "sigma", "sin", "sqrt", "subset", "subseteq",
+  "sum", "supset", "supseteq", "tan", "tau", "text", "tfrac", "theta", "tilde", "times", "to",
+  "underline", "upsilon", "varepsilon", "varphi", "varpi", "varrho", "varsigma", "vartheta", "vec",
+  "xi", "zeta",
+]);
 
 export default function MarkdownRenderer({ className, text, inline = false }: { className: string; text: string; inline?: boolean }) {
   const renderedText = inline ? displayMathAsInline(preprocessMathMarkdown(text)) : preprocessMathMarkdown(text);
@@ -54,17 +71,21 @@ function preprocessMarkdownTextSegment(text: string) {
     .map((segment) => {
       if (segment.startsWith("`") && segment.endsWith("`")) return cleanupInlineCodeMathDollars(segment);
       const normalized = normalizeDisplayMathBlocks(repairDisplayMathDelimiterSpillover(
-        repairBinaryTransitionMathSpillover(normalizeMathDelimiters(escapeCurrencyDollarsPreservingMath(segment))),
+        repairBinaryTransitionMathSpillover(normalizeMathDelimiters(escapeCurrencyDollarsPreservingMath(normalizeEscapedMarkdownNewlines(segment)))),
       ));
       return normalized
-        .split(/(\$\$[\s\S]*?\$\$|\$(?!\$)(?:\\.|[^$])*\$)/g)
+        .split(markdownMathSpan)
         .map((part) => {
           if (part.startsWith("$")) return sanitizeMathMarkdownSegment(part);
-          return wrapBareCircuitMath(part);
+          return wrapBareCircuitMath(wrapBareLatexMath(part));
         })
         .join("");
     })
     .join("");
+}
+
+function normalizeEscapedMarkdownNewlines(text: string) {
+  return text.replace(/\\n(?=(?:[ \t]*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s)|\s*$))/g, "\n");
 }
 
 function normalizeMathDelimiters(text: string) {
@@ -210,4 +231,128 @@ function wrapBareCircuitMath(text: string) {
     .replace(/^(\s*)([01]{2,}\s*(?:\\rightarrow|→)\s*[01]{2,}(?:\s*(?:\\rightarrow|→)\s*[01]{2,})+)(\s*)$/gm, (_match, lead, expression, tail) => `${lead}$$${sanitizeKatexBody(expression)}$$${tail}`)
     .replace(/^(\s*)([A-Za-z][A-Za-z0-9]*_\{?[A-Za-z0-9]+\}?(?:\^\+)?\s*=\s*[A-Za-z][A-Za-z0-9]*_\{?[A-Za-z0-9]+\}?(?:\^\+)?)(\s*)$/gm, (_match, lead, expression, tail) => `${lead}$${sanitizeKatexBody(expression)}$${tail}`)
     .replace(/\b([A-Z][A-Za-z0-9]*_\{?[A-Za-z0-9]+\}?(?:\^\+)?|[A-Z]\^\+)\b/g, (_match, token) => `$${sanitizeKatexBody(token)}$`);
+}
+
+function wrapBareLatexMath(text: string) {
+  const withEnvironments = text.replace(bareLatexEnvironment, (match: string) => `\n\n$$\n${match.trim()}\n$$\n\n`);
+  return withEnvironments
+    .split(markdownMathSpan)
+    .map((part) => part.startsWith("$") ? part : wrapBareLatexInlineMath(part))
+    .join("");
+}
+
+function wrapBareLatexInlineMath(text: string) {
+  const trigger = /\\[A-Za-z]+/g;
+  let output = "";
+  let index = 0;
+  while (index < text.length) {
+    trigger.lastIndex = index;
+    const match = trigger.exec(text);
+    if (!match) {
+      output += text.slice(index);
+      break;
+    }
+    const slashIndex = match.index;
+    const command = match[0].slice(1);
+    if (!latexCommandNames.has(command)) {
+      output += text.slice(index, trigger.lastIndex);
+      index = trigger.lastIndex;
+      continue;
+    }
+    const expressionStart = bareLatexExpressionStart(text, slashIndex);
+    const expressionEnd = bareLatexExpressionEnd(text, slashIndex);
+    if (expressionEnd <= slashIndex) {
+      output += text.slice(index, trigger.lastIndex);
+      index = trigger.lastIndex;
+      continue;
+    }
+    const expression = text.slice(expressionStart, expressionEnd).trim();
+    const delimiter = expression.includes("\n") ? "$$" : "$";
+    output += text.slice(index, expressionStart);
+    output += `${delimiter}${sanitizeKatexBody(expression)}${delimiter}`;
+    index = expressionEnd;
+  }
+  return output;
+}
+
+function bareLatexExpressionStart(text: string, slashIndex: number) {
+  let cursor = slashIndex - 1;
+  while (cursor >= 0 && " \t".includes(text[cursor])) cursor -= 1;
+  if (cursor < 0 || !"=+-*/(^_".includes(text[cursor])) return slashIndex;
+  let start = cursor;
+  while (start > 0 && !"\n\r，。；：！？、".includes(text[start - 1])) {
+    if ("$`".includes(text[start - 1])) break;
+    start -= 1;
+  }
+  return start;
+}
+
+function bareLatexExpressionEnd(text: string, slashIndex: number) {
+  let cursor = slashIndex;
+  while (cursor < text.length) {
+    const tokenEnd = consumeLatexMathToken(text, cursor);
+    if (tokenEnd <= cursor) break;
+    cursor = tokenEnd;
+    const spaceStart = cursor;
+    while (cursor < text.length && " \t".includes(text[cursor])) cursor += 1;
+    if (!startsLatexMathContinuation(text, cursor)) {
+      cursor = spaceStart;
+      break;
+    }
+  }
+  while (cursor > slashIndex && " \t.,;:".includes(text[cursor - 1])) cursor -= 1;
+  return cursor;
+}
+
+function startsLatexMathContinuation(text: string, index: number) {
+  if (index >= text.length) return false;
+  if (text[index] === "\\") {
+    const match = /\\[A-Za-z]+/.exec(text.slice(index));
+    return Boolean(match && latexCommandNames.has(match[0].slice(1)));
+  }
+  return "{}()+-*/=^_[]<>|,.".includes(text[index]) || /\d/.test(text[index]);
+}
+
+function consumeLatexMathToken(text: string, index: number) {
+  if (index >= text.length || "\n\r，。；：！？、$`".includes(text[index])) return index;
+  if (text[index] === "\\") {
+    const match = /\\[A-Za-z]+/.exec(text.slice(index));
+    if (!match || !latexCommandNames.has(match[0].slice(1))) return index;
+    let cursor = index + match[0].length;
+    if (match[0].slice(1) === "left" || match[0].slice(1) === "right") {
+      while (cursor < text.length && " \t".includes(text[cursor])) cursor += 1;
+      if (cursor < text.length && !"\n\r".includes(text[cursor])) cursor += 1;
+    }
+    while (true) {
+      const groupEnd = consumeBracedGroup(text, cursor);
+      if (groupEnd <= cursor) break;
+      cursor = groupEnd;
+    }
+    return cursor;
+  }
+  if (text[index] === "{") return consumeBracedGroup(text, index);
+  if (/\d/.test(text[index])) {
+    let cursor = index + 1;
+    while (cursor < text.length && /[0-9.eE+-]/.test(text[cursor])) cursor += 1;
+    return cursor;
+  }
+  if ("()+-*/=^_[]<>|,.".includes(text[index])) return index + 1;
+  return index;
+}
+
+function consumeBracedGroup(text: string, index: number) {
+  if (index >= text.length || text[index] !== "{") return index;
+  let depth = 0;
+  for (let cursor = index; cursor < text.length; cursor += 1) {
+    if (text[cursor] === "\\") {
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === "{") depth += 1;
+    if (text[cursor] === "}") {
+      depth -= 1;
+      if (depth === 0) return cursor + 1;
+    }
+  }
+  return index;
 }

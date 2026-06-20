@@ -2607,11 +2607,20 @@ output {
 
 .message-error {
   margin-top: 8px;
+  display: grid;
+  gap: 4px;
   border: 1px solid color-mix(in oklch, var(--coral) 48%, var(--line));
   border-radius: 8px;
   background: color-mix(in oklch, var(--coral-soft) 58%, var(--panel-strong));
   color: var(--coral);
   padding: 8px 9px;
+  font-size: var(--agent-text-sm);
+  line-height: var(--agent-leading-compact);
+  overflow-wrap: anywhere;
+}
+
+.message-error strong {
+  color: inherit;
 }
 
 .assistant-thinking {

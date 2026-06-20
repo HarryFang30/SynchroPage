@@ -26,6 +26,7 @@ from pdf_agent.server.web_app import (
     _teaching_generation_candidate_bodies,
     _transient_retry_delay_seconds,
 )
+from pdf_agent.gateway.openai_gateway import redacted_gateway_error
 
 
 class WebAppTest(unittest.TestCase):
@@ -43,6 +44,14 @@ class WebAppTest(unittest.TestCase):
             self.assertEqual(_transient_retry_delay_seconds(HttpError(429, "rate limited", retry_after_seconds=120.0), 0), 12.0)
         finally:
             module.random.uniform = original_uniform
+
+    def test_gateway_usage_limit_error_is_readable(self) -> None:
+        message = redacted_gateway_error(
+            '{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","resets_in_seconds":7045}}'
+        )
+
+        self.assertIn("OpenAI usage limit reached", message)
+        self.assertIn("about 1h 58m", message)
 
     def test_agent_payload_preserves_context_formula_and_image(self) -> None:
         payload = _build_responses_payload(
@@ -163,6 +172,51 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("User question:\n\n解释这段", prompt)
         self.assertNotIn("[p.11] Page 11", cache_prefix)
         self.assertNotIn("[p.30] Page 30", cache_prefix)
+
+    def test_agent_payload_subsets_pdf_file_for_long_documents(self) -> None:
+        from PyPDF2 import PdfReader, PdfWriter
+
+        writer = PdfWriter()
+        for _ in range(12):
+            writer.add_blank_page(width=72, height=72)
+        pdf_buffer = io.BytesIO()
+        writer.write(pdf_buffer)
+        file_data = base64.b64encode(pdf_buffer.getvalue()).decode("ascii")
+
+        payload = _build_responses_payload(
+            {
+                "model": "gpt-5.5",
+                "document": {"id": "doc_long", "title": "Long PDF"},
+                "documentFile": {"filename": "long.pdf", "fileData": file_data, "sha256": "agent-long-pdf"},
+                "page": {"page_no": 7, "source": {}, "teaching": {"slide_title": "Middle"}},
+                "input": "解释这一页",
+                "selectedContext": {
+                    "text": "middle-page selection",
+                    "sourceType": "pdf-page",
+                    "documentTitle": "Long PDF",
+                    "pdfPageNumber": 7,
+                },
+                "pdfContext": {
+                    "documentTitle": "Long PDF",
+                    "pageCount": 12,
+                    "truncated": True,
+                    "fullPageLimit": 5,
+                    "edgePageCount": 2,
+                    "includedPageNumbers": [1, 2, 11, 12],
+                    "pages": [
+                        {"page_no": page_no, "title": f"Page {page_no}", "text_md": f"Body {page_no}"}
+                        for page_no in range(1, 13)
+                    ],
+                },
+            },
+            default_model="fallback-model",
+        )
+
+        content = payload["input"][0]["content"]
+        self.assertEqual(content[1]["type"], "input_file")
+        subset_reader = PdfReader(io.BytesIO(base64.b64decode(content[1]["file_data"])))
+        self.assertEqual(len(subset_reader.pages), 5)
+        self.assertIn("PDF subset is attached as an input_file for pages 1-2, 7, 11-12", content[2]["text"])
 
     def test_teaching_generation_payload_uses_stable_cache_prefix_before_target_page(self) -> None:
         payload = _build_teaching_generation_payload(
@@ -660,6 +714,42 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("$\\frac{a}{b}$", notes)
         self.assertNotIn("\t", notes)
         self.assertNotIn("\f", notes)
+
+    def test_generated_page_wraps_bare_latex_and_escaped_markdown_newlines(self) -> None:
+        bad_notes = (
+            r"本页延续上一页，重点仍是如何用 MATLAB 画出系统的冲激响应。\n"
+            r"- tf(num,den) 是连续时间传递函数的标准构造方式。\n"
+            r"- 对该 notch filter，传递函数写成 \frac{s^2 + 1.421e05}{s^2 + 2s + 1.421e05}。\n"
+            r"- 用 impulse(sys,Tfinal) 可以直接得到系统对单位冲激的时域响应。"
+        )
+        page = _parse_generated_page(
+            json.dumps(
+                {
+                    "page_no": 3,
+                    "source": {"text_md": "MATLAB notch filter impulse response", "pdf_page_ref": "#page=3"},
+                    "teaching": {
+                        "slide_title": "Impulse response",
+                        "speaker_notes_md": bad_notes,
+                        "concepts": ["notch filter"],
+                        "confidence": 0.88,
+                    },
+                }
+            ),
+            {
+                "page": {
+                    "page_no": 3,
+                    "source": {"text_md": "MATLAB notch filter impulse response", "pdf_page_ref": "#page=3"},
+                }
+            },
+        )
+
+        notes = page["teaching"]["speaker_notes_md"]
+        self.assertIn("\n- tf(num,den)", notes)
+        self.assertNotIn(r"\n- tf(num,den)", notes)
+        self.assertIn(
+            "$\\frac{s^2 + 1.421e05}{s^2 + 2s + 1.421e05}$",
+            notes,
+        )
 
     def test_generated_pages_parse_batch_response_by_page_number(self) -> None:
         content = json.dumps(

@@ -48,6 +48,7 @@ MAX_PDF_CONTEXT_CHARS = 120_000
 MAX_TEACHING_CACHE_CHARS = 750_000
 PDF_CONTEXT_FULL_PAGE_LIMIT = 50
 PDF_CONTEXT_EDGE_PAGE_COUNT = 10
+MAX_AGENT_PDF_SUBSET_PAGES = 40
 MAX_TRANSCRIPT_MESSAGES = 8
 MAX_IMAGE_ATTACHMENTS = 8
 MAX_IMAGE_DATA_URL_CHARS = 8_000_000
@@ -59,6 +60,7 @@ PDF_FILE_SUBSET_CACHE_MAX_BYTES = 120_000_000
 PROMPT_CACHE_VERSION = "pagepair.prompt-cache.v2"
 DOCUMENT_CACHE_PREFIX_VERSION = "pagepair.document-prefix.v2"
 TEACHING_API_CONCURRENCY = 6
+AGENT_RETRY_DELAYS_SECONDS = (0.75, 2.0)
 TEACHING_RETRY_DELAYS_SECONDS = (0.5, 1.5, 3.0)
 TEACHING_MAX_RETRY_DELAY_SECONDS = 12.0
 TEACHING_RATE_LIMIT_MIN_COOLDOWN_SECONDS = 0.75
@@ -183,15 +185,30 @@ class AgentChatGateway:
         headers: dict[str, str],
     ) -> tuple[str, str, dict[str, Any]]:
         try:
-            text, content_type = await asyncio.to_thread(self._post_responses, url, payload, headers)
+            text, content_type = await self._post_responses_with_retries(url, payload, headers)
             return text, content_type, payload
         except HttpError as exc:
             if not _should_retry_without_prompt_cache(exc, payload):
                 raise
             fallback_payload = _without_prompt_cache(payload)
-            text, content_type = await asyncio.to_thread(self._post_responses, url, fallback_payload, headers)
+            text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
             fallback_payload["_pagepair_cache_fallback_without_fields"] = True
             return text, content_type, fallback_payload
+
+    async def _post_responses_with_retries(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+    ) -> tuple[str, str]:
+        for attempt in range(len(AGENT_RETRY_DELAYS_SECONDS) + 1):
+            try:
+                return await asyncio.to_thread(self._post_responses, url, payload, headers)
+            except HttpError as exc:
+                if attempt >= len(AGENT_RETRY_DELAYS_SECONDS) or not _should_retry_transient_upstream_error(exc):
+                    raise
+                await asyncio.sleep(_transient_retry_delay_seconds(exc, attempt, delays=AGENT_RETRY_DELAYS_SECONDS))
+        raise HttpError(502, "OpenAI gateway returned an empty response", code="empty_gateway_response")
 
     def _post_responses(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, str]:
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -587,7 +604,7 @@ def _build_responses_payload(body: Mapping[str, Any], *, default_model: str) -> 
     cache_prefix = _build_document_cache_prefix(body)
     if cache_prefix:
         content.append({"type": "input_text", "text": cache_prefix})
-    pdf_file = _pdf_file_input(body.get("documentFile"))
+    pdf_file = _pdf_file_input(body.get("documentFile"), page_numbers=_agent_pdf_file_page_numbers(body))
     if pdf_file:
         content.append(pdf_file)
     content.append({"type": "input_text", "text": _build_agent_interaction_prompt(body)})
@@ -718,6 +735,62 @@ def _teaching_generation_page_numbers(body: Mapping[str, Any]) -> list[int]:
             seen.add(page_no)
             numbers.append(page_no)
     return numbers
+
+
+def _agent_pdf_file_page_numbers(body: Mapping[str, Any]) -> list[int] | None:
+    pdf_context = body.get("pdfContext")
+    if not isinstance(pdf_context, Mapping):
+        return None
+    page_count = _int_value(pdf_context.get("pageCount"), 0)
+    full_page_limit = _int_value(pdf_context.get("fullPageLimit"), PDF_CONTEXT_FULL_PAGE_LIMIT)
+    edge_page_count = _int_value(pdf_context.get("edgePageCount"), PDF_CONTEXT_EDGE_PAGE_COUNT)
+    included_pages = _pdf_included_page_numbers(pdf_context, page_count, full_page_limit, edge_page_count)
+    explicit_truncated = pdf_context.get("truncated")
+    truncated = bool(explicit_truncated) if explicit_truncated is not None else (len(included_pages) < page_count if page_count else False)
+    if not truncated:
+        return None
+
+    ordered_pages: list[int] = []
+    seen: set[int] = set()
+    for page_no in [*_agent_priority_pdf_pages(body, page_count), *included_pages]:
+        if page_no <= 0 or (page_count and page_no > page_count) or page_no in seen:
+            continue
+        seen.add(page_no)
+        ordered_pages.append(page_no)
+    if not ordered_pages:
+        return None
+    return sorted(ordered_pages[:MAX_AGENT_PDF_SUBSET_PAGES])
+
+
+def _agent_priority_pdf_pages(body: Mapping[str, Any], page_count: int) -> list[int]:
+    pages: list[int] = []
+    page = body.get("page") if isinstance(body.get("page"), Mapping) else {}
+    _append_page_number(pages, page.get("page_no") if isinstance(page, Mapping) else None, page_count)
+    selected_context = body.get("selectedContext")
+    if isinstance(selected_context, Mapping):
+        _append_page_number(pages, selected_context.get("pdfPageNumber") or selected_context.get("pageNumber"), page_count)
+        pdf_source = selected_context.get("pdfSource")
+        if isinstance(pdf_source, Mapping):
+            _append_page_number(pages, pdf_source.get("pageNumber"), page_count)
+    for item in _iter_mapping_items(body.get("context")):
+        _append_page_number(pages, item.get("page_no") or item.get("pageNumber"), page_count)
+    for part in _iter_mapping_items(body.get("parts")):
+        source = part.get("source") if isinstance(part.get("source"), Mapping) else {}
+        _append_page_number(pages, source.get("page_no") or source.get("pageNumber"), page_count)
+    return pages
+
+
+def _iter_mapping_items(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
+def _append_page_number(pages: list[int], value: Any, page_count: int) -> None:
+    page_no = _int_value(value, 0)
+    if page_no <= 0 or (page_count and page_no > page_count) or page_no in pages:
+        return
+    pages.append(page_no)
 
 
 def _teaching_quality_plan_lines(body: Mapping[str, Any]) -> list[str]:
@@ -1244,6 +1317,8 @@ def _should_retry_without_prompt_cache(exc: HttpError, payload: Mapping[str, Any
 
 
 def _should_retry_transient_upstream_error(exc: HttpError) -> bool:
+    if exc.status == 429 and "usage limit" in str(exc).lower():
+        return False
     return exc.code == "network_error" or exc.status in {429, 500, 502, 503, 504}
 
 
@@ -1268,8 +1343,9 @@ def _retry_after_seconds(value: str | None) -> float | None:
     return seconds
 
 
-def _transient_retry_delay_seconds(exc: HttpError, attempt: int) -> float:
-    base_delay = TEACHING_RETRY_DELAYS_SECONDS[min(max(attempt, 0), len(TEACHING_RETRY_DELAYS_SECONDS) - 1)]
+def _transient_retry_delay_seconds(exc: HttpError, attempt: int, *, delays: Sequence[float] = TEACHING_RETRY_DELAYS_SECONDS) -> float:
+    retry_delays = tuple(delays) or TEACHING_RETRY_DELAYS_SECONDS
+    base_delay = retry_delays[min(max(attempt, 0), len(retry_delays) - 1)]
     if exc.retry_after_seconds is not None:
         base_delay = max(base_delay, exc.retry_after_seconds)
     base_delay = min(base_delay, TEACHING_MAX_RETRY_DELAY_SECONDS)
@@ -1749,8 +1825,18 @@ def _normalize_markdown_math(value: str) -> str:
 
 
 def _normalize_markdown_math_segment(value: str) -> str:
+    value = _normalize_escaped_markdown_newlines(value)
     value = _repair_binary_transition_math_spillover(value)
+    value = _wrap_bare_latex_math(value)
     return re.sub(r"(\$\$[\s\S]*?\$\$|\$(?!\$)(?:\\.|[^$])*\$)", _normalize_math_match, value)
+
+
+def _normalize_escaped_markdown_newlines(value: str) -> str:
+    return re.sub(
+        r"\\n(?=(?:[ \t]*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s)|\s*$))",
+        "\n",
+        value,
+    )
 
 
 def _repair_binary_transition_math_spillover(value: str) -> str:
@@ -1759,6 +1845,151 @@ def _repair_binary_transition_math_spillover(value: str) -> str:
         lambda match: f"${match.group(1)}${match.group(2)}{match.group(3)}",
         value,
     )
+
+
+_MARKDOWN_MATH_SPAN_RE = re.compile(r"(\$\$[\s\S]*?\$\$|\$(?!\$)(?:\\.|[^$])*\$)")
+_BARE_LATEX_TRIGGER_RE = re.compile(r"\\[A-Za-z]+")
+_BARE_LATEX_ENV_RE = re.compile(r"\\begin\{([A-Za-z*]+)\}[\s\S]*?\\end\{\1\}")
+
+
+def _wrap_bare_latex_math(value: str) -> str:
+    parts = _MARKDOWN_MATH_SPAN_RE.split(value)
+    return "".join(
+        part if part.startswith("$") else _wrap_bare_latex_math_text(part)
+        for part in parts
+    )
+
+
+def _wrap_bare_latex_math_text(value: str) -> str:
+    value = _BARE_LATEX_ENV_RE.sub(
+        lambda match: f"\n\n$$\n{match.group(0).strip()}\n$$\n\n",
+        value,
+    )
+    parts = _MARKDOWN_MATH_SPAN_RE.split(value)
+    return "".join(
+        part if part.startswith("$") else _wrap_bare_latex_inline_math_text(part)
+        for part in parts
+    )
+
+
+def _wrap_bare_latex_inline_math_text(value: str) -> str:
+    output: list[str] = []
+    index = 0
+    while index < len(value):
+        match = _BARE_LATEX_TRIGGER_RE.search(value, index)
+        if not match:
+            output.append(value[index:])
+            break
+        slash_index = match.start()
+        command = match.group(0)[1:]
+        if command not in _LATEX_COMMANDS_REQUIRING_JSON_ESCAPE:
+            output.append(value[index:match.end()])
+            index = match.end()
+            continue
+        expression_start = _bare_latex_expression_start(value, slash_index)
+        expression_end = _bare_latex_expression_end(value, slash_index)
+        if expression_end <= slash_index:
+            output.append(value[index:match.end()])
+            index = match.end()
+            continue
+        output.append(value[index:expression_start])
+        expression = value[expression_start:expression_end].strip()
+        delimiter = "$$" if "\n" in expression else "$"
+        output.append(f"{delimiter}{_normalize_katex_body(expression)}{delimiter}")
+        index = expression_end
+    return "".join(output)
+
+
+def _bare_latex_expression_start(value: str, slash_index: int) -> int:
+    cursor = slash_index - 1
+    while cursor >= 0 and value[cursor] in " \t":
+        cursor -= 1
+    if cursor < 0 or value[cursor] not in "=+-*/(^_":
+        return slash_index
+    start = cursor
+    while start > 0 and value[start - 1] not in "\n\r，。；：！？、":
+        if value[start - 1] in "$`":
+            break
+        start -= 1
+    return start
+
+
+def _bare_latex_expression_end(value: str, slash_index: int) -> int:
+    cursor = slash_index
+    while cursor < len(value):
+        token_end = _consume_latex_math_token(value, cursor)
+        if token_end <= cursor:
+            break
+        cursor = token_end
+        space_start = cursor
+        while cursor < len(value) and value[cursor] in " \t":
+            cursor += 1
+        if not _starts_latex_math_continuation(value, cursor):
+            cursor = space_start
+            break
+    while cursor > slash_index and value[cursor - 1] in " \t.,;:":
+        cursor -= 1
+    return cursor
+
+
+def _starts_latex_math_continuation(value: str, index: int) -> bool:
+    if index >= len(value):
+        return False
+    if value[index] == "\\":
+        command_match = _BARE_LATEX_TRIGGER_RE.match(value, index)
+        return bool(command_match and command_match.group(0)[1:] in _LATEX_COMMANDS_REQUIRING_JSON_ESCAPE)
+    return value[index] in "{}()+-*/=^_[]<>|,." or value[index].isdigit()
+
+
+def _consume_latex_math_token(value: str, index: int) -> int:
+    if index >= len(value) or value[index] in "\n\r，。；：！？、$`":
+        return index
+    if value[index] == "\\":
+        command_match = _BARE_LATEX_TRIGGER_RE.match(value, index)
+        if not command_match or command_match.group(0)[1:] not in _LATEX_COMMANDS_REQUIRING_JSON_ESCAPE:
+            return index
+        cursor = command_match.end()
+        if command_match.group(0)[1:] in {"left", "right"}:
+            while cursor < len(value) and value[cursor] in " \t":
+                cursor += 1
+            if cursor < len(value) and value[cursor] not in "\n\r":
+                cursor += 1
+        while True:
+            group_end = _consume_braced_group(value, cursor)
+            if group_end <= cursor:
+                break
+            cursor = group_end
+        return cursor
+    if value[index] == "{":
+        return _consume_braced_group(value, index)
+    if value[index].isdigit():
+        cursor = index + 1
+        while cursor < len(value) and re.match(r"[0-9.eE+-]", value[cursor]):
+            cursor += 1
+        return cursor
+    if value[index] in "()+-*/=^_[]<>|,.":
+        return index + 1
+    return index
+
+
+def _consume_braced_group(value: str, index: int) -> int:
+    if index >= len(value) or value[index] != "{":
+        return index
+    depth = 0
+    cursor = index
+    while cursor < len(value):
+        char = value[cursor]
+        if char == "\\":
+            cursor += 2
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return cursor + 1
+        cursor += 1
+    return index
 
 
 def _normalize_math_match(match: re.Match[str]) -> str:
@@ -1840,10 +2071,20 @@ def _build_agent_interaction_prompt(body: Mapping[str, Any]) -> str:
         f"Title: {_string_value(document.get('title'), 'Untitled')}",
         f"Document ID: {_string_value(document.get('id'), 'unknown')}",
     ]
-    if _pdf_file_input(body.get("documentFile")):
+    attached_pdf_pages = _agent_pdf_file_page_numbers(body)
+    if _pdf_file_input(body.get("documentFile"), page_numbers=attached_pdf_pages):
+        if attached_pdf_pages:
+            pdf_note = (
+                f"A PDF subset is attached as an input_file for pages {_format_page_ranges(attached_pdf_pages)}. "
+                "Use it as primary visual/source evidence for those pages; use the cacheable page-text context for document-wide page numbers, truncation policy, and extracted snippets."
+            )
+        else:
+            pdf_note = (
+                "The original PDF is attached as an input_file. Use it as primary source evidence; use the page-text context below as a cacheable index for page numbers, truncation policy, and extracted snippets."
+            )
         sections.extend([
             "Original PDF file:",
-            "The original PDF is attached as an input_file. Use it as primary source evidence; use the page-text context below as a cacheable index for page numbers, truncation policy, and extracted snippets.",
+            pdf_note,
         ])
     sections.extend(
         [

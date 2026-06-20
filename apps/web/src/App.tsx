@@ -6549,7 +6549,8 @@ function AgentMessage() {
         <MessagePrimitive.Parts components={{ Text: MarkdownPart }} />
         <MessagePrimitive.Error>
           <ErrorPrimitive.Root className="message-error">
-            {copy.agent.generationFailed}
+            <strong>{copy.agent.generationFailed}</strong>
+            <ErrorPrimitive.Message />
           </ErrorPrimitive.Root>
         </MessagePrimitive.Error>
       </div>
