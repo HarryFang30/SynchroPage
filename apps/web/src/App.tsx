@@ -1275,16 +1275,11 @@ function buildPdfContextFromPack(
   };
 }
 
-function composerContextPreview(contexts: AgentContextItem[], attachments: AgentAttachment[], copy: AppCopy) {
+function composerContextPreview(contexts: AgentContextItem[], copy: AppCopy) {
   if (contexts.length) {
     const first = contexts[contexts.length - 1];
     const extra = contexts.length > 1 ? ` +${contexts.length - 1}` : "";
     return `${contextSourceLabel(first, copy)}${extra}`;
-  }
-  if (attachments.length) {
-    const first = attachments[attachments.length - 1];
-    const extra = attachments.length > 1 ? ` +${attachments.length - 1}` : "";
-    return `${copy.agent.imagePreview(compactText(first.name, 28))}${extra}`;
   }
   return "";
 }
@@ -4091,7 +4086,7 @@ function AgentPanelLoaded(props: AgentPanelProps) {
   const { AssistantRuntimeProvider } = assistantUi;
   const page = props.getPage();
   const suggestions = pageSuggestions(page, props.pageAwareSuggestions, copy);
-  const contextPreview = composerContextPreview(props.contexts, props.attachments, copy);
+  const contextPreview = composerContextPreview(props.contexts, copy);
 
   const clearAgentContext = useCallback(() => {
     props.setContexts([]);
@@ -4156,7 +4151,7 @@ function AgentPanelLoaded(props: AgentPanelProps) {
           </label>
         </div>
       </div>
-      <div className="agent-context-strip" hidden={!props.showSourcePills || (!props.contexts.length && !props.attachments.length)}>
+      <div className="agent-context-strip" hidden={!props.showSourcePills || !props.contexts.length}>
         {props.contexts.map((context) => (
           <span className="context-pill" key={context.id} title={context.text}>
             <span>{contextSourceLabel(context, copy)}</span>
@@ -4164,15 +4159,6 @@ function AgentPanelLoaded(props: AgentPanelProps) {
               <X />
             </button>
           </span>
-        ))}
-        {props.attachments.map((attachment) => (
-          <figure className="context-pill image-pill" key={attachment.id} title={attachment.name}>
-            <img src={attachment.data_url} alt={attachment.name} />
-            <figcaption>{compactText(attachment.name, 22)}</figcaption>
-            <button type="button" onClick={() => props.setAttachments((items) => items.filter((item) => item.id !== attachment.id))} aria-label={copy.agent.removeImage}>
-              <X />
-            </button>
-          </figure>
         ))}
       </div>
       <AssistantRuntimeProvider runtime={runtime}>
@@ -4184,7 +4170,9 @@ function AgentPanelLoaded(props: AgentPanelProps) {
           page={page}
           suggestions={suggestions}
           contextPreview={contextPreview}
+          attachments={props.attachments}
           selectedContext={props.selectedContext}
+          onRemoveAttachment={(id) => props.setAttachments((items) => items.filter((item) => item.id !== id))}
           onRemoveSelectedContext={() => props.setSelectedContext(null)}
           composerInputRef={props.composerInputRef}
           onPasteImages={addClipboardImages}
@@ -4886,7 +4874,9 @@ function AssistantThread({
   page,
   suggestions,
   contextPreview,
+  attachments,
   selectedContext,
+  onRemoveAttachment,
   onRemoveSelectedContext,
   composerInputRef,
   onPasteImages,
@@ -4894,7 +4884,9 @@ function AssistantThread({
   page: PageData;
   suggestions: string[];
   contextPreview: string;
+  attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
+  onRemoveAttachment: (id: string) => void;
   onRemoveSelectedContext: () => void;
   composerInputRef: RefObject<HTMLTextAreaElement | null>;
   onPasteImages: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
@@ -4936,7 +4928,9 @@ function AssistantThread({
             </ThreadPrimitive.ScrollToBottom>
             <AssistantComposer
               contextPreview={contextPreview}
+              attachments={attachments}
               selectedContext={selectedContext}
+              onRemoveAttachment={onRemoveAttachment}
               onRemoveSelectedContext={onRemoveSelectedContext}
               inputRef={composerInputRef}
               onPasteImages={onPasteImages}
@@ -5031,13 +5025,17 @@ function AgentMessage() {
 
 function AssistantComposer({
   contextPreview,
+  attachments,
   selectedContext,
+  onRemoveAttachment,
   onRemoveSelectedContext,
   inputRef,
   onPasteImages,
 }: {
   contextPreview: string;
+  attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
+  onRemoveAttachment: (id: string) => void;
   onRemoveSelectedContext: () => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   onPasteImages: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
@@ -5062,6 +5060,19 @@ function AssistantComposer({
     <div className="composer-shell">
       {selectedContext && (
         <SelectedSourcePreview context={selectedContext} onRemove={onRemoveSelectedContext} />
+      )}
+      {!!attachments.length && (
+        <div className="composer-attachment-preview" aria-label={copy.agent.addImage}>
+          {attachments.map((attachment) => (
+            <figure className="composer-image-preview" key={attachment.id} title={attachment.name}>
+              <img src={attachment.data_url} alt={attachment.name} />
+              <figcaption>{compactText(attachment.name, 24)}</figcaption>
+              <button type="button" onClick={() => onRemoveAttachment(attachment.id)} aria-label={copy.agent.removeImage}>
+                <X />
+              </button>
+            </figure>
+          ))}
+        </div>
       )}
       {contextPreview && (
         <div className="composer-context-preview">

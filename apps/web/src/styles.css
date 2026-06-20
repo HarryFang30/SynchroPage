@@ -2838,6 +2838,70 @@ output {
   gap: 6px;
 }
 
+.composer-attachment-preview {
+  min-width: 0;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 1px 1px 2px;
+}
+
+.composer-image-preview {
+  position: relative;
+  width: 106px;
+  flex: 0 0 106px;
+  display: grid;
+  gap: 4px;
+  align-items: start;
+  margin: 0;
+  border: 1px solid color-mix(in oklch, var(--brand) 12%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--popover) 92%, var(--background));
+  padding: 5px;
+}
+
+.composer-image-preview img {
+  width: 100%;
+  height: 58px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--secondary) 54%, transparent);
+}
+
+.composer-image-preview figcaption {
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in oklch, var(--text) 74%, var(--muted));
+  font-size: var(--agent-text-xs);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-image-preview button {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--background) 84%, transparent);
+  color: var(--text);
+  box-shadow: 0 3px 12px oklch(0.25 0.01 85 / 0.12);
+}
+
+.composer-image-preview button:hover {
+  background: color-mix(in oklch, var(--brand-soft) 30%, var(--background));
+}
+
+.composer-image-preview svg {
+  width: 13px;
+  height: 13px;
+}
+
 .selection-toolbar {
   position: fixed;
   z-index: 95;
