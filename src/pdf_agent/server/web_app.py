@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import threading
 import urllib.error
 import urllib.parse
@@ -377,15 +378,26 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
         file_path = _resolve_static_path(self.server.web_root, path)
         if not file_path.exists() or not file_path.is_file():
             raise HttpError(404, f"File not found: {path}", code="not_found")
+        stat_result = file_path.stat()
+        etag = _static_file_etag(stat_result)
+        cache_control = _static_cache_control(self.server.web_root, file_path)
+        if _request_etag_matches(self.headers.get("If-None-Match"), etag):
+            self.send_response(HTTPStatus.NOT_MODIFIED)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", cache_control)
+            self.end_headers()
+            return
+
         content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-        data = file_path.read_bytes() if include_body else b""
         self.send_response(200)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(file_path.stat().st_size))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(stat_result.st_size))
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", cache_control)
         self.end_headers()
         if include_body:
-            self.wfile.write(data)
+            with file_path.open("rb") as file:
+                shutil.copyfileobj(file, self.wfile, length=1024 * 1024)
 
     def _send_exception(self, exc: Exception) -> None:
         if isinstance(exc, OpenAIOAuthError):
@@ -1474,6 +1486,28 @@ def _resolve_static_path(web_root: Path, request_path: str) -> Path:
     if candidate.is_dir():
         candidate = candidate / "index.html"
     return candidate
+
+
+def _static_file_etag(stat_result: os.stat_result) -> str:
+    return f'W/"{stat_result.st_mtime_ns:x}-{stat_result.st_size:x}"'
+
+
+def _request_etag_matches(header: str | None, etag: str) -> bool:
+    if not header:
+        return False
+    return any(candidate.strip() in {etag, "*"} for candidate in header.split(","))
+
+
+def _static_cache_control(web_root: Path, file_path: Path) -> str:
+    try:
+        relative = file_path.resolve().relative_to(web_root.resolve())
+    except ValueError:
+        relative = Path(file_path.name)
+    if file_path.name == "index.html":
+        return "no-cache"
+    if "assets" in relative.parts or re.search(r"\.[0-9a-fA-F]{8,}\.", file_path.name):
+        return "public, max-age=31536000, immutable"
+    return "no-cache"
 
 
 def _clean_model(value: Any) -> str | None:

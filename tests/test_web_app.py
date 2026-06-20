@@ -11,7 +11,10 @@ from pdf_agent.server.web_app import (
     _build_teaching_generation_payload,
     _extract_gateway_text,
     _parse_generated_page,
+    _request_etag_matches,
     _resolve_static_path,
+    _static_cache_control,
+    _static_file_etag,
 )
 
 
@@ -83,7 +86,7 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(content[1]["type"], "input_text")
         self.assertIn("Selected source:", content[1]["text"])
         self.assertIn("PDF page: 7", content[1]["text"])
-        self.assertIn("Selected text:\n\nD_i = Q_i^+", content[1]["text"])
+        self.assertIn("Selected explanation text:\n\nD_i = Q_i^+", content[1]["text"])
         self.assertIn("User question:\n\n解释这个公式", content[1]["text"])
         self.assertIn("# User selected source material", content[1]["text"])
         self.assertIn("D_i = Q_i^+", content[1]["text"])
@@ -332,6 +335,26 @@ class WebAppTest(unittest.TestCase):
             self.assertEqual(_resolve_static_path(root, "/").name, "index.html")
             with self.assertRaises(HttpError):
                 _resolve_static_path(root, "/../secret.txt")
+
+    def test_static_cache_headers_support_revalidation_and_immutable_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assets = root / "assets"
+            assets.mkdir()
+            index = root / "index.html"
+            app = assets / "app.abcdef12.js"
+            plain = root / "manifest.json"
+            index.write_text("ok")
+            app.write_text("console.log('ok')")
+            plain.write_text("{}")
+
+            etag = _static_file_etag(index.stat())
+            self.assertTrue(_request_etag_matches(etag, etag))
+            self.assertTrue(_request_etag_matches(f'"other", {etag}', etag))
+            self.assertFalse(_request_etag_matches('"other"', etag))
+            self.assertEqual(_static_cache_control(root, index), "no-cache")
+            self.assertEqual(_static_cache_control(root, app), "public, max-age=31536000, immutable")
+            self.assertEqual(_static_cache_control(root, plain), "no-cache")
 
 
 if __name__ == "__main__":

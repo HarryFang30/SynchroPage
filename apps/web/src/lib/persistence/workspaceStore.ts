@@ -205,41 +205,48 @@ export async function loadWorkspaceDocuments(
   activeDocumentId?: string | null,
   projectId?: string | null,
 ): Promise<DocumentSidebarItem[]> {
-  const [documents, generatedPages] = await Promise.all([
-    pagePairDb.documents.where("workspaceId").equals(workspaceId).toArray(),
-    pagePairDb.generatedPages.where("workspaceId").equals(workspaceId).toArray(),
-  ]);
-  const generatedCounts = generatedPages.reduce((counts, page) => {
+  const documents = projectId
+    ? (await pagePairDb.documents.where("projectId").equals(projectId).toArray())
+        .filter((document) => document.workspaceId === workspaceId)
+    : await pagePairDb.documents.where("workspaceId").equals(workspaceId).toArray();
+  const visibleDocuments = documents
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+  const generatedCounts = await loadGeneratedPageCounts(visibleDocuments.map((document) => document.id));
+
+  return visibleDocuments.map((document) => ({
+    id: document.id,
+    workspaceId: document.workspaceId,
+    documentId: document.id,
+    projectId: document.projectId,
+    title: document.mimeType === "application/pdf"
+      ? documentTitleFromFileName(document.fileName, document.title)
+      : document.title,
+    fileName: document.fileName,
+    mimeType: document.mimeType,
+    pageCount: document.pageCount,
+    currentPdfPageNumber: document.currentPdfPageNumber,
+    generatedPageCount: generatedCounts.get(document.id) || 0,
+    status: document.status,
+    updatedAt: document.updatedAt,
+    uploadedAt: document.uploadedAt,
+    lastOpenedAt: document.lastOpenedAt,
+    isStarred: document.isStarred,
+    isActive: document.id === activeDocumentId,
+  }));
+}
+
+async function loadGeneratedPageCounts(documentIds: string[]) {
+  const counts = new Map<string, number>();
+  if (!documentIds.length) return counts;
+  const collection = documentIds.length === 1
+    ? pagePairDb.generatedPages.where("documentId").equals(documentIds[0])
+    : pagePairDb.generatedPages.where("documentId").anyOf(documentIds);
+  await collection.each((page) => {
     if (page.status === "completed" && page.markdown.trim()) {
       counts.set(page.documentId, (counts.get(page.documentId) || 0) + 1);
     }
-    return counts;
-  }, new Map<string, number>());
-
-  return documents
-    .slice()
-    .filter((document) => (projectId ? document.projectId === projectId : true))
-    .sort((left, right) => right.updatedAt - left.updatedAt)
-    .map((document) => ({
-      id: document.id,
-      workspaceId: document.workspaceId,
-      documentId: document.id,
-      projectId: document.projectId,
-      title: document.mimeType === "application/pdf"
-        ? documentTitleFromFileName(document.fileName, document.title)
-        : document.title,
-      fileName: document.fileName,
-      mimeType: document.mimeType,
-      pageCount: document.pageCount,
-      currentPdfPageNumber: document.currentPdfPageNumber,
-      generatedPageCount: generatedCounts.get(document.id) || 0,
-      status: document.status,
-      updatedAt: document.updatedAt,
-      uploadedAt: document.uploadedAt,
-      lastOpenedAt: document.lastOpenedAt,
-      isStarred: document.isStarred,
-      isActive: document.id === activeDocumentId,
-    }));
+  });
+  return counts;
 }
 
 export async function loadWorkspace(workspaceId: string): Promise<LoadedWorkspace | null> {
@@ -319,7 +326,7 @@ export async function loadWorkspace(workspaceId: string): Promise<LoadedWorkspac
     pdfBlob,
     generatedPages,
     thread,
-    messages: messages.sort((left, right) => left.createdAt - right.createdAt),
+    messages,
     selectedContext,
     settings,
   };
@@ -408,7 +415,7 @@ export async function loadWorkspaceDocument(
     pdfBlob,
     generatedPages,
     thread,
-    messages: messages.sort((left, right) => left.createdAt - right.createdAt),
+    messages,
     selectedContext,
     settings,
   };

@@ -1044,6 +1044,7 @@ function waitForPdfExtractionIdle(delayMs = 80) {
 async function extractPdfPagesFromDocument(
   document: PDFDocumentProxy,
   options: {
+    priorityPageNumbers?: number[];
     shouldCancel?: () => boolean;
     onProgress?: (pages: PdfContextPage[]) => void;
     progressBatchSize?: number;
@@ -1053,7 +1054,7 @@ async function extractPdfPagesFromDocument(
   const pages: PdfContextPage[] = [];
   let pendingProgress = 0;
   const progressBatchSize = Math.max(1, options.progressBatchSize || 6);
-  for (let pageNo = 1; pageNo <= document.numPages; pageNo += 1) {
+  for (const pageNo of pdfExtractionOrder(document.numPages, options.priorityPageNumbers)) {
     if (options.shouldCancel?.()) break;
     const page = await document.getPage(pageNo);
     if (options.shouldCancel?.()) break;
@@ -1067,14 +1068,32 @@ async function extractPdfPagesFromDocument(
     pendingProgress += 1;
     if (options.onProgress && pendingProgress >= progressBatchSize) {
       pendingProgress = 0;
-      options.onProgress([...pages]);
+      options.onProgress(sortPdfContextPages(pages));
     }
     await waitForPdfExtractionIdle(options.delayMs);
   }
   if (options.onProgress && pendingProgress > 0) {
-    options.onProgress([...pages]);
+    options.onProgress(sortPdfContextPages(pages));
   }
-  return pages;
+  return sortPdfContextPages(pages);
+}
+
+function pdfExtractionOrder(pageCount: number, priorityPageNumbers: number[] = []) {
+  const total = Math.max(0, pageCount);
+  const seen = new Set<number>();
+  const ordered: number[] = [];
+  const add = (pageNo: number) => {
+    if (!Number.isFinite(pageNo) || pageNo < 1 || pageNo > total || seen.has(pageNo)) return;
+    seen.add(pageNo);
+    ordered.push(pageNo);
+  };
+  priorityPageNumbers.forEach(add);
+  for (let pageNo = 1; pageNo <= total; pageNo += 1) add(pageNo);
+  return ordered;
+}
+
+function sortPdfContextPages(pages: PdfContextPage[]) {
+  return [...pages].sort((left, right) => left.page_no - right.page_no);
 }
 
 function fullPdfContextForTeachingGeneration(
@@ -1893,21 +1912,33 @@ export default function App() {
   const pdfNavigationPageCount = Math.max(pdfUrl ? pdfPageCount || pack.document.page_count || pack.pages.length : pack.pages.length, 1);
   const currentPdfPageNo = Math.min(Math.max(currentPageNo, 1), pdfNavigationPageCount);
   const teachingOutputLanguage = resolveTeachingOutputLanguage(uiPreferences);
+  const pageLookup = useMemo(() => {
+    const pagesByNumber = new Map<number, PageData>();
+    const indexesByNumber = new Map<number, number>();
+    pack.pages.forEach((item, index) => {
+      pagesByNumber.set(item.page_no, item);
+      indexesByNumber.set(item.page_no, index);
+    });
+    return { pagesByNumber, indexesByNumber };
+  }, [pack.pages]);
   const page =
-    pack.pages.find((item) => item.page_no === currentPdfPageNo) ||
+    pageLookup.pagesByNumber.get(currentPdfPageNo) ||
     pack.pages[Math.min(Math.max(currentPdfPageNo - 1, 0), Math.max(pack.pages.length - 1, 0))] ||
     samplePacks[uiPreferences.language].pages[0];
-  const currentIndex = Math.max(0, pack.pages.findIndex((item) => item.page_no === page.page_no));
-  const generatedPageCount = pack.pages.filter((item) => hasCompletedTeaching(item, teachingOutputLanguage)).length;
-  const generationProgressPages = Array.from({ length: pdfNavigationPageCount }, (_, index) => {
+  const currentIndex = Math.max(0, pageLookup.indexesByNumber.get(page.page_no) ?? -1);
+  const generatedPageCount = useMemo(
+    () => pack.pages.filter((item) => hasCompletedTeaching(item, teachingOutputLanguage)).length,
+    [pack.pages, teachingOutputLanguage],
+  );
+  const generationProgressPages = useMemo(() => Array.from({ length: pdfNavigationPageCount }, (_, index) => {
     const pageNo = index + 1;
-    const progressPage = pack.pages.find((item) => item.page_no === pageNo);
+    const progressPage = pageLookup.pagesByNumber.get(pageNo);
     return {
       pageNo,
       status: generationPageStatus(progressPage, teachingOutputLanguage),
     };
-  });
-  const generationProgressSummary = generationProgressPages.reduce(
+  }), [pageLookup.pagesByNumber, pdfNavigationPageCount, teachingOutputLanguage]);
+  const generationProgressSummary = useMemo(() => generationProgressPages.reduce(
     (summary, item) => ({
       done: summary.done + (item.status === "done" ? 1 : 0),
       running: summary.running + (item.status === "running" ? 1 : 0),
@@ -1915,7 +1946,7 @@ export default function App() {
       pending: summary.pending + (item.status === "pending" ? 1 : 0),
     }),
     { done: 0, running: 0, failed: 0, pending: 0 },
-  );
+  ), [generationProgressPages]);
   const generateScopeSummary =
     generatePageMode === "current"
       ? copy.topbar.generateScopeCurrent(currentPdfPageNo)
@@ -3196,6 +3227,8 @@ export default function App() {
         sourceTextByPage.set(page.page_no, page.source.text_md);
       }
     }
+    const draftPack = createDraftPagePack(pack.document.title, pack.document.source_pdf_url, totalPages, pack.document.id);
+    const packPagesByNumber = new Map(pack.pages.map((item) => [item.page_no, item]));
 
     let workingPack: PagePack = {
       ...pack,
@@ -3205,10 +3238,11 @@ export default function App() {
       },
       pages: Array.from({ length: totalPages }, (_, index) => {
         const pageNo = index + 1;
-        const existing = pack.pages.find((item) => item.page_no === pageNo) || createDraftPagePack(pack.document.title, pack.document.source_pdf_url, totalPages, pack.document.id).pages[index];
+        const existing = packPagesByNumber.get(pageNo) || draftPack.pages[index];
         return pageWithSourceText(existing, sourceTextByPage.get(pageNo) || "");
       }),
     };
+    const workingPagesByNumber = new Map(workingPack.pages.map((item) => [item.page_no, item]));
     const targetPageNumbers = generateTargetPageNumbers(generatePageMode, generateRangeDraft, currentPdfPageNo, totalPages);
     if (!targetPageNumbers?.length) {
       setJobStatus(copy.status.generationInvalidPageRange(totalPages));
@@ -3240,7 +3274,7 @@ export default function App() {
         setJobStatus(copy.status.generationStarted(pagesToGenerate.length));
         for (let index = 0; index < pagesToGenerate.length; index += 1) {
           const pageNo = pagesToGenerate[index].page_no;
-          const basePage = workingPack.pages.find((item) => item.page_no === pageNo) || createDraftPagePack(pack.document.title, pack.document.source_pdf_url, totalPages, pack.document.id).pages[pageNo - 1];
+          const basePage = workingPagesByNumber.get(pageNo) || draftPack.pages[pageNo - 1];
           const runningPage: PageData = {
             ...basePage,
             status: "running",
@@ -3254,13 +3288,14 @@ export default function App() {
             },
           };
           workingPack = mergePageIntoPack(workingPack, runningPage);
+          workingPagesByNumber.set(pageNo, runningPage);
           setPack(workingPack);
           setCurrentPageNo((current) => current || pageNo);
           setJobStatus(copy.status.generationPage(index + 1, pagesToGenerate.length, pageNo));
 
           try {
-            const previousPage = workingPack.pages.find((item) => item.page_no === pageNo - 1);
-            const nextPage = workingPack.pages.find((item) => item.page_no === pageNo + 1);
+            const previousPage = workingPagesByNumber.get(pageNo - 1);
+            const nextPage = workingPagesByNumber.get(pageNo + 1);
             const response = await requestJson<GeneratedTeachingPageResponse>(
               "/api/generate/page",
               {
@@ -3295,6 +3330,7 @@ export default function App() {
               },
             };
             workingPack = mergePageIntoPack(workingPack, generatedPage);
+            workingPagesByNumber.set(pageNo, generatedPage);
             setPack(workingPack);
             completed += 1;
             if (workspaceId && documentId && workingPack.document.id === documentId) {
@@ -3328,6 +3364,7 @@ export default function App() {
               },
             };
             workingPack = mergePageIntoPack(workingPack, failedPage);
+            workingPagesByNumber.set(pageNo, failedPage);
             setPack(workingPack);
             setJobStatus(copy.status.generationPageFailed(pageNo, message));
             if (workspaceId && documentId && workingPack.document.id === documentId) {
@@ -4385,6 +4422,26 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
         setPdfDocument(document);
         onDocumentReadyRef.current(document.numPages);
         const initialGeometryPage = Math.min(Math.max(pageNumber, 1), document.numPages);
+        const contextPageNumbers = pdfContextPageNumbers(document.numPages, {
+          pdfContextFullPageLimit,
+          pdfContextEdgePageCount,
+        });
+        let contextPublished = false;
+        const publishExtractionProgress = (pages: PdfContextPage[]) => {
+          if (cancelled) return;
+          onPdfPagesTextReadyRef.current(pages);
+          if (contextPublished) return;
+          const extractedPageNumbers = new Set(pages.map((page) => page.page_no));
+          if (!contextPageNumbers.every((pageNo) => extractedPageNumbers.has(pageNo))) return;
+          contextPublished = true;
+          onPdfContextReadyRef.current(pdfContextFromExtractedPages(
+            documentId,
+            documentTitle,
+            document.numPages,
+            { pdfContextFullPageLimit, pdfContextEdgePageCount },
+            pages,
+          ));
+        };
         void document.getPage(initialGeometryPage)
           .then((page) => {
             if (cancelled) return;
@@ -4398,23 +4455,25 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
           .catch(() => undefined);
         textExtractionTimer = window.setTimeout(() => {
           void extractPdfPagesFromDocument(document, {
+            priorityPageNumbers: [initialGeometryPage, ...contextPageNumbers],
             shouldCancel: () => cancelled,
             progressBatchSize: 8,
             delayMs: 90,
-            onProgress: (pages) => {
-              if (!cancelled) onPdfPagesTextReadyRef.current(pages);
-            },
+            onProgress: publishExtractionProgress,
           })
             .then((pages) => {
               if (cancelled) return;
-              onPdfPagesTextReadyRef.current(pages);
-              onPdfContextReadyRef.current(pdfContextFromExtractedPages(
-                documentId,
-                documentTitle,
-                document.numPages,
-                { pdfContextFullPageLimit, pdfContextEdgePageCount },
-                pages,
-              ));
+              publishExtractionProgress(pages);
+              if (!contextPublished) {
+                contextPublished = true;
+                onPdfContextReadyRef.current(pdfContextFromExtractedPages(
+                  documentId,
+                  documentTitle,
+                  document.numPages,
+                  { pdfContextFullPageLimit, pdfContextEdgePageCount },
+                  pages,
+                ));
+              }
             })
             .catch(() => undefined);
         }, 2800);
