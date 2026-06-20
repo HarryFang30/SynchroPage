@@ -1,4 +1,5 @@
 import "katex/dist/katex.min.css";
+import type { ReactNode } from "react";
 import rehypeKatex from "rehype-katex";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,22 +10,32 @@ const markdownRemarkPlugins = [
   [remarkMath, { singleDollarTextMath: true }],
 ] as const;
 const markdownRehypePlugins = [[rehypeKatex, { strict: false, throwOnError: false }]] as const;
+const inlineMarkdownComponents = {
+  p({ children }: { children?: ReactNode }) {
+    return <>{children}</>;
+  },
+} as const;
 const latexInlineDelimiter = /\\{1,2}\(([^\n]+?)\\{1,2}\)/g;
 const latexDisplayDelimiter = /\\{1,2}\[([\s\S]+?)\\{1,2}\]/g;
 const mathTag = /\[\/math\]([\s\S]*?)\[\/math\]/g;
 const inlineTag = /\[\/inline\]([\s\S]*?)\[\/inline\]/g;
 
-export default function MarkdownRenderer({ className, text }: { className: string; text: string }) {
-  return (
-    <div className={className}>
+export default function MarkdownRenderer({ className, text, inline = false }: { className: string; text: string; inline?: boolean }) {
+  const renderedText = inline ? displayMathAsInline(preprocessMathMarkdown(text)) : preprocessMathMarkdown(text);
+  const content = (
       <ReactMarkdown
         remarkPlugins={markdownRemarkPlugins as never}
         rehypePlugins={markdownRehypePlugins as never}
+        components={inline ? inlineMarkdownComponents as never : undefined}
       >
-        {preprocessMathMarkdown(text)}
+        {renderedText}
       </ReactMarkdown>
-    </div>
   );
+  return inline ? <span className={className}>{content}</span> : <div className={className}>{content}</div>;
+}
+
+function displayMathAsInline(text: string) {
+  return text.replace(/\$\$([\s\S]*?)\$\$/g, (_match, body: string) => `$${body.trim()}$`);
 }
 
 function preprocessMathMarkdown(text: string) {

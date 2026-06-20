@@ -53,7 +53,6 @@ import {
 } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { getAppCopy, type AppCopy } from "./i18n";
-import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import {
   defaultUiPreferences,
   loadUiPreferences,
@@ -109,6 +108,14 @@ import {
 } from "./lib/persistence";
 
 const AppCopyContext = createContext<AppCopy>(getAppCopy("zh-CN"));
+type SettingsSection =
+  | "general"
+  | "appearance"
+  | "agent"
+  | "pdf"
+  | "account"
+  | "storage"
+  | "advanced";
 type ThreadAssistantMessagePart = { type: "text"; text: string };
 type ChatModelMessage = {
   id?: string;
@@ -162,6 +169,7 @@ type AssistantUiRuntime = {
   }) => T) => T;
 };
 const AssistantUiContext = createContext<AssistantUiRuntime | null>(null);
+const SettingsModal = lazy(() => import("./SettingsModal").then((module) => ({ default: module.SettingsModal })));
 const MarkdownRenderer = lazy(() => import("./components/MarkdownRenderer"));
 let assistantUiRuntimePromise: Promise<AssistantUiRuntime> | null = null;
 let pdfJsRuntimePromise: Promise<typeof import("./lib/pdf/pdfjs")> | null = null;
@@ -181,21 +189,48 @@ function loadAssistantUiRuntime() {
   return assistantUiRuntimePromise;
 }
 
-function useAssistantUiRuntime(shouldLoad: boolean) {
+function useAssistantUiRuntime(shouldLoad: boolean, deferUntilIdle: boolean) {
   const [runtime, setRuntime] = useState<AssistantUiRuntime | null>(null);
 
   useEffect(() => {
     if (!shouldLoad || runtime) return undefined;
     let cancelled = false;
-    void loadAssistantUiRuntime().then((loadedRuntime) => {
-      if (!cancelled) setRuntime(loadedRuntime);
-    });
+    let idleHandle: number | null = null;
+    let timeoutHandle: number | null = null;
+    const loadRuntime = () => {
+      void loadAssistantUiRuntime().then((loadedRuntime) => {
+        if (!cancelled) setRuntime(loadedRuntime);
+      });
+    };
+    if (deferUntilIdle && "requestIdleCallback" in window) {
+      idleHandle = window.requestIdleCallback(loadRuntime, { timeout: 1800 });
+    } else if (deferUntilIdle) {
+      timeoutHandle = window.setTimeout(loadRuntime, 900);
+    } else {
+      loadRuntime();
+    }
     return () => {
       cancelled = true;
+      if (idleHandle !== null && "cancelIdleCallback" in window) {
+        window.cancelIdleCallback(idleHandle);
+      }
+      if (timeoutHandle !== null) window.clearTimeout(timeoutHandle);
     };
-  }, [runtime, shouldLoad]);
+  }, [deferUntilIdle, runtime, shouldLoad]);
 
   return runtime;
+}
+
+function useDeferredAssistantRuntime(shouldLoadImmediately: boolean) {
+  const [requested, setRequested] = useState(false);
+  const assistantUi = useAssistantUiRuntime(true, !requested && !shouldLoadImmediately);
+  const requestAssistantUi = useCallback(() => {
+    setRequested(true);
+  }, []);
+  useEffect(() => {
+    if (shouldLoadImmediately) setRequested(true);
+  }, [shouldLoadImmediately]);
+  return { assistantUi, requestAssistantUi };
 }
 
 function loadPdfJsRuntime() {
@@ -3559,35 +3594,39 @@ export default function App() {
         />
       )}
 
-      <SettingsModal
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        activeSection={settingsSection}
-        onSectionChange={setSettingsSection}
-        preferences={uiPreferences}
-        onPreferenceChange={updatePreference}
-        onResetLayout={() => {
-          setPanels(fullPanelVisibility);
-          setJobStatus(copy.status.layoutReset);
-        }}
-        onResetPreferences={resetPreferences}
-        onConnectOAuth={connectOAuth}
-        oauthMode={oauthMode}
-        oauthAccount={oauthAccount}
-        providerStatus={authText}
-        jobStatus={jobStatus}
-        documentTitle={pack.document.title}
-        saveState={saveState}
-        storageEstimate={storageEstimate}
-        persistentStorageState={persistentStorageState}
-        hasWorkspace={Boolean(workspaceId)}
-        onRequestPersistentStorage={enablePersistentStorage}
-        onExportWorkspace={exportCurrentWorkspace}
-        onImportWorkspace={() => workspaceImportInputRef.current?.click()}
-        onClearWorkspace={clearCurrentWorkspace}
-        onRepairStorage={repairLocalStorage}
-        onResetWorkspace={resetCurrentWorkspace}
-      />
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal
+            open={settingsOpen}
+            onOpenChange={setSettingsOpen}
+            activeSection={settingsSection}
+            onSectionChange={setSettingsSection}
+            preferences={uiPreferences}
+            onPreferenceChange={updatePreference}
+            onResetLayout={() => {
+              setPanels(fullPanelVisibility);
+              setJobStatus(copy.status.layoutReset);
+            }}
+            onResetPreferences={resetPreferences}
+            onConnectOAuth={connectOAuth}
+            oauthMode={oauthMode}
+            oauthAccount={oauthAccount}
+            providerStatus={authText}
+            jobStatus={jobStatus}
+            documentTitle={pack.document.title}
+            saveState={saveState}
+            storageEstimate={storageEstimate}
+            persistentStorageState={persistentStorageState}
+            hasWorkspace={Boolean(workspaceId)}
+            onRequestPersistentStorage={enablePersistentStorage}
+            onExportWorkspace={exportCurrentWorkspace}
+            onImportWorkspace={() => workspaceImportInputRef.current?.click()}
+            onClearWorkspace={clearCurrentWorkspace}
+            onRepairStorage={repairLocalStorage}
+            onResetWorkspace={resetCurrentWorkspace}
+          />
+        </Suspense>
+      )}
 
       <SelectionToolbar
         state={selectionToolbar}
@@ -4004,10 +4043,14 @@ type AgentPanelProps = {
 
 function AgentPanel(props: AgentPanelProps) {
   const copy = useAppCopy();
-  const assistantUi = useAssistantUiRuntime(true);
+  const { assistantUi, requestAssistantUi } = useDeferredAssistantRuntime(Boolean(props.pendingSelectionPrompt));
   if (!assistantUi) {
     return (
-      <aside className="agent-panel">
+      <aside
+        className="agent-panel"
+        onPointerEnter={requestAssistantUi}
+        onFocusCapture={requestAssistantUi}
+      >
         <div className="agent-toolbar">
           <div className="toolbar-title">
             <span className="agent-dot" />
@@ -5125,7 +5168,7 @@ function SlidePreview({ page }: { page: PageData }) {
             <span />
           </div>
           <div className="chips">
-            {page.teaching.concepts.slice(0, 3).map((item) => <span className="chip" key={item}>{item}</span>)}
+            {page.teaching.concepts.slice(0, 3).map((item) => <ReaderMarkdown className="chip" inline key={item} text={item} />)}
           </div>
         </div>
         <div className="slide-figure">
@@ -5190,15 +5233,15 @@ function MarkdownBlock({ markdown, concepts }: { markdown: string; concepts: str
   return (
     <article className="note-markdown">
       <ReaderMarkdown className="note-markdown-content markdown-body" text={markdown} />
-      <div className="chips">{concepts.map((item) => <span className="chip" key={item}>{item}</span>)}</div>
+      <div className="chips">{concepts.map((item) => <ReaderMarkdown className="chip" inline key={item} text={item} />)}</div>
     </article>
   );
 }
 
-function ReaderMarkdown({ className, text }: { className: string; text: string }) {
+function ReaderMarkdown({ className, text, inline = false }: { className: string; text: string; inline?: boolean }) {
   return (
-    <Suspense fallback={<div className={className}>{text}</div>}>
-      <MarkdownRenderer className={className} text={text} />
+    <Suspense fallback={inline ? <span className={className}>{text}</span> : <div className={className}>{text}</div>}>
+      <MarkdownRenderer className={className} inline={inline} text={text} />
     </Suspense>
   );
 }
