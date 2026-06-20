@@ -2867,6 +2867,10 @@ output {
   font-size: 1em;
 }
 
+.markdown-body .katex-error {
+  color: inherit !important;
+}
+
 .aui-thread-footer {
   flex: 0 0 auto;
   position: relative;

@@ -9,7 +9,7 @@ const markdownRemarkPlugins = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
 ] as const;
-const markdownRehypePlugins = [[rehypeKatex, { strict: false, throwOnError: false }]] as const;
+const markdownRehypePlugins = [[rehypeKatex, { errorColor: "currentColor", strict: false, throwOnError: false }]] as const;
 const inlineMarkdownComponents = {
   p({ children }: { children?: ReactNode }) {
     return <>{children}</>;
@@ -53,7 +53,9 @@ function preprocessMarkdownTextSegment(text: string) {
     .split(/(`[^`\n]*`)/g)
     .map((segment) => {
       if (segment.startsWith("`") && segment.endsWith("`")) return cleanupInlineCodeMathDollars(segment);
-      const normalized = repairBinaryTransitionMathSpillover(normalizeMathDelimiters(escapeCurrencyDollarsPreservingMath(segment)));
+      const normalized = normalizeDisplayMathBlocks(repairDisplayMathDelimiterSpillover(
+        repairBinaryTransitionMathSpillover(normalizeMathDelimiters(escapeCurrencyDollarsPreservingMath(segment))),
+      ));
       return normalized
         .split(/(\$\$[\s\S]*?\$\$|\$(?!\$)(?:\\.|[^$])*\$)/g)
         .map((part) => {
@@ -71,6 +73,30 @@ function normalizeMathDelimiters(text: string) {
     .replace(inlineTag, (_match, body: string) => `$${body.trim()}$`)
     .replace(latexInlineDelimiter, (_match, body: string) => `$${body.trim()}$`)
     .replace(latexDisplayDelimiter, (_match, body: string) => `$$${body.trim()}$$`);
+}
+
+function repairDisplayMathDelimiterSpillover(text: string) {
+  return text
+    .replace(
+      /\$(?!\$)([\s\S]*?\\begin\{([A-Za-z*]+)\}[\s\S]*?\\end\{\2\})\$\$/g,
+      (_match, body: string) => `$$${body.trim()}$$`,
+    )
+    .replace(
+      /\$\$([\s\S]*?\\begin\{([A-Za-z*]+)\}[\s\S]*?\\end\{\2\})\$(?!\$)/g,
+      (_match, body: string) => `$$${body.trim()}$$`,
+    )
+    .replace(
+      /(^|\n)([ \t]*(?:\\frac|\\begin\{cases\})[\s\S]*?\\end\{cases\})\$\$/g,
+      (_match, lead: string, body: string) => `${lead}$$${body.trim()}$$`,
+    );
+}
+
+function normalizeDisplayMathBlocks(text: string) {
+  return text.replace(/\$\$([\s\S]*?)\$\$/g, (_match, body: string) => {
+    const normalized = body.trim();
+    if (!normalized) return "$$$$";
+    return `\n\n$$\n${normalized}\n$$\n\n`;
+  });
 }
 
 function cleanupInlineCodeMathDollars(segment: string) {

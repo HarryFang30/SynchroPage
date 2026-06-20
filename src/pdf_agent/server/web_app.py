@@ -56,6 +56,7 @@ TEACHING_GENERATOR_INSTRUCTIONS = """You are the PagePair per-page teaching gene
 Generate page-aligned study notes for one PDF page at a time.
 Return strict JSON only. Do not wrap JSON in Markdown fences.
 Use the requested output language from the prompt for all prose. Preserve formulas in LaTeX using $...$ or $$...$$.
+For display math, put opening and closing $$ on their own lines and do not attach prose to the same line.
 When writing LaTeX in JSON strings, escape every LaTeX backslash as a JSON backslash pair, for example write \\\\frac and \\\\to.
 Do not put natural-language Chinese text directly inside math delimiters. Write ranges like $0$ 到 $2^n - 1$, or use $0 \\text{ 到 } 2^n - 1$.
 Never escape digits in LaTeX; write 2^n, not \\2^n.
@@ -594,6 +595,7 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
         "- source.text_md must preserve the source page text you received.",
         "- speaker_notes_md must be Markdown suitable for side-by-side learning.",
         "- Use headings, short paragraphs, bullet lists, Markdown tables, and LaTeX math when helpful.",
+        "- For display math, put opening and closing $$ on their own lines and continue prose after the closing delimiter on a new paragraph.",
         "- For mixed prose and math, keep prose outside math delimiters when possible: Chinese example $0$ 到 $2^n - 1$; English example $0$ to $2^n - 1$.",
         "- Never escape digits in LaTeX. Use 2^n, not \\2^n.",
         "- Never escape binary strings. Use 000 and 111, not \\000 or \\111.",
