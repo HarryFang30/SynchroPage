@@ -7,11 +7,13 @@ export type ScrollbarStyle = "thin" | "subtle" | "native";
 export type Language = "zh-CN" | "en-US";
 export type ExplanationLanguage = "auto" | Language;
 export type ModelReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
+export type AgentAnswerMode = "concise" | "guided" | "detailed";
 
 export type UiPreferences = {
   language: Language;
   explanationLanguage: ExplanationLanguage;
   modelReasoningEffort: ModelReasoningEffort;
+  agentAnswerMode: AgentAnswerMode;
   autoSaveSession: boolean;
   theme: ThemeMode;
   accentColor: AccentColor;
@@ -33,6 +35,7 @@ export const defaultUiPreferences: UiPreferences = {
   language: "zh-CN",
   explanationLanguage: "auto",
   modelReasoningEffort: "medium",
+  agentAnswerMode: "concise",
   autoSaveSession: true,
   theme: "system",
   accentColor: "clay",
@@ -60,6 +63,7 @@ export function loadUiPreferences() {
       language: normalizeLanguage(merged.language),
       explanationLanguage: normalizeExplanationLanguage(merged.explanationLanguage),
       modelReasoningEffort: normalizeModelReasoningEffort(merged.modelReasoningEffort),
+      agentAnswerMode: normalizeAgentAnswerMode(merged.agentAnswerMode),
       pdfViewMode,
       pdfContextFullPageLimit: clampNumber(merged.pdfContextFullPageLimit, defaultUiPreferences.pdfContextFullPageLimit, 1, 500),
       pdfContextEdgePageCount: clampNumber(merged.pdfContextEdgePageCount, defaultUiPreferences.pdfContextEdgePageCount, 1, 100),
@@ -79,6 +83,10 @@ export function normalizeExplanationLanguage(value: unknown): ExplanationLanguag
 
 export function normalizeModelReasoningEffort(value: unknown): ModelReasoningEffort {
   return value === "none" || value === "low" || value === "medium" || value === "high" || value === "xhigh" ? value : "medium";
+}
+
+export function normalizeAgentAnswerMode(value: unknown): AgentAnswerMode {
+  return value === "guided" || value === "detailed" ? value : "concise";
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number) {

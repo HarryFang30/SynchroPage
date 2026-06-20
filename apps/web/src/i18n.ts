@@ -74,6 +74,11 @@ export type AppCopy = {
       explanationLanguageAuto: string;
       explanationLanguageChinese: string;
       explanationLanguageEnglish: string;
+      answerModeLabel: string;
+      answerModeDescription: string;
+      answerModeConcise: string;
+      answerModeGuided: string;
+      answerModeDetailed: string;
       modelReasoningEffortLabel: string;
       modelReasoningEffortDescription: string;
       reasoningEffortNone: string;
@@ -481,6 +486,11 @@ const zhCN: AppCopy = {
       explanationLanguageAuto: "跟随界面",
       explanationLanguageChinese: "中文",
       explanationLanguageEnglish: "English",
+      answerModeLabel: "问答回答模式",
+      answerModeDescription: "控制 Agent 问答的回答结构和实际 reasoning.effort；讲解生成仍使用下方模型思考强度。",
+      answerModeConcise: "简洁型 · medium",
+      answerModeGuided: "引导型 · high",
+      answerModeDetailed: "细节型 · extra high",
       modelReasoningEffortLabel: "模型思考强度",
       modelReasoningEffortDescription: "写入 Responses API 的 reasoning.effort。强度越高通常越慢、成本越高，但复杂任务更可靠。",
       reasoningEffortNone: "none · 最快",
@@ -888,6 +898,11 @@ const enUS: AppCopy = {
       explanationLanguageAuto: "Follow interface",
       explanationLanguageChinese: "中文",
       explanationLanguageEnglish: "English",
+      answerModeLabel: "Q&A answer mode",
+      answerModeDescription: "Controls Agent chat structure and the actual reasoning.effort. Generated notes still use the model thinking intensity below.",
+      answerModeConcise: "Concise · medium",
+      answerModeGuided: "Guided · high",
+      answerModeDetailed: "Detailed · extra high",
       modelReasoningEffortLabel: "Model thinking intensity",
       modelReasoningEffortDescription: "Sent to the Responses API as reasoning.effort. Higher effort is slower and more expensive, but can improve complex tasks.",
       reasoningEffortNone: "none · fastest",

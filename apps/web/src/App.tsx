@@ -85,6 +85,7 @@ import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import {
   defaultUiPreferences,
   loadUiPreferences,
+  normalizeAgentAnswerMode,
   normalizeExplanationLanguage,
   normalizeLanguage,
   normalizeModelReasoningEffort,
@@ -295,6 +296,7 @@ type AgentSnapshot = {
   attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
   pdfContext: PdfContextPayload | null;
+  answerMode: UiPreferences["agentAnswerMode"];
   reasoningEffort: UiPreferences["modelReasoningEffort"];
 };
 
@@ -583,9 +585,16 @@ function settingsRecordToPreferences(record: Partial<UiPreferences> | null | und
     language: normalizeLanguage(merged.language),
     explanationLanguage: normalizeExplanationLanguage(merged.explanationLanguage),
     modelReasoningEffort: normalizeModelReasoningEffort(merged.modelReasoningEffort),
+    agentAnswerMode: normalizeAgentAnswerMode(merged.agentAnswerMode),
     pdfContextFullPageLimit: clampPreferenceNumber(merged.pdfContextFullPageLimit, defaultUiPreferences.pdfContextFullPageLimit, 1, 500),
     pdfContextEdgePageCount: clampPreferenceNumber(merged.pdfContextEdgePageCount, defaultUiPreferences.pdfContextEdgePageCount, 1, 100),
   };
+}
+
+function agentAnswerModeReasoningEffort(mode: UiPreferences["agentAnswerMode"]): UiPreferences["modelReasoningEffort"] {
+  if (mode === "detailed") return "xhigh";
+  if (mode === "guided") return "high";
+  return "medium";
 }
 
 function clampPreferenceNumber(value: unknown, fallback: number, min: number, max: number) {
@@ -1593,6 +1602,7 @@ function createPdfAgentAdapter(args: {
 
       const payload = {
         model: "gpt-5.5",
+        answerMode: snapshot.answerMode,
         reasoningEffort: snapshot.reasoningEffort,
         document: pack.document,
         documentFile,
@@ -2030,7 +2040,8 @@ export default function App() {
       attachments,
       selectedContext,
       pdfContext: pdfUrl ? pdfTextContext : buildPdfContextFromPack(pack, uiPreferences),
-      reasoningEffort: uiPreferences.modelReasoningEffort,
+      answerMode: uiPreferences.agentAnswerMode,
+      reasoningEffort: agentAnswerModeReasoningEffort(uiPreferences.agentAnswerMode),
     }),
     [attachments, contexts, pack, pdfTextContext, pdfUrl, selectedContext, uiPreferences],
   );

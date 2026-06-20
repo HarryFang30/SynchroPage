@@ -219,6 +219,17 @@ export function SettingsModal(props: SettingsModalProps) {
                       ]}
                     />
                   </SettingsRow>
+                  <SettingsRow label={copy.settings.agent.answerModeLabel} description={copy.settings.agent.answerModeDescription}>
+                    <SettingsSelect
+                      value={props.preferences.agentAnswerMode}
+                      onChange={(value) => props.onPreferenceChange("agentAnswerMode", value as UiPreferences["agentAnswerMode"])}
+                      options={[
+                        ["concise", copy.settings.agent.answerModeConcise],
+                        ["guided", copy.settings.agent.answerModeGuided],
+                        ["detailed", copy.settings.agent.answerModeDetailed],
+                      ]}
+                    />
+                  </SettingsRow>
                   <SettingsRow label={copy.settings.agent.modelReasoningEffortLabel} description={copy.settings.agent.modelReasoningEffortDescription}>
                     <SettingsSelect
                       value={props.preferences.modelReasoningEffort}

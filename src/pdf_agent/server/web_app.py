@@ -46,7 +46,8 @@ DOCUMENT_CACHE_PREFIX_VERSION = "pagepair.document-prefix.v2"
 
 AGENT_INSTRUCTIONS = """You are the AI agent panel inside PagePair Reader.
 Use the current PDF/page context, selected text, formulas, and image attachments as primary evidence.
-Answer in the user's language, preserve LaTeX formulas, cite page numbers when available, and keep the response useful for study, review, or editing."""
+Answer in the user's language, preserve LaTeX formulas, cite page numbers when available, and keep the response useful for study, review, or editing.
+Follow the answer-mode instructions included in each request."""
 
 TEACHING_GENERATOR_INSTRUCTIONS = """You are the PagePair per-page teaching generator.
 Generate page-aligned study notes for one PDF page at a time.
@@ -486,11 +487,28 @@ def _build_teaching_generation_payload(body: Mapping[str, Any], *, default_model
     return payload
 
 
+def _agent_answer_mode(body: Mapping[str, Any]) -> str:
+    value = str(body.get("answerMode") or "").strip()
+    if value in {"concise", "guided", "detailed"}:
+        return value
+    return "concise"
+
+
+def _agent_answer_mode_effort(mode: str) -> str:
+    if mode == "detailed":
+        return "xhigh"
+    if mode == "guided":
+        return "high"
+    return "medium"
+
+
 def _reasoning_effort(body: Mapping[str, Any]) -> str:
     reasoning = body.get("reasoning") if isinstance(body.get("reasoning"), Mapping) else {}
     value = str(body.get("reasoningEffort") or reasoning.get("effort") or "").strip()
     if value in {"none", "low", "medium", "high", "xhigh"}:
         return value
+    if body.get("answerMode"):
+        return _agent_answer_mode_effort(_agent_answer_mode(body))
     return "medium"
 
 
@@ -907,6 +925,45 @@ def _normalize_katex_body(value: str) -> str:
     return normalized
 
 
+def _agent_answer_mode_prompt(mode: str) -> str:
+    if mode == "detailed":
+        return "\n".join(
+            [
+                "Mode: detailed",
+                "Reasoning effort: xhigh",
+                "Response style:",
+                "- Give a complete, page-grounded explanation with clear sections.",
+                "- Start with a short direct answer, then explain prerequisites, symbols, formulas, code, tables, and edge cases when relevant.",
+                "- Use the attached PDF and cacheable document context for cross-page continuity; cite original PDF page numbers when available.",
+                "- Include examples or derivations when they help study the material.",
+                "- End with a compact takeaway.",
+            ]
+        )
+    if mode == "guided":
+        return "\n".join(
+            [
+                "Mode: guided",
+                "Reasoning effort: high",
+                "Response style:",
+                "- Start with the answer, then teach the path to it step by step.",
+                "- Connect the selected material to the current PDF page and nearby document context.",
+                "- Surface common mistakes, key assumptions, or one check-your-understanding point when useful.",
+                "- Keep the structure clear and cite original PDF page numbers when available.",
+            ]
+        )
+    return "\n".join(
+        [
+            "Mode: concise",
+            "Reasoning effort: medium",
+            "Response style:",
+            "- Answer directly in a compact form.",
+            "- Use only the necessary explanation, formulas, or code snippets.",
+            "- Prefer 3-6 bullets or short paragraphs unless the user explicitly asks for more detail.",
+            "- Cite original PDF page numbers when available.",
+        ]
+    )
+
+
 def _build_agent_interaction_prompt(body: Mapping[str, Any]) -> str:
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
     page = body.get("page") if isinstance(body.get("page"), Mapping) else {}
@@ -918,10 +975,13 @@ def _build_agent_interaction_prompt(body: Mapping[str, Any]) -> str:
     contexts = [*_context_items(body.get("context")), *_context_parts(body.get("parts"))]
     raw_input = str(body.get("input") or "").strip() or _text_from_parts(body.get("parts"))
     input_text = _build_user_request(raw_input, selected_context_value, body.get("pdfContext"))
+    answer_mode = _agent_answer_mode(body)
 
     sections = [
         "# User request",
         input_text or "Continue from the provided context.",
+        "# Answer mode",
+        _agent_answer_mode_prompt(answer_mode),
         "# Document",
         f"Title: {_string_value(document.get('title'), 'Untitled')}",
         f"Document ID: {_string_value(document.get('id'), 'unknown')}",
