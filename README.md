@@ -146,6 +146,24 @@ npm --prefix apps/desktop run pack
 open "apps/desktop/release/mac-arm64/PagePair Reader.app"
 ```
 
+也可以使用仓库级一键脚本：
+
+```bash
+./scripts/build-macos-app.sh
+```
+
+自用时直接构建、安装到系统「应用程序」并打开：
+
+```bash
+./scripts/build-macos-app.sh --install --open
+```
+
+如果只想安装到当前用户目录：
+
+```bash
+./scripts/build-macos-app.sh --user-install --open
+```
+
 `pack` 会依次执行：
 
 ```text

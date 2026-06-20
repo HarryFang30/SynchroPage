@@ -27,6 +27,7 @@ import {
   Settings,
   Settings2,
   Trash2,
+  Upload,
   X,
   Zap,
 } from "lucide-react";
@@ -1812,6 +1813,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
+  const [railActionMenuOpen, setRailActionMenuOpen] = useState(false);
   const [generateMenuOpen, setGenerateMenuOpen] = useState(false);
   const [generatePageMode, setGeneratePageMode] = useState<GeneratePageMode>("missing");
   const [generateRangeDraft, setGenerateRangeDraft] = useState("");
@@ -1843,6 +1845,7 @@ export default function App() {
   const pdfDirectFileCacheRef = useRef<{ url: string; filename: string; file: PdfDirectFileInput | null } | null>(null);
   const appShellRef = useRef<HTMLDivElement>(null);
   const commandMenuRef = useRef<HTMLDivElement>(null);
+  const railActionMenuRef = useRef<HTMLDivElement>(null);
   const generateMenuRef = useRef<HTMLDivElement>(null);
   const jsonImportInputRef = useRef<HTMLInputElement>(null);
   const workspaceImportInputRef = useRef<HTMLInputElement>(null);
@@ -2543,6 +2546,26 @@ export default function App() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [commandMenuOpen]);
+
+  useEffect(() => {
+    if (!railActionMenuOpen) return undefined;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && railActionMenuRef.current?.contains(target)) return;
+      setRailActionMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRailActionMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [railActionMenuOpen]);
 
   useEffect(() => {
     if (!generateMenuOpen) return undefined;
@@ -3658,17 +3681,45 @@ export default function App() {
                     <strong>PagePair</strong>
                     <span>{activeProject?.name || copy.rail.defaultCourse}</span>
                   </div>
-                  <div className="rail-header-actions">
+                  <div className="rail-header-actions" ref={railActionMenuRef}>
                     <button
-                      className="rail-icon-button"
+                      className={`rail-icon-button ${railActionMenuOpen ? "active" : ""}`}
                       type="button"
-                      disabled={!workspaceId}
-                      onClick={() => setCourseDialogOpen(true)}
-                      title={copy.rail.newCourse}
-                      aria-label={copy.rail.newCourse}
+                      onClick={() => setRailActionMenuOpen((open) => !open)}
+                      title={copy.rail.uploadDocument}
+                      aria-label={copy.rail.uploadDocument}
+                      aria-haspopup="menu"
+                      aria-expanded={railActionMenuOpen}
                     >
                       <Plus />
                     </button>
+                    {railActionMenuOpen ? (
+                      <div className="rail-action-menu" role="menu">
+                        <FileButton
+                          label={copy.rail.uploadDocument}
+                          accept="application/pdf"
+                          onFile={(file) => {
+                            setRailActionMenuOpen(false);
+                            loadPdf(file);
+                          }}
+                        >
+                          <Upload />
+                          <span>{copy.rail.uploadDocument}</span>
+                        </FileButton>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          disabled={!workspaceId}
+                          onClick={() => {
+                            setRailActionMenuOpen(false);
+                            setCourseDialogOpen(true);
+                          }}
+                        >
+                          <BookOpen />
+                          <span>{copy.rail.newCourse}</span>
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
                 <div className="search-box">
