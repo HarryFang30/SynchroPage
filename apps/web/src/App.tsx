@@ -310,8 +310,10 @@ type PdfDirectFileInput = {
 
 type GenerationPageStatus = "done" | "running" | "failed" | "pending";
 type GeneratePageMode = "missing" | "all" | "current" | "custom";
-const TEACHING_GENERATION_CONCURRENCY = 3;
-const TEACHING_DOCUMENT_GENERATION_CONCURRENCY = 1;
+const TEACHING_GENERATION_CONCURRENCY = 4;
+const TEACHING_DOCUMENT_GENERATION_CONCURRENCY = 2;
+const TEACHING_CONTEXT_PAGE_CHARS = 900;
+const TEACHING_FILE_INPUT_MIN_TEXT_CHARS = 24;
 
 type PdfViewMode = "continuous" | "single-page";
 
@@ -696,6 +698,10 @@ function agentAnswerModeReasoningEffort(mode: UiPreferences["agentAnswerMode"]):
   if (mode === "detailed") return "xhigh";
   if (mode === "guided") return "high";
   return "medium";
+}
+
+function teachingGenerationReasoningEffort(_preference: UiPreferences["modelReasoningEffort"]): UiPreferences["modelReasoningEffort"] {
+  return "low";
 }
 
 function clampPreferenceNumber(value: unknown, fallback: number, min: number, max: number) {
@@ -1117,7 +1123,7 @@ async function extractPdfPagesFromBlob(blob: Blob, priorityPageNumbers: number[]
     const pages = await extractPdfPagesFromDocument(document, {
       priorityPageNumbers,
       progressBatchSize: 12,
-      delayMs: 20,
+      delayMs: 0,
     });
     return { pageCount: document.numPages, pages };
   } finally {
@@ -1220,6 +1226,10 @@ function sortPdfContextPages(pages: PdfContextPage[]) {
   return [...pages].sort((left, right) => left.page_no - right.page_no);
 }
 
+function compactTeachingContextText(text: string) {
+  return truncatePromptContext(text, TEACHING_CONTEXT_PAGE_CHARS);
+}
+
 function fullPdfContextForTeachingGeneration(
   pack: PagePack,
   pageCount: number,
@@ -1233,7 +1243,7 @@ function fullPdfContextForTeachingGeneration(
     return {
       page_no: pageNo,
       title: packPage?.teaching.slide_title || `PDF p.${pageNo}`,
-      text_md: extractedTextByPage.get(pageNo) || packPage?.source.text_md || "",
+      text_md: compactTeachingContextText(extractedTextByPage.get(pageNo) || packPage?.source.text_md || ""),
     };
   });
   return {
@@ -1247,6 +1257,10 @@ function fullPdfContextForTeachingGeneration(
     includedPageNumbers: pages.map((page) => page.page_no),
     pages,
   };
+}
+
+function shouldAttachPdfFileForTeachingPage(page: PageData) {
+  return page.source.text_md.trim().length < TEACHING_FILE_INPUT_MIN_TEXT_CHARS;
 }
 
 function pdfContextFromExtractedPages(
@@ -3287,9 +3301,15 @@ export default function App() {
       let completed = 0;
       try {
         const documentContext = fullPdfContextForTeachingGeneration(workingPack, totalPages, pdfExtractedPages);
-        const documentFile = pdfUrl
-          ? await pdfDirectFileInputFromUrl(pdfUrl, workingPack.document.source_pdf_url || workingPack.document.title).catch(() => null)
-          : null;
+        let documentFilePromise: Promise<PdfDirectFileInput | null> | null = null;
+        const getDocumentFileForPage = (page: PageData) => {
+          if (!pdfUrl || !shouldAttachPdfFileForTeachingPage(page)) return Promise.resolve(null);
+          documentFilePromise ??= pdfDirectFileInputFromUrl(
+            pdfUrl,
+            workingPack.document.source_pdf_url || workingPack.document.title,
+          ).catch(() => null);
+          return documentFilePromise;
+        };
         setJobStatus(copy.status.generationStarted(pagesToGenerate.length));
         const generationInputPagesByNumber = new Map(workingPagesByNumber);
         let started = 0;
@@ -3318,13 +3338,14 @@ export default function App() {
           try {
             const previousPage = generationInputPagesByNumber.get(pageNo - 1);
             const nextPage = generationInputPagesByNumber.get(pageNo + 1);
+            const documentFile = await getDocumentFileForPage(runningPage);
             const response = await requestJson<GeneratedTeachingPageResponse>(
               "/api/generate/page",
               {
                 method: "POST",
                 body: JSON.stringify({
                   model: "gpt-5.5",
-                  reasoningEffort: uiPreferences.modelReasoningEffort,
+                  reasoningEffort: teachingGenerationReasoningEffort(uiPreferences.modelReasoningEffort),
                   document: workingPack.document,
                   documentContext,
                   documentFile,
@@ -3468,6 +3489,7 @@ export default function App() {
           if (!bundle.pdfBlob?.blob) {
             return;
           }
+          const pdfBlob = bundle.pdfBlob.blob;
 
           const activeDocumentExtractionReady =
             item.documentId === documentId &&
@@ -3477,7 +3499,7 @@ export default function App() {
                 pageCount: Math.max(pdfPageCount || pack.document.page_count || item.pageCount || pdfExtractedPages.length, 1),
                 pages: pdfExtractedPages,
               }
-            : await extractPdfPagesFromBlob(bundle.pdfBlob.blob, [item.currentPdfPageNumber || 1]);
+            : await extractPdfPagesFromBlob(pdfBlob, [item.currentPdfPageNumber || 1]);
           const totalPages = Math.max(extracted.pageCount, bundle.document.pageCount || 0, bundle.generatedPages.length, 1);
           const sourceTextByPage = new Map<number, string>();
           for (const page of extracted.pages) {
@@ -3509,8 +3531,13 @@ export default function App() {
             return;
           }
 
-          const documentFile = await pdfDirectFileInputFromBlob(bundle.pdfBlob.blob, bundle.document.fileName).catch(() => null);
           const documentContext = fullPdfContextForTeachingGeneration(workingPack, totalPages, extracted.pages);
+          let documentFilePromise: Promise<PdfDirectFileInput | null> | null = null;
+          const getDocumentFileForPage = (page: PageData) => {
+            if (!shouldAttachPdfFileForTeachingPage(page)) return Promise.resolve(null);
+            documentFilePromise ??= pdfDirectFileInputFromBlob(pdfBlob, bundle.document.fileName).catch(() => null);
+            return documentFilePromise;
+          };
           const generationInputPagesByNumber = new Map(workingPagesByNumber);
           let started = 0;
           await runWithConcurrencyLimit(pagesToGenerate, TEACHING_GENERATION_CONCURRENCY, async (pageToGenerate) => {
@@ -3537,13 +3564,14 @@ export default function App() {
             try {
               const previousPage = generationInputPagesByNumber.get(pageNo - 1);
               const nextPage = generationInputPagesByNumber.get(pageNo + 1);
+              const documentFile = await getDocumentFileForPage(runningPage);
               const response = await requestJson<GeneratedTeachingPageResponse>(
                 "/api/generate/page",
                 {
                   method: "POST",
                   body: JSON.stringify({
                     model: "gpt-5.5",
-                    reasoningEffort: uiPreferences.modelReasoningEffort,
+                    reasoningEffort: teachingGenerationReasoningEffort(uiPreferences.modelReasoningEffort),
                     document: workingPack.document,
                     documentContext,
                     documentFile,
