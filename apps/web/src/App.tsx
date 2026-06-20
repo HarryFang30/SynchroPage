@@ -3771,8 +3771,8 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
 }, ref) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pageElementsRef = useRef(new Map<number, HTMLDivElement>());
-  const visiblePagesRef = useRef(new Map<number, { ratio: number; centerDistance: number }>());
   const activePageTimerRef = useRef<number | null>(null);
+  const activePageFrameRef = useRef<number | null>(null);
   const lastActivePageRef = useRef(pageNumber);
   const restoredUrlRef = useRef("");
   const viewportWidth = useElementWidth(scrollContainerRef);
@@ -3799,17 +3799,47 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
   }, [onActivePageChange]);
 
   const chooseActivePage = useCallback(() => {
-    const candidates = Array.from(visiblePagesRef.current.entries())
-      .map(([pageNo, entry]) => ({ pageNo, ...entry }))
-      .filter((entry) => entry.ratio > 0.01);
-    if (!candidates.length) return;
+    const root = scrollContainerRef.current;
+    if (!root) return;
+    const rootRect = root.getBoundingClientRect();
+    const anchorY = rootRect.top + rootRect.height * 0.5;
+    const visiblePages = Array.from(pageElementsRef.current.entries())
+      .map(([pageNo, element]) => {
+        const rect = element.getBoundingClientRect();
+        const pageCenter = rect.top + rect.height / 2;
+        const edgeDistance = rect.top > anchorY ? rect.top - anchorY : anchorY > rect.bottom ? anchorY - rect.bottom : 0;
+        return {
+          pageNo,
+          top: rect.top,
+          bottom: rect.bottom,
+          centerDistance: Math.abs(pageCenter - anchorY),
+          edgeDistance,
+        };
+      })
+      .filter((entry) => entry.bottom > rootRect.top + 1 && entry.top < rootRect.bottom - 1);
+    if (!visiblePages.length) return;
+
+    const currentPage = visiblePages.find((entry) => entry.pageNo === lastActivePageRef.current);
+    if (currentPage && currentPage.top <= anchorY && currentPage.bottom >= anchorY) return;
+
+    const centerHits = visiblePages.filter((entry) => entry.top <= anchorY && entry.bottom >= anchorY);
+    const candidates = centerHits.length ? centerHits : visiblePages;
     candidates.sort((left, right) => {
-      const ratioDelta = right.ratio - left.ratio;
-      if (Math.abs(ratioDelta) > 0.08) return ratioDelta;
+      if (centerHits.length) return left.centerDistance - right.centerDistance;
+      const edgeDelta = left.edgeDistance - right.edgeDistance;
+      if (Math.abs(edgeDelta) > 1) return edgeDelta;
       return left.centerDistance - right.centerDistance;
     });
     scheduleActivePage(candidates[0].pageNo);
   }, [scheduleActivePage]);
+
+  const requestActivePageFromLayout = useCallback(() => {
+    if (activePageFrameRef.current) return;
+    activePageFrameRef.current = window.requestAnimationFrame(() => {
+      activePageFrameRef.current = null;
+      chooseActivePage();
+    });
+  }, [chooseActivePage]);
 
   const scrollToPage = useCallback((targetPage: number, behavior: ScrollBehavior = "smooth") => {
     const pageNo = Math.min(Math.max(targetPage, 1), Math.max(pageCount, 1));
@@ -3833,7 +3863,6 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
       pageElementsRef.current.set(pageNo, node);
     } else {
       pageElementsRef.current.delete(pageNo);
-      visiblePagesRef.current.delete(pageNo);
     }
   }, []);
 
@@ -3847,7 +3876,6 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
     let cancelled = false;
     setPdfDocument(null);
     setDocumentError("");
-    visiblePagesRef.current.clear();
     pageElementsRef.current.clear();
     restoredUrlRef.current = "";
     const pdfWorker = PDFWorker.create({ port: new PdfJsWorker() });
@@ -3882,6 +3910,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
     return () => {
       cancelled = true;
       if (activePageTimerRef.current) window.clearTimeout(activePageTimerRef.current);
+      if (activePageFrameRef.current) window.cancelAnimationFrame(activePageFrameRef.current);
       void loadingTask.destroy().catch(() => undefined);
     };
   }, [documentId, documentTitle, pdfContextEdgePageCount, pdfContextFullPageLimit, url]);
@@ -3893,26 +3922,8 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
 
   useEffect(() => {
     if (!pdfDocument || !scrollContainerRef.current || viewMode !== "continuous") return undefined;
-    const observer = new IntersectionObserver((entries) => {
-      const rootRect = scrollContainerRef.current?.getBoundingClientRect();
-      for (const entry of entries) {
-        const element = entry.target as HTMLElement;
-        const pageNo = Number(element.dataset.pageContainerNumber || "");
-        if (!Number.isFinite(pageNo)) continue;
-        if (!entry.isIntersecting) {
-          visiblePagesRef.current.delete(pageNo);
-          continue;
-        }
-        const rootTop = entry.rootBounds?.top ?? rootRect?.top ?? 0;
-        const rootHeight = entry.rootBounds?.height ?? rootRect?.height ?? 0;
-        const rootCenter = rootTop + rootHeight / 2;
-        const pageCenter = entry.boundingClientRect.top + entry.boundingClientRect.height / 2;
-        visiblePagesRef.current.set(pageNo, {
-          ratio: entry.intersectionRatio,
-          centerDistance: Math.abs(pageCenter - rootCenter),
-        });
-      }
-      chooseActivePage();
+    const observer = new IntersectionObserver(() => {
+      requestActivePageFromLayout();
     }, {
       root: scrollContainerRef.current,
       threshold: pdfIntersectionThresholds,
@@ -3921,7 +3932,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
     const observedElements = Array.from(pageElementsRef.current.values());
     observedElements.forEach((element) => observer.observe(element));
     return () => observer.disconnect();
-  }, [chooseActivePage, pdfDocument, pageCount, viewMode]);
+  }, [pdfDocument, pageCount, requestActivePageFromLayout, viewMode]);
 
   useEffect(() => {
     if (!pdfDocument || !pageCount || !viewportWidth || restoredUrlRef.current === url) return undefined;
@@ -3956,7 +3967,8 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
 
   const handleScroll = useCallback(() => {
     onViewerScroll?.();
-  }, [onViewerScroll]);
+    requestActivePageFromLayout();
+  }, [onViewerScroll, requestActivePageFromLayout]);
 
   if (documentError) {
     return (
