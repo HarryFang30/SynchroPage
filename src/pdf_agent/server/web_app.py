@@ -450,6 +450,9 @@ def _build_responses_payload(body: Mapping[str, Any], *, default_model: str) -> 
     cache_prefix = _build_document_cache_prefix(body)
     if cache_prefix:
         content.append({"type": "input_text", "text": cache_prefix})
+    pdf_file = _pdf_file_input(body.get("documentFile"))
+    if pdf_file:
+        content.append(pdf_file)
     content.append({"type": "input_text", "text": _build_agent_interaction_prompt(body)})
     for image in _image_attachments(body.get("attachments"), body.get("parts")):
         content.append({"type": "input_image", "image_url": image["data_url"]})
@@ -923,6 +926,11 @@ def _build_agent_interaction_prompt(body: Mapping[str, Any]) -> str:
         f"Title: {_string_value(document.get('title'), 'Untitled')}",
         f"Document ID: {_string_value(document.get('id'), 'unknown')}",
     ]
+    if _pdf_file_input(body.get("documentFile")):
+        sections.extend([
+            "Original PDF file:",
+            "The original PDF is attached as an input_file. Use it as primary source evidence; use the page-text context below as a cacheable index for page numbers, truncation policy, and extracted snippets.",
+        ])
     sections.extend(
         [
             "# Current page",

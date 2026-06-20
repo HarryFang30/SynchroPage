@@ -483,9 +483,9 @@ const zhCN: AppCopy = {
       reasoningEffortHigh: "high · 深度",
       reasoningEffortXHigh: "xhigh · 最强",
       pdfContextFullPageLimitLabel: "全文上下文页数阈值",
-      pdfContextFullPageLimitDescription: "PDF 页数不超过这个值时，发送全部可提取文本给模型。",
+      pdfContextFullPageLimitDescription: "控制 PDF 直传之外的可缓存页级文本索引：页数不超过时保留全文文本索引，原始 PDF 会优先直传。",
       pdfContextEdgePageCountLabel: "长 PDF 前后截取页数",
-      pdfContextEdgePageCountDescription: "超过阈值时，分别截取开头和结尾的页数作为 PDF 上下文。",
+      pdfContextEdgePageCountDescription: "超过阈值时，只缓存开头和结尾页的文本索引；原始 PDF 仍会优先作为模型输入。",
     },
     pdf: {
       scrollbarLabel: "滚动条样式",
@@ -884,9 +884,9 @@ const enUS: AppCopy = {
       reasoningEffortHigh: "high · deep",
       reasoningEffortXHigh: "xhigh · strongest",
       pdfContextFullPageLimitLabel: "Full-context page limit",
-      pdfContextFullPageLimitDescription: "When the PDF is at or below this page count, send all extractable page text to the model.",
+      pdfContextFullPageLimitDescription: "Controls the cacheable page-text index in addition to direct PDF input. At or below this count, keep a full text index.",
       pdfContextEdgePageCountLabel: "Long-PDF edge pages",
-      pdfContextEdgePageCountDescription: "When the PDF exceeds the limit, include this many pages from both the beginning and the end.",
+      pdfContextEdgePageCountDescription: "When the PDF exceeds the limit, cache only this many text-index pages from both edges; the original PDF is still attached when available.",
     },
     pdf: {
       scrollbarLabel: "Scrollbar style",

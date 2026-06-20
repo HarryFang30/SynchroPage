@@ -1468,6 +1468,7 @@ function messageText(message: unknown): string {
 
 function createPdfAgentAdapter(args: {
   getSnapshot: () => AgentSnapshot;
+  getDocumentFile?: () => Promise<PdfDirectFileInput | null>;
   getPack: () => PagePack;
   getPage: () => PageData;
   copy: AppCopy;
@@ -1486,6 +1487,7 @@ function createPdfAgentAdapter(args: {
       const selectedPdfSourceContext = snapshot.selectedContext
         ? selectedContextPdfSourceContext(snapshot.selectedContext, args.copy)
         : null;
+      const documentFile = await args.getDocumentFile?.().catch(() => null) || null;
       const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
       const latestUserText = latestUser ? messageText(latestUser) : "";
       const promptInput = buildSelectedQuestionPrompt(latestUserText, snapshot.selectedContext, snapshot.pdfContext, args.copy);
@@ -1591,6 +1593,7 @@ function createPdfAgentAdapter(args: {
         model: "gpt-5.5",
         reasoningEffort: snapshot.reasoningEffort,
         document: pack.document,
+        documentFile,
         page,
         messages: options.messages.map((message) => ({
           role: message.role,
@@ -1833,6 +1836,7 @@ export default function App() {
   const [agentRuntimeKey, setAgentRuntimeKey] = useState("thread:initial");
   const lastSelectionRef = useRef<SelectedContext | null>(null);
   const currentPdfObjectUrlRef = useRef("");
+  const pdfDirectFileCacheRef = useRef<{ url: string; filename: string; file: PdfDirectFileInput | null } | null>(null);
   const appShellRef = useRef<HTMLDivElement>(null);
   const commandMenuRef = useRef<HTMLDivElement>(null);
   const generateMenuRef = useRef<HTMLDivElement>(null);
@@ -2028,6 +2032,15 @@ export default function App() {
     }),
     [attachments, contexts, pack, pdfTextContext, pdfUrl, selectedContext, uiPreferences],
   );
+  const getDocumentFile = useCallback(async () => {
+    if (!pdfUrl) return null;
+    const filename = pack.document.source_pdf_url || pack.document.title || "document.pdf";
+    const cached = pdfDirectFileCacheRef.current;
+    if (cached?.url === pdfUrl && cached.filename === filename) return cached.file;
+    const file = await pdfDirectFileInputFromUrl(pdfUrl, filename).catch(() => null);
+    pdfDirectFileCacheRef.current = { url: pdfUrl, filename, file };
+    return file;
+  }, [pack.document.source_pdf_url, pack.document.title, pdfUrl]);
   const getPack = useCallback(() => pack, [pack]);
   const getPage = useCallback(() => page, [page]);
 
@@ -2130,6 +2143,7 @@ export default function App() {
     if (currentPdfObjectUrlRef.current) {
       URL.revokeObjectURL(currentPdfObjectUrlRef.current);
     }
+    pdfDirectFileCacheRef.current = null;
     currentPdfObjectUrlRef.current = nextUrl;
     setPdfUrl(nextUrl);
   }, []);
@@ -3826,6 +3840,7 @@ export default function App() {
               }}
               composerInputRef={composerInputRef}
               getSnapshot={getSnapshot}
+              getDocumentFile={getDocumentFile}
               getPack={getPack}
               getPage={getPage}
               backendOffline={oauthMode === "offline" || oauthMode === "mock"}
@@ -3879,6 +3894,7 @@ function AgentPanel(props: {
   clearPendingSelectionPrompt: (id: string) => void;
   composerInputRef: RefObject<HTMLTextAreaElement | null>;
   getSnapshot: () => AgentSnapshot;
+  getDocumentFile: () => Promise<PdfDirectFileInput | null>;
   getPack: () => PagePack;
   getPage: () => PageData;
   backendOffline: boolean;
@@ -3893,6 +3909,7 @@ function AgentPanel(props: {
     () =>
       createPdfAgentAdapter({
         getSnapshot: props.getSnapshot,
+        getDocumentFile: props.getDocumentFile,
         getPack: props.getPack,
         getPage: props.getPage,
         copy,
@@ -3900,7 +3917,7 @@ function AgentPanel(props: {
         clearSelectedContext: () => props.setSelectedContext(null),
         persistChatMessage: props.persistChatMessage,
       }),
-    [copy, props.backendOffline, props.getPage, props.getPack, props.getSnapshot, props.persistChatMessage, props.setSelectedContext],
+    [copy, props.backendOffline, props.getDocumentFile, props.getPage, props.getPack, props.getSnapshot, props.persistChatMessage, props.setSelectedContext],
   );
   const runtime = useLocalRuntime(adapter, { initialMessages: props.initialMessages });
   const page = props.getPage();
