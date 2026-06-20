@@ -309,6 +309,7 @@ type PdfDirectFileInput = {
 
 type GenerationPageStatus = "done" | "running" | "failed" | "pending";
 type GeneratePageMode = "missing" | "all" | "current" | "custom";
+const TEACHING_GENERATION_CONCURRENCY = 3;
 
 type PdfViewMode = "continuous" | "single-page";
 
@@ -1796,6 +1797,23 @@ function generationStatusLabel(status: GenerationPageStatus, copy: AppCopy) {
   return copy.topbar.generationStatusPending;
 }
 
+async function runWithConcurrencyLimit<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>,
+) {
+  if (!items.length) return;
+  const concurrency = Math.min(Math.max(1, Math.floor(limit)), items.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await worker(items[index], index);
+    }
+  }));
+}
+
 export default function App() {
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(() => loadUiPreferences());
   const copy = useMemo(() => getAppCopy(uiPreferences.language), [uiPreferences.language]);
@@ -3248,9 +3266,11 @@ export default function App() {
           ? await pdfDirectFileInputFromUrl(pdfUrl, workingPack.document.source_pdf_url || workingPack.document.title).catch(() => null)
           : null;
         setJobStatus(copy.status.generationStarted(pagesToGenerate.length));
-        for (let index = 0; index < pagesToGenerate.length; index += 1) {
-          const pageNo = pagesToGenerate[index].page_no;
-          const basePage = workingPagesByNumber.get(pageNo) || draftPack.pages[pageNo - 1];
+        const generationInputPagesByNumber = new Map(workingPagesByNumber);
+        let started = 0;
+        await runWithConcurrencyLimit(pagesToGenerate, TEACHING_GENERATION_CONCURRENCY, async (pageToGenerate) => {
+          const pageNo = pageToGenerate.page_no;
+          const basePage = generationInputPagesByNumber.get(pageNo) || draftPack.pages[pageNo - 1];
           const runningPage: PageData = {
             ...basePage,
             status: "running",
@@ -3267,11 +3287,12 @@ export default function App() {
           workingPagesByNumber.set(pageNo, runningPage);
           setPack(workingPack);
           setCurrentPageNo((current) => current || pageNo);
-          setJobStatus(copy.status.generationPage(index + 1, pagesToGenerate.length, pageNo));
+          started += 1;
+          setJobStatus(copy.status.generationPage(started, pagesToGenerate.length, pageNo));
 
           try {
-            const previousPage = workingPagesByNumber.get(pageNo - 1);
-            const nextPage = workingPagesByNumber.get(pageNo + 1);
+            const previousPage = generationInputPagesByNumber.get(pageNo - 1);
+            const nextPage = generationInputPagesByNumber.get(pageNo + 1);
             const response = await requestJson<GeneratedTeachingPageResponse>(
               "/api/generate/page",
               {
@@ -3361,7 +3382,7 @@ export default function App() {
               });
             }
           }
-        }
+        });
         if (workspaceId && documentId && workingPack.document.id === documentId) {
           await saveGeneratedPagesFromPack({ workspaceId, documentId, pack: workingPack });
           await refreshDocumentItems(workspaceId, documentId, activeProjectId);

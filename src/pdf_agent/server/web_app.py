@@ -44,6 +44,8 @@ MAX_IMAGE_DATA_URL_CHARS = 8_000_000
 MAX_PDF_FILE_DATA_CHARS = 80_000_000
 PROMPT_CACHE_VERSION = "pagepair.prompt-cache.v2"
 DOCUMENT_CACHE_PREFIX_VERSION = "pagepair.document-prefix.v2"
+TEACHING_API_CONCURRENCY = 3
+TEACHING_RETRY_DELAYS_SECONDS = (0.5, 1.5, 3.0)
 
 AGENT_INSTRUCTIONS = """You are the AI agent panel inside PagePair Reader.
 Use the current PDF/page context, selected text, formulas, and image attachments as primary evidence.
@@ -173,18 +175,21 @@ class TeachingGenerationGateway:
         *,
         model: str = DEFAULT_AGENT_MODEL,
         timeout_seconds: float = 180.0,
+        api_concurrency: int = TEACHING_API_CONCURRENCY,
     ) -> None:
         self.manager = manager
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self._api_semaphore = asyncio.Semaphore(max(1, api_concurrency))
 
     async def generate_page(self, body: Mapping[str, Any]) -> dict[str, Any]:
         auth = await build_chatgpt_codex_auth(self.manager, session_id=_string_or_none(body.get("session_id")))
-        content, payload, document_file_used = await self._generate_content_with_fallback(
-            codex_responses_url(base_url=auth.upstream_base_url),
-            body,
-            auth.headers,
-        )
+        async with self._api_semaphore:
+            content, payload, document_file_used = await self._generate_content_with_fallback(
+                codex_responses_url(base_url=auth.upstream_base_url),
+                body,
+                auth.headers,
+            )
         page = _parse_generated_page(content, body)
         return {
             "page": page,
@@ -238,15 +243,30 @@ class TeachingGenerationGateway:
         headers: dict[str, str],
     ) -> tuple[str, str, dict[str, Any]]:
         try:
-            text, content_type = await asyncio.to_thread(self._post_responses, url, payload, headers)
+            text, content_type = await self._post_responses_with_retries(url, payload, headers)
             return text, content_type, payload
         except HttpError as exc:
             if not _should_retry_without_prompt_cache(exc, payload):
                 raise
             fallback_payload = _without_prompt_cache(payload)
-            text, content_type = await asyncio.to_thread(self._post_responses, url, fallback_payload, headers)
+            text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
             fallback_payload["_pagepair_cache_fallback_without_fields"] = True
             return text, content_type, fallback_payload
+
+    async def _post_responses_with_retries(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+    ) -> tuple[str, str]:
+        for attempt in range(len(TEACHING_RETRY_DELAYS_SECONDS) + 1):
+            try:
+                return await asyncio.to_thread(self._post_responses, url, payload, headers)
+            except HttpError as exc:
+                if attempt >= len(TEACHING_RETRY_DELAYS_SECONDS) or not _should_retry_transient_upstream_error(exc):
+                    raise
+                await asyncio.sleep(TEACHING_RETRY_DELAYS_SECONDS[attempt])
+        raise HttpError(502, "OpenAI gateway returned an empty generation response", code="empty_gateway_response")
 
     def _post_responses(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, str]:
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -712,6 +732,10 @@ def _should_retry_without_prompt_cache(exc: HttpError, payload: Mapping[str, Any
     return exc.status in {400, 422} and bool(
         payload.get("prompt_cache_key") or payload.get("prompt_cache_retention")
     )
+
+
+def _should_retry_transient_upstream_error(exc: HttpError) -> bool:
+    return exc.code == "network_error" or exc.status in {429, 500, 502, 503, 504}
 
 
 def _without_prompt_cache(payload: Mapping[str, Any]) -> dict[str, Any]:
