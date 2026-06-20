@@ -325,6 +325,7 @@ const TEACHING_BATCH_FALLBACK_CONCURRENCY = 2;
 const TEACHING_PROJECT_MODEL_REQUEST_CONCURRENCY = 6;
 const TEACHING_PROJECT_WARMUP_PAGE_COUNT = 16;
 const TEACHING_CONTEXT_PAGE_CHARS = 600;
+const TEACHING_FAST_CONTEXT_PAGE_CHARS = 180;
 const TEACHING_FAST_SOURCE_REQUEST_CHARS = 2_500;
 const TEACHING_BALANCED_SOURCE_REQUEST_CHARS = 8_000;
 const TEACHING_QUALITY_SOURCE_REQUEST_CHARS = 16_000;
@@ -846,13 +847,13 @@ function teachingGenerationQualityPlan(
     sourceText.length <= TEACHING_TEXT_COMPACT_PAGE_MAX_CHARS ? "none" : "low";
   let attachPdf = false;
   let batchable = true;
-  let retryOnWeakOutput = false;
+  let retryOnWeakOutput = true;
 
   if (sparseText) {
     reasons.push("sparse-source-text");
     requestedReasoning = "high";
     attachPdf = true;
-    batchable = true;
+    batchable = false;
     retryOnWeakOutput = true;
   } else if (shortText) {
     reasons.push("short-source-text");
@@ -869,18 +870,16 @@ function teachingGenerationQualityPlan(
     if (formulaLike) reasons.push("formula");
     if (tableLike) reasons.push("table");
     if (codeLike) reasons.push("code");
-    if (denseComplexText) {
-      requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, "medium");
-    } else {
-      reasons.push("light-complex-text-fast-path");
-    }
+    requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, "medium");
+    retryOnWeakOutput = true;
+    if (!denseComplexText) reasons.push("light-complex-text-balanced-path");
   }
 
   if (visualLike && sourceText.length <= TEACHING_VISUAL_TEXT_MAX_CHARS) {
     reasons.push("visual-heavy");
     requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, "medium");
     attachPdf = true;
-    batchable = true;
+    batchable = false;
     retryOnWeakOutput = true;
   }
 
@@ -899,6 +898,8 @@ function teachingGenerationQualityPlan(
     batchable = false;
     retryOnWeakOutput = false;
   }
+
+  if (attachPdf) batchable = false;
 
   if (!reasons.length) reasons.push("text-fast-path");
   const model =
@@ -932,6 +933,7 @@ function teachingQualityPlanPayload(plan: TeachingGenerationQualityPlan) {
 }
 
 function teachingBatchSizeForPlan(plan: TeachingGenerationQualityPlan, pages: PageData[] = []) {
+  if (plan.attachPdf) return 1;
   if (isFastTextTeachingPlan(plan)) {
     if (!pages.length) return TEACHING_TEXT_PAGE_BATCH_SIZE;
     const sourceLengths = pages.map((page) => page.source.text_md.trim().length);
@@ -999,8 +1001,12 @@ function teachingRequestPage(page: PageData, plan: TeachingGenerationQualityPlan
   };
 }
 
-function teachingDocumentContextForPlan(plan: TeachingGenerationQualityPlan, context: PdfContextPayload): PdfContextPayload | null {
-  if (plan.model === TEACHING_FAST_MODEL && (plan.reasoningEffort === "none" || plan.reasoningEffort === "low") && !plan.attachPdf) return null;
+function teachingDocumentContextForPlan(
+  plan: TeachingGenerationQualityPlan,
+  context: PdfContextPayload,
+  fastContext: PdfContextPayload,
+): PdfContextPayload | null {
+  if (isFastTextTeachingPlan(plan)) return fastContext.pages.length ? fastContext : context;
   return context;
 }
 
@@ -1749,6 +1755,10 @@ function compactTeachingContextText(text: string) {
   return truncatePromptContext(text, TEACHING_CONTEXT_PAGE_CHARS);
 }
 
+function compactFastTeachingContextText(text: string) {
+  return truncatePromptContext(text, TEACHING_FAST_CONTEXT_PAGE_CHARS);
+}
+
 function teachingContextPageNumbers(pageCount: number, targetPageNumbers: number[] = []) {
   const includedPageNumbers = new Set<number>();
   const addPage = (pageNo: number) => {
@@ -1805,6 +1815,39 @@ function fullPdfContextForTeachingGeneration(
     fullPageLimit: pages.length,
     edgePageCount: TEACHING_CONTEXT_EDGE_PAGES,
     includedPageNumbers: sortedPageNumbers,
+    pages,
+  };
+}
+
+function lightPdfContextForFastTeachingGeneration(
+  pack: PagePack,
+  pageCount: number,
+  extractedPages: PdfContextPage[],
+): PdfContextPayload {
+  const extractedTextByPage = new Map(extractedPages.map((page) => [page.page_no, page.text_md]));
+  const packPagesByNumber = new Map(pack.pages.map((page) => [page.page_no, page]));
+  const extractedPageCount = extractedPages.reduce((maxPage, page) => Math.max(maxPage, page.page_no), 0);
+  const safePageCount = Math.max(pageCount, pack.pages.length, extractedPageCount, 1);
+  const includedPageNumbers = Array.from({ length: safePageCount }, (_, index) => index + 1);
+  const pages = includedPageNumbers.map((pageNo) => {
+    const packPage = packPagesByNumber.get(pageNo);
+    const title = packPage?.teaching.slide_title || `PDF p.${pageNo}`;
+    const text = extractedTextByPage.get(pageNo) || packPage?.source.text_md || title;
+    return {
+      page_no: pageNo,
+      title,
+      text_md: compactFastTeachingContextText(text),
+    };
+  });
+  return {
+    documentId: pack.document.id,
+    documentTitle: pack.document.title,
+    pageCount: safePageCount,
+    truncated: false,
+    truncationPolicy: "all-pages",
+    fullPageLimit: safePageCount,
+    edgePageCount: 0,
+    includedPageNumbers,
     pages,
   };
 }
@@ -4077,6 +4120,11 @@ export default function App() {
             contextPages,
             passPagesToGenerate.map((page) => page.page_no),
           );
+          const fastDocumentContext = lightPdfContextForFastTeachingGeneration(
+            workingPack,
+            totalPages,
+            contextPages,
+          );
           setJobStatus(copy.status.generationStarted(passPagesToGenerate.length));
           const generationInputPagesByNumber = new Map(workingPagesByNumber);
           let started = 0;
@@ -4122,7 +4170,7 @@ export default function App() {
                     reasoningEffort: plan.reasoningEffort,
                     qualityPlan: teachingQualityPlanPayload(plan),
                     document: workingPack.document,
-                    documentContext: teachingDocumentContextForPlan(plan, documentContext),
+                    documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
                     documentFile,
                     outputLanguage: pageOutputLanguage,
                     outputLanguageLabel: pageOutputLanguageLabel,
@@ -4218,7 +4266,7 @@ export default function App() {
                       reasoningEffort: pageBatch.plan.reasoningEffort,
                       qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
                       document: workingPack.document,
-                      documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext),
+                      documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
                       documentFile,
                       outputLanguage: pageOutputLanguage,
                       outputLanguageLabel: pageOutputLanguageLabel,
@@ -4555,6 +4603,11 @@ export default function App() {
               contextPages,
               passPagesToGenerate.map((page) => page.page_no),
             );
+            const fastDocumentContext = lightPdfContextForFastTeachingGeneration(
+              workingPack,
+              totalPages,
+              contextPages,
+            );
             const generationInputPagesByNumber = new Map(workingPagesByNumber);
             let started = 0;
             const markRunningPage = (pageToGenerate: PageData) => {
@@ -4600,7 +4653,7 @@ export default function App() {
                       reasoningEffort: plan.reasoningEffort,
                       qualityPlan: teachingQualityPlanPayload(plan),
                       document: workingPack.document,
-                      documentContext: teachingDocumentContextForPlan(plan, documentContext),
+                      documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
                       documentFile,
                       outputLanguage: teachingOutputLanguage,
                       outputLanguageLabel: teachingOutputLanguageName(teachingOutputLanguage),
@@ -4698,7 +4751,7 @@ export default function App() {
                         reasoningEffort: pageBatch.plan.reasoningEffort,
                         qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
                         document: workingPack.document,
-                        documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext),
+                        documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
                         documentFile,
                         outputLanguage: teachingOutputLanguage,
                         outputLanguageLabel: teachingOutputLanguageName(teachingOutputLanguage),

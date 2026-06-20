@@ -207,7 +207,7 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("Target page:", content[2]["text"])
         self.assertIn("page_no: 2", content[2]["text"])
 
-    def test_teaching_generation_fast_model_skips_prompt_cache_fields(self) -> None:
+    def test_teaching_generation_fast_model_uses_compact_cache_prefix(self) -> None:
         payload = _build_teaching_generation_payload(
             {
                 "model": "gpt-5.4-mini",
@@ -233,7 +233,12 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(payload["model"], "gpt-5.4-mini")
         self.assertEqual(payload["reasoning"]["effort"], "none")
         self.assertIn("Generate PagePair teaching notes", payload["instructions"])
-        self.assertNotIn("Use the provided PDF/page context", payload["instructions"])
+        content = payload["input"][0]["content"]
+        self.assertEqual(content[0]["type"], "input_text")
+        self.assertIn("PAGEPAIR CACHEABLE DOCUMENT CONTEXT", content[0]["text"])
+        self.assertIn("[p.1] Intro", content[0]["text"])
+        self.assertEqual(content[1]["type"], "input_text")
+        self.assertIn("Pages JSONL:", content[1]["text"])
         self.assertNotIn("prompt_cache_key", payload)
         self.assertNotIn("prompt_cache_retention", payload)
 
@@ -389,6 +394,35 @@ class WebAppTest(unittest.TestCase):
         self.assertNotIn("Generation quality plan:", prompt)
         self.assertIn("Pages JSONL:", prompt)
 
+    def test_fast_teaching_missing_confidence_defaults_to_reviewable_value(self) -> None:
+        page = _parse_generated_page(
+            json.dumps(
+                {
+                    "page": {
+                        "page_no": 1,
+                        "teaching": {
+                            "slide_title": "Intro",
+                            "speaker_notes_md": "A concise but confidence-free fast response.",
+                        },
+                    }
+                }
+            ),
+            {
+                "model": "gpt-5.4-mini",
+                "qualityPlan": {
+                    "model": "gpt-5.4-mini",
+                    "reasoningEffort": "none",
+                    "attachPdf": False,
+                    "batchable": True,
+                    "reasons": ["text-fast-path"],
+                },
+                "page": {"page_no": 1, "source": {"text_md": "overview", "pdf_page_ref": "#page=1"}},
+            },
+        )
+
+        self.assertLess(page["teaching"]["confidence"], 0.58)
+        self.assertTrue(page["teaching"]["needs_review"])
+
     def test_fast_teaching_batch_prompt_uses_compact_jsonl_pages(self) -> None:
         prompt = _build_teaching_generation_prompt(
             {
@@ -415,8 +449,8 @@ class WebAppTest(unittest.TestCase):
         self.assertIn('"source_text":"second target text"', prompt)
         self.assertEqual(prompt.count('"page_no":"<requested_page_no>"'), 1)
         self.assertEqual(prompt.count('"speaker_notes_md"'), 1)
-        self.assertNotIn('"confidence"', prompt)
-        self.assertNotIn('"needs_review"', prompt)
+        self.assertIn('"confidence"', prompt)
+        self.assertIn('"needs_review"', prompt)
         self.assertNotIn('"needs_parser_fallback"', prompt)
         self.assertNotIn("--- Target page", prompt)
         self.assertNotIn("Document:", prompt)

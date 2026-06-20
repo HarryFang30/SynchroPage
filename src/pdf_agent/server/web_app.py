@@ -75,7 +75,7 @@ Preserve LaTeX formulas, cite page numbers when available, and do not invent fac
 Follow the task-specific instructions included in each request, including any required output format."""
 
 PAGEPAIR_FAST_TEACHING_INSTRUCTIONS = (
-    "Generate PagePair teaching notes from the provided page source. "
+    "Generate PagePair teaching notes from the compact document context and provided page source. "
     "Return strict JSON only, preserve technical tokens/LaTeX, and do not invent unsupported facts."
 )
 
@@ -840,6 +840,7 @@ def _build_fast_teaching_generation_prompt(body: Mapping[str, Any], target_pages
         f"Output shape: {_teaching_fast_output_shape(target_page_numbers, batch=batch)}",
         f"Language: {output_language_label} ({output_language_code}); write all prose in this language and preserve technical tokens.",
         "Rules: JSON only; no Markdown fences; escape LaTeX backslashes as \\\\frac and \\\\to; do not copy source text; use 3-5 focused bullets/short sections.",
+        "Set teaching.confidence between 0 and 1. If the page seems underspecified or notes may be incomplete, set teaching.needs_review=true and confidence<=0.55.",
         "If source_text is empty, keep notes brief; the server will mark parser fallback when needed.",
         "Pages JSONL:",
     ]
@@ -1377,6 +1378,8 @@ def _teaching_fast_page_output_contract(page_no: Any) -> dict[str, Any]:
         "teaching": {
             "slide_title": "short page title",
             "speaker_notes_md": "concise Markdown teaching notes",
+            "confidence": 0.72,
+            "needs_review": False,
         },
     }
 
@@ -1447,8 +1450,11 @@ def _normalize_generated_page_candidate(
     has_pdf_file = bool(_pdf_file_input(body.get("documentFile")))
     no_source_available = not source_text and not has_pdf_file
     needs_fallback = bool(teaching.get("needs_parser_fallback")) or no_source_available
-    needs_review = bool(teaching.get("needs_review")) or needs_fallback
-    confidence = _float_value(teaching.get("confidence"), 0.28 if no_source_available else 0.78)
+    fast_generation = _is_fast_teaching_generation(body)
+    confidence_missing = teaching.get("confidence") is None
+    needs_review = bool(teaching.get("needs_review")) or needs_fallback or (fast_generation and confidence_missing)
+    default_confidence = 0.56 if fast_generation else 0.78
+    confidence = _float_value(teaching.get("confidence"), 0.28 if no_source_available else default_confidence)
     if needs_fallback:
         confidence = min(confidence, 0.35)
 
