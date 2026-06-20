@@ -3673,7 +3673,7 @@ export default function App() {
 
       <main className="workspace" data-pane-count={visiblePaneCount}>
         <PanelGroup orientation="horizontal" className="workspace-panels">
-          <Panel className="workspace-panel" hidden={!panels.rail} defaultSize={18} minSize={12}>
+          <Panel className="workspace-panel" hidden={!panels.rail} defaultSize={16} minSize={11}>
             <aside className="page-rail document-rail">
               <div className="rail-top">
                 <div className="rail-header">
@@ -3890,7 +3890,7 @@ export default function App() {
 
           {panels.rail && <WorkspaceResizeHandle />}
 
-          <Panel className="workspace-panel" defaultSize={pdfOnly ? 100 : 30} minSize={24}>
+          <Panel className="workspace-panel" defaultSize={pdfOnly ? 100 : 34} minSize={26}>
             <section className="pdf-pane">
               <PaneToolbar
                 title={pdfUrl ? copy.common.sourcePdfPage(currentPdfPageNo) : copy.pdf.samplePdfPage}
@@ -3938,7 +3938,7 @@ export default function App() {
 
           {(panels.notes || panels.agent) && <WorkspaceResizeHandle />}
 
-          <Panel className="workspace-panel" hidden={!panels.notes} defaultSize={27} minSize={22}>
+          <Panel className="workspace-panel" hidden={!panels.notes} defaultSize={30} minSize={24}>
             <section className="notes-pane">
               <PaneToolbar
                 title={copy.notes.title}
@@ -3997,7 +3997,7 @@ export default function App() {
 
           {panels.notes && panels.agent && <WorkspaceResizeHandle />}
 
-          <Panel className="workspace-panel" hidden={!panels.agent} defaultSize={25} minSize={22}>
+          <Panel className="workspace-panel" hidden={!panels.agent} defaultSize={20} minSize={18}>
             {panels.agent && (
               <AgentPanel
                 key={agentRuntimeKey}

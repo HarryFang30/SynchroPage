@@ -53,9 +53,9 @@ process.on("exit", () => {
 
 function createMainWindow(url) {
   const win = new BrowserWindow({
-    width: 1440,
-    height: 940,
-    minWidth: 1100,
+    width: 1680,
+    height: 980,
+    minWidth: 1280,
     minHeight: 760,
     title: "PagePair Reader",
     autoHideMenuBar: true,
