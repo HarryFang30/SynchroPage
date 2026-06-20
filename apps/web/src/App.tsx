@@ -1035,16 +1035,44 @@ async function extractPdfContextFromDocument(
   };
 }
 
-async function extractPdfPagesFromDocument(document: PDFDocumentProxy): Promise<PdfContextPage[]> {
+function waitForPdfExtractionIdle(delayMs = 80) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
+}
+
+async function extractPdfPagesFromDocument(
+  document: PDFDocumentProxy,
+  options: {
+    shouldCancel?: () => boolean;
+    onProgress?: (pages: PdfContextPage[]) => void;
+    progressBatchSize?: number;
+    delayMs?: number;
+  } = {},
+): Promise<PdfContextPage[]> {
   const pages: PdfContextPage[] = [];
+  let pendingProgress = 0;
+  const progressBatchSize = Math.max(1, options.progressBatchSize || 6);
   for (let pageNo = 1; pageNo <= document.numPages; pageNo += 1) {
+    if (options.shouldCancel?.()) break;
     const page = await document.getPage(pageNo);
+    if (options.shouldCancel?.()) break;
     const textContent = await page.getTextContent();
+    if (options.shouldCancel?.()) break;
     pages.push({
       page_no: pageNo,
       title: `PDF p.${pageNo}`,
       text_md: textContentToPlainText(textContent),
     });
+    pendingProgress += 1;
+    if (options.onProgress && pendingProgress >= progressBatchSize) {
+      pendingProgress = 0;
+      options.onProgress([...pages]);
+    }
+    await waitForPdfExtractionIdle(options.delayMs);
+  }
+  if (options.onProgress && pendingProgress > 0) {
+    options.onProgress([...pages]);
   }
   return pages;
 }
@@ -4255,7 +4283,10 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
     if (!visiblePages.length) return;
 
     const currentPage = visiblePages.find((entry) => entry.pageNo === lastActivePageRef.current);
-    if (currentPage && currentPage.top <= anchorY && currentPage.bottom >= anchorY) return;
+    if (currentPage && currentPage.top <= anchorY && currentPage.bottom >= anchorY) {
+      setRenderWindowCenter(currentPage.pageNo);
+      return;
+    }
 
     const centerHits = visiblePages.filter((entry) => entry.top <= anchorY && entry.bottom >= anchorY);
     const candidates = centerHits.length ? centerHits : visiblePages;
@@ -4265,6 +4296,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
       if (Math.abs(edgeDelta) > 1) return edgeDelta;
       return left.centerDistance - right.centerDistance;
     });
+    setRenderWindowCenter(candidates[0].pageNo);
     scheduleActivePage(candidates[0].pageNo);
   }, [scheduleActivePage]);
 
@@ -4309,6 +4341,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
 
   useEffect(() => {
     let cancelled = false;
+    let textExtractionTimer: number | null = null;
     setPdfDocument(null);
     setDocumentError("");
     pageElementsRef.current.clear();
@@ -4323,19 +4356,28 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
         }
         setPdfDocument(document);
         onDocumentReadyRef.current(document.numPages);
-        void extractPdfPagesFromDocument(document)
-          .then((pages) => {
-            if (cancelled) return;
-            onPdfPagesTextReadyRef.current(pages);
-            onPdfContextReadyRef.current(pdfContextFromExtractedPages(
-              documentId,
-              documentTitle,
-              document.numPages,
-              { pdfContextFullPageLimit, pdfContextEdgePageCount },
-              pages,
-            ));
+        textExtractionTimer = window.setTimeout(() => {
+          void extractPdfPagesFromDocument(document, {
+            shouldCancel: () => cancelled,
+            progressBatchSize: 8,
+            delayMs: 90,
+            onProgress: (pages) => {
+              if (!cancelled) onPdfPagesTextReadyRef.current(pages);
+            },
           })
-          .catch(() => undefined);
+            .then((pages) => {
+              if (cancelled) return;
+              onPdfPagesTextReadyRef.current(pages);
+              onPdfContextReadyRef.current(pdfContextFromExtractedPages(
+                documentId,
+                documentTitle,
+                document.numPages,
+                { pdfContextFullPageLimit, pdfContextEdgePageCount },
+                pages,
+              ));
+            })
+            .catch(() => undefined);
+        }, 2800);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -4344,6 +4386,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
 
     return () => {
       cancelled = true;
+      if (textExtractionTimer !== null) window.clearTimeout(textExtractionTimer);
       if (activePageTimerRef.current) window.clearTimeout(activePageTimerRef.current);
       if (activePageFrameRef.current) window.cancelAnimationFrame(activePageFrameRef.current);
       void loadingTask.destroy().catch(() => undefined);
@@ -4427,7 +4470,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
       {pdfDocument && (
         <div className="pdf-page-stack" role="list" aria-label={`${documentTitle} PDF 页面`}>
           {pageNumbers.map((pageNo) => {
-            const shouldRenderPage = viewMode === "single-page" || Math.abs(pageNo - renderWindowCenter) <= 2;
+            const shouldRenderPage = viewMode === "single-page" || Math.abs(pageNo - renderWindowCenter) <= 1;
             return (
               <div
                 key={pageNo}
@@ -4546,23 +4589,33 @@ function PdfPageLayer({
         background: "rgb(255,255,255)",
       });
 
-      const textContent = await pdfPage.getTextContent();
+      await renderTask.promise;
       if (cancelled) return;
+      setPageStatus("ready");
 
-      if (!hasSelectableText(textContent)) {
-        await renderTask.promise;
-        if (!cancelled) setPageStatus("empty-text");
-        return;
+      try {
+        await waitForPdfExtractionIdle(16);
+        if (cancelled) return;
+        const textContent = await pdfPage.getTextContent();
+        if (cancelled) return;
+
+        if (!hasSelectableText(textContent)) {
+          if (!cancelled) setPageStatus("empty-text");
+          return;
+        }
+
+        textLayer = new TextLayer({
+          textContentSource: textContent,
+          container: textLayerElement,
+          viewport,
+        });
+
+        await textLayer.render();
+      } catch (error) {
+        if (!cancelled && !isPdfRenderCancel(error)) {
+          textLayerElement.replaceChildren();
+        }
       }
-
-      textLayer = new TextLayer({
-        textContentSource: textContent,
-        container: textLayerElement,
-        viewport,
-      });
-
-      await Promise.all([renderTask.promise, textLayer.render()]);
-      if (!cancelled) setPageStatus("ready");
     };
 
     void renderPage().catch((error) => {
