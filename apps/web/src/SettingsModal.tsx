@@ -219,6 +219,19 @@ export function SettingsModal(props: SettingsModalProps) {
                       ]}
                     />
                   </SettingsRow>
+                  <SettingsRow label={copy.settings.agent.modelReasoningEffortLabel} description={copy.settings.agent.modelReasoningEffortDescription}>
+                    <SettingsSelect
+                      value={props.preferences.modelReasoningEffort}
+                      onChange={(value) => props.onPreferenceChange("modelReasoningEffort", value as UiPreferences["modelReasoningEffort"])}
+                      options={[
+                        ["none", copy.settings.agent.reasoningEffortNone],
+                        ["low", copy.settings.agent.reasoningEffortLow],
+                        ["medium", copy.settings.agent.reasoningEffortMedium],
+                        ["high", copy.settings.agent.reasoningEffortHigh],
+                        ["xhigh", copy.settings.agent.reasoningEffortXHigh],
+                      ]}
+                    />
+                  </SettingsRow>
                   <SettingsRow label={copy.settings.agent.pdfContextFullPageLimitLabel} description={copy.settings.agent.pdfContextFullPageLimitDescription}>
                     <SettingsNumberInput
                       value={props.preferences.pdfContextFullPageLimit}

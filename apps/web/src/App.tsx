@@ -87,6 +87,7 @@ import {
   loadUiPreferences,
   normalizeExplanationLanguage,
   normalizeLanguage,
+  normalizeModelReasoningEffort,
   type ExplanationLanguage,
   type UiPreferences,
   uiPreferencesStorageKey,
@@ -292,6 +293,7 @@ type AgentSnapshot = {
   attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
   pdfContext: PdfContextPayload | null;
+  reasoningEffort: UiPreferences["modelReasoningEffort"];
 };
 
 type ChatPersistInput = {
@@ -578,6 +580,7 @@ function settingsRecordToPreferences(record: Partial<UiPreferences> | null | und
     ...merged,
     language: normalizeLanguage(merged.language),
     explanationLanguage: normalizeExplanationLanguage(merged.explanationLanguage),
+    modelReasoningEffort: normalizeModelReasoningEffort(merged.modelReasoningEffort),
     pdfContextFullPageLimit: clampPreferenceNumber(merged.pdfContextFullPageLimit, defaultUiPreferences.pdfContextFullPageLimit, 1, 500),
     pdfContextEdgePageCount: clampPreferenceNumber(merged.pdfContextEdgePageCount, defaultUiPreferences.pdfContextEdgePageCount, 1, 100),
   };
@@ -1586,6 +1589,7 @@ function createPdfAgentAdapter(args: {
 
       const payload = {
         model: "gpt-5.5",
+        reasoningEffort: snapshot.reasoningEffort,
         document: pack.document,
         page,
         messages: options.messages.map((message) => ({
@@ -2020,6 +2024,7 @@ export default function App() {
       attachments,
       selectedContext,
       pdfContext: pdfUrl ? pdfTextContext : buildPdfContextFromPack(pack, uiPreferences),
+      reasoningEffort: uiPreferences.modelReasoningEffort,
     }),
     [attachments, contexts, pack, pdfTextContext, pdfUrl, selectedContext, uiPreferences],
   );
@@ -3159,6 +3164,7 @@ export default function App() {
                 method: "POST",
                 body: JSON.stringify({
                   model: "gpt-5.5",
+                  reasoningEffort: uiPreferences.modelReasoningEffort,
                   document: workingPack.document,
                   documentContext,
                   documentFile,
@@ -3264,6 +3270,7 @@ export default function App() {
     refreshDocumentItems,
     teachingOutputLanguage,
     uiPreferences.language,
+    uiPreferences.modelReasoningEffort,
     workspaceId,
   ]);
 

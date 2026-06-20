@@ -74,6 +74,13 @@ export type AppCopy = {
       explanationLanguageAuto: string;
       explanationLanguageChinese: string;
       explanationLanguageEnglish: string;
+      modelReasoningEffortLabel: string;
+      modelReasoningEffortDescription: string;
+      reasoningEffortNone: string;
+      reasoningEffortLow: string;
+      reasoningEffortMedium: string;
+      reasoningEffortHigh: string;
+      reasoningEffortXHigh: string;
       pdfContextFullPageLimitLabel: string;
       pdfContextFullPageLimitDescription: string;
       pdfContextEdgePageCountLabel: string;
@@ -468,6 +475,13 @@ const zhCN: AppCopy = {
       explanationLanguageAuto: "跟随界面",
       explanationLanguageChinese: "中文",
       explanationLanguageEnglish: "English",
+      modelReasoningEffortLabel: "模型思考强度",
+      modelReasoningEffortDescription: "写入 Responses API 的 reasoning.effort。强度越高通常越慢、成本越高，但复杂任务更可靠。",
+      reasoningEffortNone: "none · 最快",
+      reasoningEffortLow: "low · 轻量",
+      reasoningEffortMedium: "medium · 推荐",
+      reasoningEffortHigh: "high · 深度",
+      reasoningEffortXHigh: "xhigh · 最强",
       pdfContextFullPageLimitLabel: "全文上下文页数阈值",
       pdfContextFullPageLimitDescription: "PDF 页数不超过这个值时，发送全部可提取文本给模型。",
       pdfContextEdgePageCountLabel: "长 PDF 前后截取页数",
@@ -862,6 +876,13 @@ const enUS: AppCopy = {
       explanationLanguageAuto: "Follow interface",
       explanationLanguageChinese: "中文",
       explanationLanguageEnglish: "English",
+      modelReasoningEffortLabel: "Model thinking intensity",
+      modelReasoningEffortDescription: "Sent to the Responses API as reasoning.effort. Higher effort is slower and more expensive, but can improve complex tasks.",
+      reasoningEffortNone: "none · fastest",
+      reasoningEffortLow: "low · light",
+      reasoningEffortMedium: "medium · recommended",
+      reasoningEffortHigh: "high · deep",
+      reasoningEffortXHigh: "xhigh · strongest",
       pdfContextFullPageLimitLabel: "Full-context page limit",
       pdfContextFullPageLimitDescription: "When the PDF is at or below this page count, send all extractable page text to the model.",
       pdfContextEdgePageCountLabel: "Long-PDF edge pages",

@@ -457,6 +457,7 @@ def _build_responses_payload(body: Mapping[str, Any], *, default_model: str) -> 
         "model": model,
         "instructions": AGENT_INSTRUCTIONS,
         "input": [{"role": "user", "content": content}],
+        "reasoning": {"effort": _reasoning_effort(body)},
     }
     _apply_prompt_cache_fields(payload, body, model)
     return payload
@@ -476,9 +477,18 @@ def _build_teaching_generation_payload(body: Mapping[str, Any], *, default_model
         "model": model,
         "instructions": TEACHING_GENERATOR_INSTRUCTIONS,
         "input": [{"role": "user", "content": content}],
+        "reasoning": {"effort": _reasoning_effort(body)},
     }
     _apply_prompt_cache_fields(payload, body, model)
     return payload
+
+
+def _reasoning_effort(body: Mapping[str, Any]) -> str:
+    reasoning = body.get("reasoning") if isinstance(body.get("reasoning"), Mapping) else {}
+    value = str(body.get("reasoningEffort") or reasoning.get("effort") or "").strip()
+    if value in {"none", "low", "medium", "high", "xhigh"}:
+        return value
+    return "medium"
 
 
 def _teaching_output_language(body: Mapping[str, Any]) -> tuple[str, str]:

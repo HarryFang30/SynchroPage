@@ -6,10 +6,12 @@ export type FontScale = "compact" | "default" | "large";
 export type ScrollbarStyle = "thin" | "subtle" | "native";
 export type Language = "zh-CN" | "en-US";
 export type ExplanationLanguage = "auto" | Language;
+export type ModelReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 
 export type UiPreferences = {
   language: Language;
   explanationLanguage: ExplanationLanguage;
+  modelReasoningEffort: ModelReasoningEffort;
   autoSaveSession: boolean;
   theme: ThemeMode;
   accentColor: AccentColor;
@@ -30,6 +32,7 @@ export const uiPreferencesStorageKey = "pagepair.uiPreferences.v1";
 export const defaultUiPreferences: UiPreferences = {
   language: "zh-CN",
   explanationLanguage: "auto",
+  modelReasoningEffort: "medium",
   autoSaveSession: true,
   theme: "system",
   accentColor: "clay",
@@ -56,6 +59,7 @@ export function loadUiPreferences() {
       ...merged,
       language: normalizeLanguage(merged.language),
       explanationLanguage: normalizeExplanationLanguage(merged.explanationLanguage),
+      modelReasoningEffort: normalizeModelReasoningEffort(merged.modelReasoningEffort),
       pdfViewMode,
       pdfContextFullPageLimit: clampNumber(merged.pdfContextFullPageLimit, defaultUiPreferences.pdfContextFullPageLimit, 1, 500),
       pdfContextEdgePageCount: clampNumber(merged.pdfContextEdgePageCount, defaultUiPreferences.pdfContextEdgePageCount, 1, 100),
@@ -71,6 +75,10 @@ export function normalizeLanguage(value: unknown): Language {
 
 export function normalizeExplanationLanguage(value: unknown): ExplanationLanguage {
   return value === "zh-CN" || value === "en-US" ? value : "auto";
+}
+
+export function normalizeModelReasoningEffort(value: unknown): ModelReasoningEffort {
+  return value === "none" || value === "low" || value === "medium" || value === "high" || value === "xhigh" ? value : "medium";
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number) {
