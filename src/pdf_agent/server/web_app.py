@@ -56,6 +56,7 @@ TEACHING_GENERATOR_INSTRUCTIONS = """You are the PagePair per-page teaching gene
 Generate page-aligned study notes for one PDF page at a time.
 Return strict JSON only. Do not wrap JSON in Markdown fences.
 Use the requested output language from the prompt for all prose. Preserve formulas in LaTeX using $...$ or $$...$$.
+When writing LaTeX in JSON strings, escape every LaTeX backslash as a JSON backslash pair, for example write \\\\frac and \\\\to.
 Do not put natural-language Chinese text directly inside math delimiters. Write ranges like $0$ 到 $2^n - 1$, or use $0 \\text{ 到 } 2^n - 1$.
 Never escape digits in LaTeX; write 2^n, not \\2^n.
 Never escape binary strings; write 000, 111, not \\000 or \\111.
@@ -588,6 +589,7 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
         "",
         "Rules:",
         "- Return JSON only, no Markdown fences and no prose outside JSON.",
+        r"- JSON strings must escape LaTeX backslashes: write \\frac, \\to, and \\cdots in JSON text, not \frac, \to, or \cdots.",
         "- Keep page_no exactly equal to the input page number.",
         "- source.text_md must preserve the source page text you received.",
         "- speaker_notes_md must be Markdown suitable for side-by-side learning.",
@@ -911,7 +913,7 @@ def _json_from_model_text(content: str) -> Any:
             lines = lines[:-1]
         text = "\n".join(lines).strip()
     try:
-        return json.loads(text)
+        return _json_loads_with_latex_repair(text)
     except json.JSONDecodeError:
         start_candidates = [index for index in (text.find("{"), text.find("[")) if index >= 0]
         if not start_candidates:
@@ -921,9 +923,213 @@ def _json_from_model_text(content: str) -> Any:
         if end <= start:
             raise HttpError(502, "Generation response was not valid JSON", code="invalid_generation_json")
         try:
-            return json.loads(text[start : end + 1])
+            return _json_loads_with_latex_repair(text[start : end + 1])
         except json.JSONDecodeError as exc:
             raise HttpError(502, f"Generation response was not valid JSON: {exc}", code="invalid_generation_json") from exc
+
+
+def _json_loads_with_latex_repair(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        repaired = _repair_json_string_backslashes(text)
+        if repaired == text:
+            raise
+        return json.loads(repaired)
+
+
+def _repair_json_string_backslashes(text: str) -> str:
+    output: list[str] = []
+    in_string = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if not in_string:
+            output.append(char)
+            if char == '"':
+                in_string = True
+            index += 1
+            continue
+
+        if char == '"':
+            output.append(char)
+            in_string = False
+            index += 1
+            continue
+
+        if char != "\\":
+            output.append(char)
+            index += 1
+            continue
+
+        if index + 1 >= len(text):
+            output.append("\\\\")
+            index += 1
+            continue
+
+        next_char = text[index + 1]
+        if next_char in {'"', "\\", "/"}:
+            output.append(text[index : index + 2])
+            index += 2
+            continue
+        if next_char == "u" and _is_json_unicode_escape(text[index + 2 : index + 6]):
+            output.append(text[index : index + 6])
+            index += 6
+            continue
+        if _looks_like_latex_command(text, index):
+            output.append("\\\\")
+            index += 1
+            continue
+        if next_char in {"b", "f", "n", "r", "t"}:
+            output.append(text[index : index + 2])
+            index += 2
+            continue
+
+        output.append("\\\\")
+        index += 1
+    return "".join(output)
+
+
+def _is_json_unicode_escape(value: str) -> bool:
+    return len(value) == 4 and all(char in "0123456789abcdefABCDEF" for char in value)
+
+
+def _looks_like_latex_command(text: str, slash_index: int) -> bool:
+    command_start = slash_index + 1
+    command_end = command_start
+    while command_end < len(text) and text[command_end].isalpha():
+        command_end += 1
+    if command_end == command_start:
+        return False
+    command = text[command_start:command_end]
+    return command in _LATEX_COMMANDS_REQUIRING_JSON_ESCAPE
+
+
+_LATEX_COMMANDS_REQUIRING_JSON_ESCAPE = {
+    "Gamma",
+    "Delta",
+    "Theta",
+    "Lambda",
+    "Xi",
+    "Pi",
+    "Sigma",
+    "Upsilon",
+    "Phi",
+    "Psi",
+    "Omega",
+    "Leftarrow",
+    "Rightarrow",
+    "Leftrightarrow",
+    "alpha",
+    "approx",
+    "arg",
+    "bar",
+    "begin",
+    "beta",
+    "bmod",
+    "bmatrix",
+    "binom",
+    "cap",
+    "cases",
+    "cdot",
+    "cdots",
+    "chi",
+    "choose",
+    "cos",
+    "cup",
+    "delta",
+    "dfrac",
+    "div",
+    "dot",
+    "dots",
+    "ddot",
+    "end",
+    "epsilon",
+    "equiv",
+    "eta",
+    "exists",
+    "exp",
+    "forall",
+    "frac",
+    "gamma",
+    "ge",
+    "geq",
+    "hat",
+    "in",
+    "infty",
+    "int",
+    "iota",
+    "kappa",
+    "lambda",
+    "land",
+    "ldots",
+    "le",
+    "left",
+    "leftarrow",
+    "leftrightarrow",
+    "leq",
+    "lim",
+    "ln",
+    "log",
+    "lor",
+    "mapsto",
+    "mathrm",
+    "mathbf",
+    "mathit",
+    "matrix",
+    "max",
+    "min",
+    "mod",
+    "mp",
+    "mu",
+    "nabla",
+    "neg",
+    "neq",
+    "notin",
+    "nu",
+    "omega",
+    "operatorname",
+    "overline",
+    "phi",
+    "pi",
+    "pm",
+    "pmatrix",
+    "pmod",
+    "prod",
+    "psi",
+    "qquad",
+    "quad",
+    "rho",
+    "right",
+    "rightarrow",
+    "sigma",
+    "sin",
+    "sqrt",
+    "subset",
+    "subseteq",
+    "sum",
+    "supset",
+    "supseteq",
+    "tan",
+    "tau",
+    "text",
+    "tfrac",
+    "theta",
+    "tilde",
+    "times",
+    "to",
+    "underline",
+    "upsilon",
+    "varepsilon",
+    "varphi",
+    "varpi",
+    "varrho",
+    "varsigma",
+    "vartheta",
+    "vec",
+    "xi",
+    "zeta",
+}
 
 
 def _normalize_markdown_math(value: str) -> str:

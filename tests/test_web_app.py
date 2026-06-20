@@ -304,6 +304,41 @@ class WebAppTest(unittest.TestCase):
             page["teaching"]["speaker_notes_md"],
         )
 
+    def test_generated_page_repairs_unescaped_latex_backslashes_in_json(self) -> None:
+        content = r'''
+{
+  "page_no": 2,
+  "source": {
+    "text_md": "counter state transition",
+    "pdf_page_ref": "#page=2"
+  },
+  "teaching": {
+    "slide_title": "Counter states",
+    "speaker_notes_md": "第一行\n状态转移：$000 \to 001 \to \cdots \to 111$，特征值 $\lambda$，分式 $\frac{a}{b}$。",
+    "concepts": ["counter"],
+    "confidence": 0.91
+  },
+  "status": "ready"
+}
+'''
+        page = _parse_generated_page(
+            content,
+            {
+                "page": {
+                    "page_no": 2,
+                    "source": {"text_md": "counter state transition", "pdf_page_ref": "#page=2"},
+                }
+            },
+        )
+
+        notes = page["teaching"]["speaker_notes_md"]
+        self.assertIn("第一行\n状态转移", notes)
+        self.assertIn("$000 \\to 001 \\to \\cdots \\to 111$", notes)
+        self.assertIn("$\\lambda$", notes)
+        self.assertIn("$\\frac{a}{b}$", notes)
+        self.assertNotIn("\t", notes)
+        self.assertNotIn("\f", notes)
+
     def test_extracts_streaming_response_text(self) -> None:
         stream = "\n".join(
             [
