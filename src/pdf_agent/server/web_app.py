@@ -41,6 +41,8 @@ MAX_TRANSCRIPT_MESSAGES = 8
 MAX_IMAGE_ATTACHMENTS = 8
 MAX_IMAGE_DATA_URL_CHARS = 8_000_000
 MAX_PDF_FILE_DATA_CHARS = 80_000_000
+PROMPT_CACHE_VERSION = "pagepair.prompt-cache.v2"
+DOCUMENT_CACHE_PREFIX_VERSION = "pagepair.document-prefix.v2"
 
 AGENT_INSTRUCTIONS = """You are the AI agent panel inside PagePair Reader.
 Use the current PDF/page context, selected text, formulas, and image attachments as primary evidence.
@@ -104,8 +106,7 @@ class AgentChatGateway:
             include_reasoning_encrypted_content=True,
             strip_unsupported_fields=True,
         )
-        text, content_type = await asyncio.to_thread(
-            self._post_responses,
+        text, content_type, payload = await self._post_payload_with_cache_fallback(
             codex_responses_url(base_url=auth.upstream_base_url),
             payload,
             auth.headers,
@@ -120,7 +121,25 @@ class AgentChatGateway:
             },
             "account_id": auth.account_id,
             "model": payload.get("model"),
+            "cache": _prompt_cache_metadata(payload),
         }
+
+    async def _post_payload_with_cache_fallback(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+    ) -> tuple[str, str, dict[str, Any]]:
+        try:
+            text, content_type = await asyncio.to_thread(self._post_responses, url, payload, headers)
+            return text, content_type, payload
+        except HttpError as exc:
+            if not _should_retry_without_prompt_cache(exc, payload):
+                raise
+            fallback_payload = _without_prompt_cache(payload)
+            text, content_type = await asyncio.to_thread(self._post_responses, url, fallback_payload, headers)
+            fallback_payload["_pagepair_cache_fallback_without_fields"] = True
+            return text, content_type, fallback_payload
 
     def _post_responses(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, str]:
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -170,8 +189,7 @@ class TeachingGenerationGateway:
             "account_id": auth.account_id,
             "model": payload.get("model"),
             "cache": {
-                "prompt_cache_key": payload.get("prompt_cache_key"),
-                "prompt_cache_retention": payload.get("prompt_cache_retention"),
+                **_prompt_cache_metadata(payload),
                 "document_file_input": document_file_used,
             },
         }
@@ -221,14 +239,11 @@ class TeachingGenerationGateway:
             text, content_type = await asyncio.to_thread(self._post_responses, url, payload, headers)
             return text, content_type, payload
         except HttpError as exc:
-            if exc.status not in {400, 422} or not (
-                payload.get("prompt_cache_key") or payload.get("prompt_cache_retention")
-            ):
+            if not _should_retry_without_prompt_cache(exc, payload):
                 raise
-            fallback_payload = dict(payload)
-            fallback_payload.pop("prompt_cache_key", None)
-            fallback_payload.pop("prompt_cache_retention", None)
+            fallback_payload = _without_prompt_cache(payload)
             text, content_type = await asyncio.to_thread(self._post_responses, url, fallback_payload, headers)
+            fallback_payload["_pagepair_cache_fallback_without_fields"] = True
             return text, content_type, fallback_payload
 
     def _post_responses(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, str]:
@@ -431,37 +446,38 @@ def main(argv: list[str] | None = None) -> int:
 
 def _build_responses_payload(body: Mapping[str, Any], *, default_model: str) -> dict[str, Any]:
     model = _clean_model(body.get("model")) or default_model
-    prompt = _build_agent_prompt(body)
-    content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+    content: list[dict[str, Any]] = []
+    cache_prefix = _build_document_cache_prefix(body)
+    if cache_prefix:
+        content.append({"type": "input_text", "text": cache_prefix})
+    content.append({"type": "input_text", "text": _build_agent_interaction_prompt(body)})
     for image in _image_attachments(body.get("attachments"), body.get("parts")):
         content.append({"type": "input_image", "image_url": image["data_url"]})
-    return {
+    payload: dict[str, Any] = {
         "model": model,
         "instructions": AGENT_INSTRUCTIONS,
         "input": [{"role": "user", "content": content}],
     }
+    _apply_prompt_cache_fields(payload, body, model)
+    return payload
 
 
 def _build_teaching_generation_payload(body: Mapping[str, Any], *, default_model: str) -> dict[str, Any]:
     model = _clean_model(body.get("model")) or default_model
     content: list[dict[str, Any]] = []
+    cache_prefix = _build_document_cache_prefix(body)
+    if cache_prefix:
+        content.append({"type": "input_text", "text": cache_prefix})
     pdf_file = _pdf_file_input(body.get("documentFile"))
     if pdf_file:
         content.append(pdf_file)
-    cache_prefix = _build_teaching_cache_prefix(body)
-    if cache_prefix:
-        content.append({"type": "input_text", "text": cache_prefix})
     content.append({"type": "input_text", "text": _build_teaching_generation_prompt(body)})
     payload: dict[str, Any] = {
         "model": model,
         "instructions": TEACHING_GENERATOR_INSTRUCTIONS,
         "input": [{"role": "user", "content": content}],
     }
-    cache_key = _prompt_cache_key(body)
-    if cache_key:
-        payload["prompt_cache_key"] = cache_key
-    if model.startswith("gpt-5.5"):
-        payload["prompt_cache_retention"] = "24h"
+    _apply_prompt_cache_fields(payload, body, model)
     return payload
 
 
@@ -519,35 +535,78 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
     return "\n".join(sections)
 
 
-def _build_teaching_cache_prefix(body: Mapping[str, Any]) -> str:
-    document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
-    context = body.get("documentContext") if isinstance(body.get("documentContext"), Mapping) else {}
-    pages = context.get("pages")
-    if not isinstance(pages, list):
+def _build_document_cache_prefix(body: Mapping[str, Any]) -> str:
+    context = _normalized_document_cache_context(body)
+    if not context["pages"]:
         return ""
-    page_count = _int_value(context.get("pageCount"), len(pages))
     chunks = [
         "PAGEPAIR CACHEABLE DOCUMENT CONTEXT",
-        "This section is intentionally identical for every page-generation request for this PDF so prompt caching can reuse it.",
+        f"cache_version: {context['cacheVersion']}",
+        "This section is intentionally identical for repeated requests for this PDF so prompt caching can reuse it.",
         "Use this whole-document context to understand course structure, symbols, terminology, and cross-page dependencies.",
-        "When explaining a target page, prioritize that target page, but use this document context for prerequisites and continuity.",
+        "When answering a question or explaining a target page, prioritize the user's current request and selected source, but use this document context for prerequisites and continuity.",
         "",
-        f"document_id: {_string_value(document.get('id') or context.get('documentId'), 'unknown')}",
-        f"document_title: {_string_value(document.get('title') or context.get('documentTitle'), 'Untitled PDF')}",
-        f"page_count: {page_count}",
+        f"document_id: {context['documentId']}",
+        f"document_title: {context['documentTitle']}",
+        f"page_count: {context['pageCount']}",
+        f"truncated_context: {'yes' if context['truncated'] else 'no'}",
+        f"included_original_pdf_pages: {_format_page_ranges(context['includedPageNumbers']) or 'none'}",
         "",
         "FULL PDF TEXT CONTEXT BY ORIGINAL PAGE NUMBER:",
     ]
-    for item in pages:
+    for item in context["pages"]:
+        chunks.append(f"\n[p.{item['page_no']}] {item['title']}\n{item['text_md']}")
+    return _truncate("\n".join(chunks), MAX_TEACHING_CACHE_CHARS)
+
+
+def _cacheable_document_context(body: Mapping[str, Any]) -> Mapping[str, Any]:
+    document_context = body.get("documentContext")
+    if isinstance(document_context, Mapping):
+        return document_context
+    pdf_context = body.get("pdfContext")
+    if isinstance(pdf_context, Mapping):
+        return pdf_context
+    return {}
+
+
+def _normalized_document_cache_context(body: Mapping[str, Any]) -> dict[str, Any]:
+    document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
+    context = _cacheable_document_context(body)
+    pages = context.get("pages")
+    raw_pages = pages if isinstance(pages, list) else []
+    page_count = _int_value(context.get("pageCount") or document.get("page_count"), len(raw_pages))
+    full_page_limit = _int_value(context.get("fullPageLimit"), page_count or PDF_CONTEXT_FULL_PAGE_LIMIT)
+    edge_page_count = _int_value(context.get("edgePageCount"), page_count or PDF_CONTEXT_EDGE_PAGE_COUNT)
+    included_pages = _pdf_included_page_numbers(context, page_count, full_page_limit, edge_page_count)
+    allowed_pages = set(included_pages)
+    explicit_truncated = context.get("truncated")
+    truncated = bool(explicit_truncated) if explicit_truncated is not None else len(included_pages) < page_count
+    normalized_pages: list[dict[str, Any]] = []
+    for item in raw_pages:
         if not isinstance(item, Mapping):
             continue
         page_no = _int_value(item.get("page_no"), 0)
-        if page_no <= 0:
+        if page_no <= 0 or page_no not in allowed_pages:
             continue
-        title = _string_value(item.get("title"), f"PDF p.{page_no}")
-        text = str(item.get("text_md") or "").strip() or "[No embedded text extracted for this page.]"
-        chunks.append(f"\n[p.{page_no}] {title}\n{text}")
-    return _truncate("\n".join(chunks), MAX_TEACHING_CACHE_CHARS)
+        normalized_pages.append(
+            {
+                "page_no": page_no,
+                "title": _string_value(item.get("title"), f"PDF p.{page_no}"),
+                "text_md": str(item.get("text_md") or "").strip() or "[No embedded text extracted for this page.]",
+            }
+        )
+    normalized_pages.sort(key=lambda item: item["page_no"])
+    return {
+        "cacheVersion": DOCUMENT_CACHE_PREFIX_VERSION,
+        "documentId": _string_value(document.get("id") or context.get("documentId"), "unknown"),
+        "documentTitle": _string_value(document.get("title") or context.get("documentTitle"), "Untitled PDF"),
+        "pageCount": page_count,
+        "fullPageLimit": full_page_limit,
+        "edgePageCount": edge_page_count,
+        "truncated": truncated,
+        "includedPageNumbers": included_pages,
+        "pages": normalized_pages,
+    }
 
 
 def _pdf_file_input(value: Any) -> dict[str, Any] | None:
@@ -570,22 +629,77 @@ def _pdf_file_input(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _apply_prompt_cache_fields(payload: dict[str, Any], body: Mapping[str, Any], model: str) -> None:
+    cache_key = _prompt_cache_key(body)
+    if cache_key:
+        payload["prompt_cache_key"] = cache_key
+    if _supports_prompt_cache_retention(model):
+        payload["prompt_cache_retention"] = "24h"
+
+
+def _supports_prompt_cache_retention(model: str) -> bool:
+    return model.startswith("gpt-5.5")
+
+
+def _should_retry_without_prompt_cache(exc: HttpError, payload: Mapping[str, Any]) -> bool:
+    return exc.status in {400, 422} and bool(
+        payload.get("prompt_cache_key") or payload.get("prompt_cache_retention")
+    )
+
+
+def _without_prompt_cache(payload: Mapping[str, Any]) -> dict[str, Any]:
+    fallback_payload = dict(payload)
+    fallback_payload.pop("prompt_cache_key", None)
+    fallback_payload.pop("prompt_cache_retention", None)
+    return fallback_payload
+
+
+def _prompt_cache_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
+    prefix = _payload_document_cache_prefix(payload)
+    return {
+        "prompt_cache_key": payload.get("prompt_cache_key"),
+        "prompt_cache_retention": payload.get("prompt_cache_retention"),
+        "prefix_hash": _sha256_text(prefix)[:24] if prefix else None,
+        "prefix_chars": len(prefix),
+        "fallback_without_cache": bool(payload.get("_pagepair_cache_fallback_without_fields")),
+    }
+
+
+def _payload_document_cache_prefix(payload: Mapping[str, Any]) -> str:
+    input_value = payload.get("input")
+    if not isinstance(input_value, list) or not input_value:
+        return ""
+    first = input_value[0]
+    if not isinstance(first, Mapping):
+        return ""
+    content = first.get("content")
+    if not isinstance(content, list) or not content:
+        return ""
+    first_part = content[0]
+    if not isinstance(first_part, Mapping) or first_part.get("type") != "input_text":
+        return ""
+    text = str(first_part.get("text") or "")
+    return text if text.startswith("PAGEPAIR CACHEABLE DOCUMENT CONTEXT") else ""
+
+
 def _prompt_cache_key(body: Mapping[str, Any]) -> str:
-    document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
-    context = body.get("documentContext") if isinstance(body.get("documentContext"), Mapping) else {}
+    context = _normalized_document_cache_context(body)
     document_file = body.get("documentFile") if isinstance(body.get("documentFile"), Mapping) else {}
-    document_id = _cache_key_part(_string_value(document.get("id") or context.get("documentId"), "document"))
-    digest = _string_value(document_file.get("sha256"), "")
-    if not digest:
-        stable_context = {
-            "documentId": _string_value(document.get("id") or context.get("documentId"), ""),
-            "documentTitle": _string_value(document.get("title") or context.get("documentTitle"), ""),
-            "pageCount": _int_value(context.get("pageCount") or document.get("page_count"), 0),
-            "pages": context.get("pages") if isinstance(context.get("pages"), list) else [],
-        }
-        serialized = json.dumps(stable_context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    if not context["pages"] and not document_file:
+        return ""
+    document_id = _cache_key_part(_string_value(context.get("documentId"), "document"))
+    stable_context = {
+        "promptCacheVersion": PROMPT_CACHE_VERSION,
+        "documentFileSha256": _string_value(document_file.get("sha256"), ""),
+        "documentContext": context,
+    }
+    serialized = json.dumps(stable_context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = _sha256_text(serialized)
     return f"pagepair:{document_id}:{_cache_key_part(digest)[:32]}"
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _cache_key_part(value: str) -> str:
@@ -748,7 +862,7 @@ def _normalize_katex_body(value: str) -> str:
     return normalized
 
 
-def _build_agent_prompt(body: Mapping[str, Any]) -> str:
+def _build_agent_interaction_prompt(body: Mapping[str, Any]) -> str:
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
     page = body.get("page") if isinstance(body.get("page"), Mapping) else {}
     teaching = page.get("teaching") if isinstance(page.get("teaching"), Mapping) else {}
@@ -759,7 +873,6 @@ def _build_agent_prompt(body: Mapping[str, Any]) -> str:
     contexts = [*_context_items(body.get("context")), *_context_parts(body.get("parts"))]
     raw_input = str(body.get("input") or "").strip() or _text_from_parts(body.get("parts"))
     input_text = _build_user_request(raw_input, selected_context_value, body.get("pdfContext"))
-    pdf_context = _pdf_document_context(body.get("pdfContext"))
 
     sections = [
         "# User request",
@@ -768,8 +881,6 @@ def _build_agent_prompt(body: Mapping[str, Any]) -> str:
         f"Title: {_string_value(document.get('title'), 'Untitled')}",
         f"Document ID: {_string_value(document.get('id'), 'unknown')}",
     ]
-    if pdf_context:
-        sections.extend(["# PDF document context", pdf_context])
     sections.extend(
         [
             "# Current page",
@@ -781,8 +892,6 @@ def _build_agent_prompt(body: Mapping[str, Any]) -> str:
         sections.extend(["Source text:", _truncate(str(source.get("text_md")), MAX_CONTEXT_CHARS)])
     if teaching.get("speaker_notes_md"):
         sections.extend(["Existing notes:", _truncate(str(teaching.get("speaker_notes_md")), MAX_CONTEXT_CHARS)])
-    if messages:
-        sections.extend(["# Recent conversation", *messages])
     if selected_context:
         sections.extend(
             [
@@ -791,6 +900,8 @@ def _build_agent_prompt(body: Mapping[str, Any]) -> str:
                 selected_context,
             ]
         )
+    if messages:
+        sections.extend(["# Recent conversation", *messages])
     if contexts:
         sections.extend(["# Additional context", *contexts])
     return "\n\n".join(section for section in sections if section)

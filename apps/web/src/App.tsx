@@ -30,6 +30,7 @@ import PdfJsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
 import {
   Check,
   BookOpen,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -52,7 +53,6 @@ import {
   RefreshCw,
   Send,
   Settings2,
-  Sigma,
   Trash2,
   Upload,
   X,
@@ -197,6 +197,9 @@ type PdfDirectFileInput = {
   sha256?: string;
   fileData: string;
 };
+
+type GenerationPageStatus = "done" | "running" | "failed" | "pending";
+type GeneratePageMode = "missing" | "all" | "current" | "custom";
 
 type PdfViewMode = "continuous" | "single-page";
 
@@ -754,6 +757,39 @@ function formatPageRanges(pages: number[]) {
   }
   if (start !== null && previous !== null) ranges.push(start === previous ? `${start}` : `${start}-${previous}`);
   return ranges.join(", ");
+}
+
+function parsePageRangeInput(value: string, pageCount: number) {
+  const text = value.trim();
+  if (!text) return null;
+  const pages = new Set<number>();
+  const tokens = text.split(/[\s,，、;；]+/).filter(Boolean);
+  for (const token of tokens) {
+    const range = token.match(/^(\d+)\s*[-~—–]\s*(\d+)$/);
+    const single = token.match(/^\d+$/);
+    if (range) {
+      const start = Number(range[1]);
+      const end = Number(range[2]);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start || end > pageCount) return null;
+      for (let pageNo = start; pageNo <= end; pageNo += 1) pages.add(pageNo);
+      continue;
+    }
+    if (single) {
+      const pageNo = Number(token);
+      if (!Number.isInteger(pageNo) || pageNo < 1 || pageNo > pageCount) return null;
+      pages.add(pageNo);
+      continue;
+    }
+    return null;
+  }
+  return Array.from(pages).sort((left, right) => left - right);
+}
+
+function generateTargetPageNumbers(mode: GeneratePageMode, rangeDraft: string, currentPageNo: number, pageCount: number) {
+  const total = Math.max(1, pageCount);
+  if (mode === "current") return [Math.min(Math.max(currentPageNo, 1), total)];
+  if (mode === "custom") return parsePageRangeInput(rangeDraft, total);
+  return Array.from({ length: total }, (_, index) => index + 1);
 }
 
 function buildSelectedQuestionPrompt(
@@ -1514,6 +1550,25 @@ function pageWithSourceText(page: PageData, sourceText: string): PageData {
   };
 }
 
+function hasCompletedTeaching(page: PageData | undefined) {
+  if (!page) return false;
+  return page.status !== "failed" && page.status !== "running" && Boolean(page.teaching.speaker_notes_md.trim());
+}
+
+function generationPageStatus(page: PageData | undefined): GenerationPageStatus {
+  if (!page || !page.teaching.speaker_notes_md.trim()) return "pending";
+  if (page.status === "running") return "running";
+  if (page.status === "failed") return "failed";
+  return "done";
+}
+
+function generationStatusLabel(status: GenerationPageStatus, copy: AppCopy) {
+  if (status === "done") return copy.topbar.generationStatusDone;
+  if (status === "running") return copy.topbar.generationStatusRunning;
+  if (status === "failed") return copy.topbar.generationStatusFailed;
+  return copy.topbar.generationStatusPending;
+}
+
 export default function App() {
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(() => loadUiPreferences());
   const copy = useMemo(() => getAppCopy(uiPreferences.language), [uiPreferences.language]);
@@ -1532,6 +1587,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
+  const [generateMenuOpen, setGenerateMenuOpen] = useState(false);
+  const [generatePageMode, setGeneratePageMode] = useState<GeneratePageMode>("missing");
+  const [generateRangeDraft, setGenerateRangeDraft] = useState("");
   const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
   const [contexts, setContexts] = useState<AgentContextItem[]>([]);
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
@@ -1539,6 +1597,7 @@ export default function App() {
   const [pdfTextContext, setPdfTextContext] = useState<PdfContextPayload | null>(null);
   const [pdfExtractedPages, setPdfExtractedPages] = useState<PdfContextPage[]>([]);
   const [isGeneratingNotes, setIsGeneratingNotes] = useState(false);
+  const [generationDetailsOpen, setGenerationDetailsOpen] = useState(false);
   const [pendingSelectionPrompt, setPendingSelectionPrompt] = useState<QuickSelectionPrompt | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -1558,6 +1617,7 @@ export default function App() {
   const currentPdfObjectUrlRef = useRef("");
   const appShellRef = useRef<HTMLDivElement>(null);
   const commandMenuRef = useRef<HTMLDivElement>(null);
+  const generateMenuRef = useRef<HTMLDivElement>(null);
   const jsonImportInputRef = useRef<HTMLInputElement>(null);
   const workspaceImportInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
@@ -1575,7 +1635,32 @@ export default function App() {
     pack.pages[Math.min(Math.max(currentPageNo - 1, 0), Math.max(pack.pages.length - 1, 0))] ||
     samplePacks[uiPreferences.language].pages[0];
   const currentIndex = Math.max(0, pack.pages.findIndex((item) => item.page_no === page.page_no));
-  const generatedPageCount = pack.pages.filter((item) => item.teaching.speaker_notes_md.trim()).length;
+  const generatedPageCount = pack.pages.filter((item) => hasCompletedTeaching(item)).length;
+  const generationProgressPages = Array.from({ length: pdfNavigationPageCount }, (_, index) => {
+    const pageNo = index + 1;
+    const progressPage = pack.pages.find((item) => item.page_no === pageNo);
+    return {
+      pageNo,
+      status: generationPageStatus(progressPage),
+    };
+  });
+  const generationProgressSummary = generationProgressPages.reduce(
+    (summary, item) => ({
+      done: summary.done + (item.status === "done" ? 1 : 0),
+      running: summary.running + (item.status === "running" ? 1 : 0),
+      failed: summary.failed + (item.status === "failed" ? 1 : 0),
+      pending: summary.pending + (item.status === "pending" ? 1 : 0),
+    }),
+    { done: 0, running: 0, failed: 0, pending: 0 },
+  );
+  const generateScopeSummary =
+    generatePageMode === "current"
+      ? copy.topbar.generateScopeCurrent(currentPdfPageNo)
+      : generatePageMode === "custom"
+        ? copy.topbar.generateScopeCustomSummary(generateRangeDraft.trim() || copy.topbar.generateScopeCustomPlaceholder)
+        : generatePageMode === "all"
+          ? copy.topbar.generateScopeAll
+          : copy.topbar.generateScopeMissing;
   const pdfOnly = !panels.rail && !panels.notes && !panels.agent;
   const fullWorkbench = panels.rail && panels.notes && panels.agent;
   const sidebarDocuments: DocumentSidebarItem[] = documentItems.length
@@ -2207,6 +2292,26 @@ export default function App() {
   }, [commandMenuOpen]);
 
   useEffect(() => {
+    if (!generateMenuOpen) return undefined;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && generateMenuRef.current?.contains(target)) return;
+      setGenerateMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setGenerateMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [generateMenuOpen]);
+
+  useEffect(() => {
     const handleFullscreenChange = () => {
       const isFullscreen = document.fullscreenElement === appShellRef.current;
       setIsBrowserFullscreen(isFullscreen);
@@ -2744,11 +2849,25 @@ export default function App() {
         return pageWithSourceText(existing, sourceTextByPage.get(pageNo) || "");
       }),
     };
+    const targetPageNumbers = generateTargetPageNumbers(generatePageMode, generateRangeDraft, currentPdfPageNo, totalPages);
+    if (!targetPageNumbers?.length) {
+      setJobStatus(copy.status.generationInvalidPageRange(totalPages));
+      return;
+    }
+    const targetPageSet = new Set(targetPageNumbers);
+    const scopedPages = workingPack.pages.filter((item) => targetPageSet.has(item.page_no));
+    const pagesToGenerate = scopedPages.filter((item) => !hasCompletedTeaching(item));
+    const skippedPages = scopedPages.length - pagesToGenerate.length;
+    if (!pagesToGenerate.length) {
+      setPack(workingPack);
+      setJobStatus(copy.status.generationScopeAlreadyComplete(formatPageRanges(targetPageNumbers)));
+      return;
+    }
 
     setIsGeneratingNotes(true);
     setPanels((current) => ({ ...current, notes: true }));
     setActiveTab("notes");
-    setJobStatus(copy.status.generationPreparingCache(totalPages));
+    setJobStatus(copy.status.generationPreparingCache(pagesToGenerate.length));
     setPack(workingPack);
 
     void (async () => {
@@ -2758,15 +2877,22 @@ export default function App() {
         const documentFile = pdfUrl
           ? await pdfDirectFileInputFromUrl(pdfUrl, workingPack.document.source_pdf_url || workingPack.document.title).catch(() => null)
           : null;
-        setJobStatus(copy.status.generationStarted(totalPages));
-        for (let index = 0; index < totalPages; index += 1) {
-          const pageNo = index + 1;
-          const basePage = workingPack.pages.find((item) => item.page_no === pageNo) || createDraftPagePack(pack.document.title, pack.document.source_pdf_url, totalPages, pack.document.id).pages[index];
-          const runningPage: PageData = { ...basePage, status: "running" };
+        setJobStatus(copy.status.generationStarted(pagesToGenerate.length));
+        for (let index = 0; index < pagesToGenerate.length; index += 1) {
+          const pageNo = pagesToGenerate[index].page_no;
+          const basePage = workingPack.pages.find((item) => item.page_no === pageNo) || createDraftPagePack(pack.document.title, pack.document.source_pdf_url, totalPages, pack.document.id).pages[pageNo - 1];
+          const runningPage: PageData = {
+            ...basePage,
+            status: "running",
+            teaching: {
+              ...basePage.teaching,
+              speaker_notes_md: basePage.status === "failed" ? "" : basePage.teaching.speaker_notes_md,
+            },
+          };
           workingPack = mergePageIntoPack(workingPack, runningPage);
           setPack(workingPack);
           setCurrentPageNo((current) => current || pageNo);
-          setJobStatus(copy.status.generationPage(index + 1, totalPages, pageNo));
+          setJobStatus(copy.status.generationPage(index + 1, pagesToGenerate.length, pageNo));
 
           try {
             const previousPage = workingPack.pages.find((item) => item.page_no === pageNo - 1);
@@ -2851,7 +2977,7 @@ export default function App() {
           await saveGeneratedPagesFromPack({ workspaceId, documentId, pack: workingPack });
           await refreshDocumentItems(workspaceId, documentId, activeProjectId);
         }
-        setJobStatus(copy.status.generationDone(completed, totalPages));
+        setJobStatus(copy.status.generationDone(completed, scopedPages.length, skippedPages));
       } finally {
         setIsGeneratingNotes(false);
       }
@@ -2859,7 +2985,10 @@ export default function App() {
   }, [
     activeProjectId,
     copy,
+    currentPdfPageNo,
     documentId,
+    generatePageMode,
+    generateRangeDraft,
     isGeneratingNotes,
     pack,
     pdfExtractedPages,
@@ -2949,7 +3078,10 @@ export default function App() {
               aria-label={copy.topbar.moreActions}
               aria-expanded={commandMenuOpen}
               title={copy.topbar.moreActions}
-              onClick={() => setCommandMenuOpen((open) => !open)}
+              onClick={() => {
+                setGenerateMenuOpen(false);
+                setCommandMenuOpen((open) => !open);
+              }}
             >
               <MoreHorizontal />
             </button>
@@ -3008,10 +3140,82 @@ export default function App() {
               }}
             />
           </div>
-          <button className="primary-button" type="button" onClick={handleGenerateNotes} disabled={isGeneratingNotes}>
-            <Zap />
-            {copy.topbar.generate}
-          </button>
+          <div className="generate-split" ref={generateMenuRef}>
+            <button
+              className="primary-button generate-main-button"
+              type="button"
+              onClick={() => {
+                setGenerateMenuOpen(false);
+                handleGenerateNotes();
+              }}
+              disabled={isGeneratingNotes}
+              title={generateScopeSummary}
+            >
+              <Zap />
+              {copy.topbar.generate}
+            </button>
+            <button
+              className={`primary-button generate-menu-button ${generateMenuOpen ? "active" : ""}`}
+              type="button"
+              aria-label={copy.topbar.generateScopeLabel}
+              aria-expanded={generateMenuOpen}
+              title={generateScopeSummary}
+              disabled={isGeneratingNotes}
+              onClick={() => {
+                setCommandMenuOpen(false);
+                setGenerateMenuOpen((open) => !open);
+              }}
+            >
+              <ChevronDown />
+            </button>
+            {generateMenuOpen ? (
+              <div className="generate-menu-popover">
+                <div className="generate-menu-heading">
+                  <span>{copy.topbar.generateScopeLabel}</span>
+                  <small>{generateScopeSummary}</small>
+                </div>
+                {([
+                  ["missing", copy.topbar.generateScopeMissing, copy.topbar.generateScopeMissingDescription],
+                  ["current", copy.topbar.generateScopeCurrent(currentPdfPageNo), copy.topbar.generateScopeCurrentDescription],
+                  ["all", copy.topbar.generateScopeAll, copy.topbar.generateScopeAllDescription],
+                ] as const).map(([mode, label, description]) => (
+                  <button
+                    key={mode}
+                    className={`generate-scope-option ${generatePageMode === mode ? "active" : ""}`}
+                    type="button"
+                    onClick={() => {
+                      setGeneratePageMode(mode);
+                      setGenerateMenuOpen(false);
+                    }}
+                  >
+                    <Check />
+                    <span>
+                      <strong>{label}</strong>
+                      <small>{description}</small>
+                    </span>
+                  </button>
+                ))}
+                <label className={`generate-range-field ${generatePageMode === "custom" ? "active" : ""}`}>
+                  <span>
+                    <strong>{copy.topbar.generateScopeCustom}</strong>
+                    <small>{copy.topbar.generateScopeCustomDescription}</small>
+                  </span>
+                  <input
+                    value={generateRangeDraft}
+                    placeholder={copy.topbar.generateScopeCustomPlaceholder}
+                    onFocus={() => setGeneratePageMode("custom")}
+                    onChange={(event) => {
+                      setGeneratePageMode("custom");
+                      setGenerateRangeDraft(event.target.value);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") setGenerateMenuOpen(false);
+                    }}
+                  />
+                </label>
+              </div>
+            ) : null}
+          </div>
         </div>
       </header>
 
@@ -3242,12 +3446,6 @@ export default function App() {
                   <SlidePreview page={page} />
                 )}
               </div>
-              {uiPreferences.showPageSummaryHint && page.source.text_md && (
-                <div className="pdf-source-strip">
-                  <Sigma />
-                  <p>{page.source.text_md}</p>
-                </div>
-              )}
             </section>
           </Panel>
 
@@ -3260,7 +3458,29 @@ export default function App() {
                 right={
                   <div className="notes-toolbar-right">
                     <span className="source-pill">{copy.common.sourcePdfPage(page.page_no)}</span>
-                    <span className="source-pill">{copy.common.explanationProgress(currentIndex + 1, pack.pages.length)}</span>
+                    <div className="generation-details-control">
+                      <button
+                        className="source-pill generation-progress-trigger"
+                        type="button"
+                        aria-expanded={generationDetailsOpen}
+                        aria-label={copy.topbar.generationDetailsLabel}
+                        title={copy.topbar.generationDetailsLabel}
+                        onClick={() => setGenerationDetailsOpen((open) => !open)}
+                      >
+                        <span className="generation-progress-mini" aria-hidden="true">
+                          <span style={{ width: `${Math.round((currentPdfPageNo / pdfNavigationPageCount) * 100)}%` }} />
+                        </span>
+                        <span>{copy.common.explanationProgress(currentPdfPageNo, pdfNavigationPageCount)}</span>
+                      </button>
+                      {generationDetailsOpen && (
+                        <GenerationDetailsPopover
+                          copy={copy}
+                          currentPageNo={currentPdfPageNo}
+                          pages={generationProgressPages}
+                          summary={generationProgressSummary}
+                        />
+                      )}
+                    </div>
                     <div className="tab-group">
                       {(["notes", "structure", "json"] as const).map((tab) => (
                         <button
@@ -4323,6 +4543,53 @@ function SlidePreview({ page }: { page: PageData }) {
         </div>
       </div>
     </article>
+  );
+}
+
+function GenerationDetailsPopover({
+  copy,
+  pages,
+  currentPageNo,
+  summary,
+}: {
+  copy: AppCopy;
+  pages: Array<{ pageNo: number; status: GenerationPageStatus }>;
+  currentPageNo: number;
+  summary: { done: number; running: number; failed: number; pending: number };
+}) {
+  const pageRangeForStatus = (status: GenerationPageStatus) =>
+    formatPageRanges(pages.filter((item) => item.status === status).map((item) => item.pageNo)) || copy.common.none;
+  const currentStatus = pages.find((item) => item.pageNo === currentPageNo)?.status || "pending";
+  const rows = [
+    { label: copy.topbar.generationDetailsGenerated, value: `${summary.done}/${pages.length}`, detail: pageRangeForStatus("done") },
+    { label: copy.topbar.generationDetailsPending, value: `${summary.pending}`, detail: pageRangeForStatus("pending") },
+    ...(summary.running
+      ? [{ label: copy.topbar.generationDetailsRunning, value: `${summary.running}`, detail: pageRangeForStatus("running") }]
+      : []),
+    ...(summary.failed ? [{ label: copy.topbar.generationDetailsFailed, value: `${summary.failed}`, detail: pageRangeForStatus("failed") }] : []),
+    {
+      label: copy.topbar.generationDetailsCurrent,
+      value: `p.${currentPageNo}`,
+      detail: generationStatusLabel(currentStatus, copy),
+    },
+  ];
+
+  return (
+    <div className="generation-details-popover" role="status" aria-label={copy.topbar.generationDetailsLabel}>
+      <div className="generation-details-header">
+        <span>{copy.topbar.generationDetailsLabel}</span>
+        <strong>{summary.done}/{pages.length}</strong>
+      </div>
+      <div className="generation-details-list">
+        {rows.map((row) => (
+          <div className="generation-detail-row" key={row.label}>
+            <span>{row.label}</span>
+            <strong>{row.value}</strong>
+            <small title={row.detail}>{row.detail}</small>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

@@ -72,21 +72,24 @@ class WebAppTest(unittest.TestCase):
         )
 
         self.assertEqual(payload["model"], "gpt-5.5")
+        self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_1:"))
+        self.assertEqual(payload["prompt_cache_retention"], "24h")
         content = payload["input"][0]["content"]
         self.assertEqual(content[0]["type"], "input_text")
-        self.assertIn("Selected source:", content[0]["text"])
-        self.assertIn("PDF page: 7", content[0]["text"])
-        self.assertIn("Selected text:\n\nD_i = Q_i^+", content[0]["text"])
-        self.assertIn("User question:\n\n解释这个公式", content[0]["text"])
-        self.assertIn("# PDF document context", content[0]["text"])
-        self.assertIn("Truncated PDF context: no", content[0]["text"])
+        self.assertIn("PAGEPAIR CACHEABLE DOCUMENT CONTEXT", content[0]["text"])
+        self.assertIn("truncated_context: no", content[0]["text"])
         self.assertIn("[p.1] Intro", content[0]["text"])
         self.assertIn("[p.3] Eigenvectors", content[0]["text"])
-        self.assertIn("# User selected source material", content[0]["text"])
-        self.assertIn("D_i = Q_i^+", content[0]["text"])
-        self.assertIn("$$Ax = \\lambda x$$", content[0]["text"])
-        self.assertIn("上一轮问题", content[0]["text"])
-        self.assertEqual(content[1], {"type": "input_image", "image_url": "data:image/png;base64,AAAA"})
+        self.assertEqual(content[1]["type"], "input_text")
+        self.assertIn("Selected source:", content[1]["text"])
+        self.assertIn("PDF page: 7", content[1]["text"])
+        self.assertIn("Selected text:\n\nD_i = Q_i^+", content[1]["text"])
+        self.assertIn("User question:\n\n解释这个公式", content[1]["text"])
+        self.assertIn("# User selected source material", content[1]["text"])
+        self.assertIn("D_i = Q_i^+", content[1]["text"])
+        self.assertIn("$$Ax = \\lambda x$$", content[1]["text"])
+        self.assertIn("上一轮问题", content[1]["text"])
+        self.assertEqual(content[2], {"type": "input_image", "image_url": "data:image/png;base64,AAAA"})
 
     def test_agent_payload_truncates_large_pdf_context_to_edges(self) -> None:
         payload = _build_responses_payload(
@@ -117,20 +120,21 @@ class WebAppTest(unittest.TestCase):
             default_model="fallback-model",
         )
 
-        prompt = payload["input"][0]["content"][0]["text"]
-        self.assertIn("Included pages: first 10 and last 10 pages", prompt)
-        self.assertIn("Included original PDF page numbers: 1-10, 51-60", prompt)
+        cache_prefix = payload["input"][0]["content"][0]["text"]
+        prompt = payload["input"][0]["content"][1]["text"]
+        self.assertIn("truncated_context: yes", cache_prefix)
+        self.assertIn("included_original_pdf_pages: 1-10, 51-60", cache_prefix)
+        self.assertIn("[p.1] Page 1", cache_prefix)
+        self.assertIn("[p.10] Page 10", cache_prefix)
+        self.assertIn("[p.51] Page 51", cache_prefix)
+        self.assertIn("[p.60] Page 60", cache_prefix)
         self.assertIn("PDF context is truncated: original PDF has 60 pages", prompt)
-        self.assertIn("[p.1] Page 1", prompt)
-        self.assertIn("[p.10] Page 10", prompt)
-        self.assertIn("[p.51] Page 51", prompt)
-        self.assertIn("[p.60] Page 60", prompt)
         self.assertIn("PDF page: 30", prompt)
         self.assertIn("outside the truncated PDF context", prompt)
         self.assertIn("Selected text:\n\nselected middle text", prompt)
         self.assertIn("User question:\n\n解释这段", prompt)
-        self.assertNotIn("[p.11] Page 11", prompt)
-        self.assertNotIn("[p.30] Page 30", prompt)
+        self.assertNotIn("[p.11] Page 11", cache_prefix)
+        self.assertNotIn("[p.30] Page 30", cache_prefix)
 
     def test_teaching_generation_payload_uses_stable_cache_prefix_before_target_page(self) -> None:
         payload = _build_teaching_generation_payload(
@@ -165,15 +169,100 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(payload["prompt_cache_retention"], "24h")
         self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_1:"))
         content = payload["input"][0]["content"]
-        self.assertEqual(content[0]["type"], "input_file")
-        self.assertEqual(content[0]["filename"], "t7.pdf")
-        self.assertEqual(content[1]["type"], "input_text")
-        self.assertIn("PAGEPAIR CACHEABLE DOCUMENT CONTEXT", content[1]["text"])
-        self.assertIn("[p.1] Intro", content[1]["text"])
-        self.assertIn("[p.2] Enable", content[1]["text"])
+        self.assertEqual(content[0]["type"], "input_text")
+        self.assertIn("PAGEPAIR CACHEABLE DOCUMENT CONTEXT", content[0]["text"])
+        self.assertIn("[p.1] Intro", content[0]["text"])
+        self.assertIn("[p.2] Enable", content[0]["text"])
+        self.assertEqual(content[1]["type"], "input_file")
+        self.assertEqual(content[1]["filename"], "t7.pdf")
         self.assertEqual(content[2]["type"], "input_text")
         self.assertIn("Target page:", content[2]["text"])
         self.assertIn("page_no: 2", content[2]["text"])
+
+    def test_agent_and_teaching_share_document_cache_prefix(self) -> None:
+        body = {
+            "model": "gpt-5.5",
+            "document": {"id": "doc_shared", "title": "Shared PDF", "page_count": 2},
+            "pdfContext": {
+                "documentId": "doc_shared",
+                "documentTitle": "Shared PDF",
+                "pageCount": 2,
+                "pages": [
+                    {"page_no": 1, "title": "Intro", "text_md": "overview"},
+                    {"page_no": 2, "title": "Counters", "text_md": "counter details"},
+                ],
+            },
+            "documentContext": {
+                "documentId": "doc_shared",
+                "documentTitle": "Shared PDF",
+                "pageCount": 2,
+                "pages": [
+                    {"page_no": 1, "title": "Intro", "text_md": "overview"},
+                    {"page_no": 2, "title": "Counters", "text_md": "counter details"},
+                ],
+            },
+            "page": {
+                "page_no": 2,
+                "source": {"text_md": "counter details", "pdf_page_ref": "#page=2"},
+                "teaching": {"slide_title": "Counters", "speaker_notes_md": ""},
+            },
+            "input": "解释这一页",
+        }
+
+        agent_payload = _build_responses_payload(body, default_model="fallback")
+        teaching_payload = _build_teaching_generation_payload(body, default_model="fallback")
+
+        self.assertEqual(
+            agent_payload["input"][0]["content"][0]["text"],
+            teaching_payload["input"][0]["content"][0]["text"],
+        )
+        self.assertEqual(agent_payload["prompt_cache_key"], teaching_payload["prompt_cache_key"])
+
+    def test_document_cache_prefix_is_stable_for_page_order(self) -> None:
+        base = {
+            "model": "gpt-5.5",
+            "document": {"id": "doc_order", "title": "Ordered PDF", "page_count": 2},
+            "page": {
+                "page_no": 1,
+                "source": {"text_md": "intro", "pdf_page_ref": "#page=1"},
+                "teaching": {"slide_title": "Intro", "speaker_notes_md": ""},
+            },
+            "input": "总结",
+        }
+        body_a = {
+            **base,
+            "pdfContext": {
+                "documentId": "doc_order",
+                "documentTitle": "Ordered PDF",
+                "pageCount": 2,
+                "pages": [
+                    {"page_no": 2, "title": "Second", "text_md": "second page"},
+                    {"page_no": 1, "title": "First", "text_md": "first page"},
+                ],
+            },
+        }
+        body_b = {
+            **base,
+            "pdfContext": {
+                "documentId": "doc_order",
+                "documentTitle": "Ordered PDF",
+                "pageCount": 2,
+                "pages": [
+                    {"page_no": 1, "title": "First", "text_md": "first page"},
+                    {"page_no": 2, "title": "Second", "text_md": "second page"},
+                ],
+            },
+        }
+
+        payload_a = _build_responses_payload(body_a, default_model="fallback")
+        payload_b = _build_responses_payload(body_b, default_model="fallback")
+        prefix_a = payload_a["input"][0]["content"][0]["text"]
+        prefix_b = payload_b["input"][0]["content"][0]["text"]
+
+        self.assertEqual(payload_a["prompt_cache_key"], payload_b["prompt_cache_key"])
+        self.assertEqual(prefix_a, prefix_b)
+        self.assertIn("cache_version: pagepair.document-prefix.v2", prefix_a)
+        self.assertLess(prefix_a.index("[p.1] First"), prefix_a.index("[p.2] Second"))
 
     def test_generated_page_normalizes_mixed_language_latex_ranges(self) -> None:
         bad_notes = (

@@ -236,6 +236,7 @@ class CoursePdfHarness:
                 "documentId": input.document_id,
                 "promptVersion": input.prompt_version,
                 "schemaVersion": input.schema_version,
+                "cachePrefixHash": input.cache_prefix_hash or "",
             },
         )
 
@@ -249,10 +250,15 @@ class CoursePdfHarness:
     def _agent_key(self, input: HarnessInput, params: AgentRunParams) -> str:
         payload = {
             "document_sha256": input.document_sha256,
+            "cache_prefix_hash": input.cache_prefix_hash or "",
             "role": params.role,
             "prompt_version": input.prompt_version,
+            "prompt_hash": hashlib.sha256(params.prompt.encode("utf-8")).hexdigest(),
             "model": params.model,
             "schema_version": input.schema_version,
+            "schema_hash": hashlib.sha256(
+                json.dumps(params.schema, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
             "target_pages": params.target_pages,
             "page_json": params.page_json,
         }

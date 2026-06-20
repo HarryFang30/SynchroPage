@@ -69,6 +69,7 @@ class HarnessInput:
     token_budget: int | None = None
     page_budget: int | None = None
     force_parser_fallback: bool = False
+    cache_prefix_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -148,4 +149,3 @@ class JournalEntry:
     role: AgentRole
     target_pages: list[int]
     result: AgentRunResult
-

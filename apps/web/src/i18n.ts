@@ -80,8 +80,6 @@ export type AppCopy = {
       scrollbarThin: string;
       scrollbarSubtle: string;
       scrollbarNative: string;
-      summaryHintLabel: string;
-      summaryHintDescription: string;
     };
     account: {
       oauthStatusLabel: string;
@@ -185,7 +183,10 @@ export type AppCopy = {
     generationStarted: (total: number) => string;
     generationPage: (current: number, total: number, pageNo: number) => string;
     generationPageFailed: (pageNo: number, message: string) => string;
-    generationDone: (completed: number, total: number) => string;
+    generationDone: (completed: number, total: number, skipped?: number) => string;
+    generationAlreadyComplete: (total: number) => string;
+    generationScopeAlreadyComplete: (scope: string) => string;
+    generationInvalidPageRange: (total: number) => string;
     pdfTextExtracting: (ready: number, total: number) => string;
   };
   errors: {
@@ -247,7 +248,27 @@ export type AppCopy = {
     exportJson: string;
     advancedSettings: string;
     generate: string;
-    pageProgressAria: string;
+    generateScopeLabel: string;
+    generateScopeAll: string;
+    generateScopeAllDescription: string;
+    generateScopeMissing: string;
+    generateScopeMissingDescription: string;
+    generateScopeCurrent: (pageNo: number) => string;
+    generateScopeCurrentDescription: string;
+    generateScopeCustom: string;
+    generateScopeCustomDescription: string;
+    generateScopeCustomPlaceholder: string;
+    generateScopeCustomSummary: (value: string) => string;
+    generationDetailsLabel: string;
+    generationDetailsGenerated: string;
+    generationDetailsPending: string;
+    generationDetailsRunning: string;
+    generationDetailsFailed: string;
+    generationDetailsCurrent: string;
+    generationStatusDone: string;
+    generationStatusRunning: string;
+    generationStatusPending: string;
+    generationStatusFailed: string;
   };
   rail: {
     searchPlaceholder: string;
@@ -440,8 +461,6 @@ const zhCN: AppCopy = {
       scrollbarThin: "细",
       scrollbarSubtle: "更弱",
       scrollbarNative: "系统默认",
-      summaryHintLabel: "显示页面摘要提示",
-      summaryHintDescription: "在文档下方显示低噪声上下文提示。",
     },
     account: {
       oauthStatusLabel: "OAuth 状态",
@@ -545,7 +564,10 @@ const zhCN: AppCopy = {
     generationStarted: (total) => `开始生成 ${total} 页讲解`,
     generationPage: (current, total, pageNo) => `正在生成第 ${pageNo} 页讲解（${current}/${total}）`,
     generationPageFailed: (pageNo, message) => `第 ${pageNo} 页讲解生成失败：${message}`,
-    generationDone: (completed, total) => `讲解生成完成：${completed}/${total} 页`,
+    generationDone: (completed, total, skipped = 0) => `讲解生成完成：新生成 ${completed} 页，已跳过 ${skipped} 页，当前 ${total} 页已检查`,
+    generationAlreadyComplete: (total) => `${total} 页讲解已全部生成，无需重复生成`,
+    generationScopeAlreadyComplete: (scope) => `选定页码 ${scope} 已全部生成，无需重复生成`,
+    generationInvalidPageRange: (total) => `页码范围无效，请输入 1-${total} 之间的页码，例如 1-3, 8`,
     pdfTextExtracting: (ready, total) => `正在读取 PDF 文本层，已就绪 ${ready}/${total} 页，请稍后再生成`,
   },
   errors: {
@@ -607,7 +629,27 @@ const zhCN: AppCopy = {
     exportJson: "导出 JSON",
     advancedSettings: "高级设置",
     generate: "生成",
-    pageProgressAria: "页面进度",
+    generateScopeLabel: "生成范围",
+    generateScopeAll: "全部页面",
+    generateScopeAllDescription: "检查整份 PDF，已生成页会自动跳过",
+    generateScopeMissing: "未生成页",
+    generateScopeMissingDescription: "只补齐还没有讲解的页面",
+    generateScopeCurrent: (pageNo) => `当前页 p.${pageNo}`,
+    generateScopeCurrentDescription: "只生成正在查看的 PDF 页",
+    generateScopeCustom: "指定页码",
+    generateScopeCustomDescription: "输入页码或范围",
+    generateScopeCustomPlaceholder: "例如 1-3, 8, 10-12",
+    generateScopeCustomSummary: (value) => `指定页码：${value}`,
+    generationDetailsLabel: "生成情况",
+    generationDetailsGenerated: "已生成",
+    generationDetailsPending: "待生成",
+    generationDetailsRunning: "生成中",
+    generationDetailsFailed: "失败",
+    generationDetailsCurrent: "当前页",
+    generationStatusDone: "已生成",
+    generationStatusRunning: "正在生成",
+    generationStatusPending: "待生成",
+    generationStatusFailed: "失败",
   },
   rail: {
     searchPlaceholder: "搜索课程 / 文档",
@@ -800,8 +842,6 @@ const enUS: AppCopy = {
       scrollbarThin: "Thin",
       scrollbarSubtle: "Subtle",
       scrollbarNative: "Native",
-      summaryHintLabel: "Show page summary hint",
-      summaryHintDescription: "Show quiet source context below the document.",
     },
     account: {
       oauthStatusLabel: "OAuth status",
@@ -905,7 +945,10 @@ const enUS: AppCopy = {
     generationStarted: (total) => `Generating notes for ${total} pages`,
     generationPage: (current, total, pageNo) => `Generating notes for page ${pageNo} (${current}/${total})`,
     generationPageFailed: (pageNo, message) => `Page ${pageNo} generation failed: ${message}`,
-    generationDone: (completed, total) => `Notes generated: ${completed}/${total} pages`,
+    generationDone: (completed, total, skipped = 0) => `Generation complete: ${completed} new, ${skipped} skipped, ${total} pages checked`,
+    generationAlreadyComplete: (total) => `All ${total} pages already have notes`,
+    generationScopeAlreadyComplete: (scope) => `Selected pages ${scope} already have notes`,
+    generationInvalidPageRange: (total) => `Invalid page range. Enter pages from 1-${total}, for example 1-3, 8`,
     pdfTextExtracting: (ready, total) => `Reading PDF text layer: ${ready}/${total} pages ready. Try generating again shortly.`,
   },
   errors: {
@@ -967,7 +1010,27 @@ const enUS: AppCopy = {
     exportJson: "Export JSON",
     advancedSettings: "Advanced settings",
     generate: "Generate",
-    pageProgressAria: "Page progress",
+    generateScopeLabel: "Generate range",
+    generateScopeAll: "All pages",
+    generateScopeAllDescription: "Check the whole PDF and skip completed pages",
+    generateScopeMissing: "Missing pages",
+    generateScopeMissingDescription: "Only fill pages without generated notes",
+    generateScopeCurrent: (pageNo) => `Current page p.${pageNo}`,
+    generateScopeCurrentDescription: "Only generate the PDF page you are viewing",
+    generateScopeCustom: "Specific pages",
+    generateScopeCustomDescription: "Enter page numbers or ranges",
+    generateScopeCustomPlaceholder: "e.g. 1-3, 8, 10-12",
+    generateScopeCustomSummary: (value) => `Specific pages: ${value}`,
+    generationDetailsLabel: "Generation status",
+    generationDetailsGenerated: "Generated",
+    generationDetailsPending: "Pending",
+    generationDetailsRunning: "Running",
+    generationDetailsFailed: "Failed",
+    generationDetailsCurrent: "Current",
+    generationStatusDone: "Generated",
+    generationStatusRunning: "Generating",
+    generationStatusPending: "Pending",
+    generationStatusFailed: "Failed",
   },
   rail: {
     searchPlaceholder: "Search courses / documents",

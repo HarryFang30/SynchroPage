@@ -20,7 +20,6 @@ export type UiPreferences = {
   pdfContextFullPageLimit: number;
   pdfContextEdgePageCount: number;
   scrollbarStyle: ScrollbarStyle;
-  showPageSummaryHint: boolean;
   debugMode: boolean;
 };
 
@@ -40,7 +39,6 @@ export const defaultUiPreferences: UiPreferences = {
   pdfContextFullPageLimit: 50,
   pdfContextEdgePageCount: 10,
   scrollbarStyle: "thin",
-  showPageSummaryHint: true,
   debugMode: false,
 };
 

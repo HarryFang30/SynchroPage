@@ -240,12 +240,6 @@ export function SettingsModal(props: SettingsModalProps) {
                       ]}
                     />
                   </SettingsRow>
-                  <SettingsRow label={copy.settings.pdf.summaryHintLabel} description={copy.settings.pdf.summaryHintDescription}>
-                    <SettingsSwitch
-                      checked={props.preferences.showPageSummaryHint}
-                      onCheckedChange={(checked) => props.onPreferenceChange("showPageSummaryHint", checked)}
-                    />
-                  </SettingsRow>
                 </SettingsGroup>
               )}
 
