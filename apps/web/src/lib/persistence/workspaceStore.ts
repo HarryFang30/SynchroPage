@@ -1,9 +1,9 @@
-import { ExportedMessageRepository, type ThreadMessageLike } from "@assistant-ui/react";
 import { PersistenceError } from "./autosave";
 import { pagePairDb } from "./db";
 import {
   lastWorkspaceStorageKey,
   persistenceSchemaVersion,
+  type ChatMessageRole,
   type ChatMessageRecord,
   type ChatMessageStatus,
   type ChatThreadRecord,
@@ -47,6 +47,22 @@ type LayoutPatch = PersistedJson & {
   contexts?: unknown[];
   attachments?: unknown[];
   activeProjectId?: string;
+};
+
+export type ThreadMessageLike = {
+  id: string;
+  role: ChatMessageRole;
+  content: string;
+  createdAt?: Date;
+  status?: unknown;
+  metadata?: {
+    custom?: {
+      selectedContext?: PersistedJson | null;
+      sourceRefs?: PersistedJson[];
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
 };
 
 const defaultCourseProjectName = "默认课程";
@@ -1400,10 +1416,6 @@ export function chatMessageToThreadMessageLike(message: ChatMessageRecord): Thre
       },
     },
   };
-}
-
-export function threadMessagesToRepository(messages: ChatMessageRecord[]) {
-  return ExportedMessageRepository.fromArray(messages.map(chatMessageToThreadMessageLike));
 }
 
 async function hashBlob(blob: Blob) {

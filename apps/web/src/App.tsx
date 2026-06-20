@@ -1,32 +1,4 @@
 import {
-  ActionBarPrimitive,
-  AssistantRuntimeProvider,
-  BranchPickerPrimitive,
-  ComposerPrimitive,
-  ErrorPrimitive,
-  MessagePrimitive,
-  ThreadPrimitive,
-  type ChatModelAdapter,
-  type ChatModelRunOptions,
-  type ThreadAssistantMessagePart,
-  type ThreadMessageLike,
-  useAuiState,
-  useLocalRuntime,
-  useThreadRuntime,
-} from "@assistant-ui/react";
-import {
-  normalizeMathDelimiters,
-} from "@assistant-ui/react-markdown";
-import "katex/dist/katex.min.css";
-import {
-  PDFWorker,
-  TextLayer,
-  getDocument,
-  type PDFDocumentProxy,
-  type RenderTask,
-} from "pdfjs-dist";
-import PdfJsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
-import {
   Archive,
   Check,
   BookOpen,
@@ -59,11 +31,13 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import rehypeKatex from "rehype-katex";
+import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import {
   type ChangeEvent,
+  type ComponentType,
   createContext,
   forwardRef,
+  lazy,
   type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -75,11 +49,9 @@ import {
   useMemo,
   useRef,
   useState,
+  Suspense,
 } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
 import { getAppCopy, type AppCopy } from "./i18n";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import {
@@ -133,12 +105,102 @@ import {
   type SaveStatusKind,
   type StorageEstimate,
   type StorageRepairResult,
+  type ThreadMessageLike,
 } from "./lib/persistence";
 
 const AppCopyContext = createContext<AppCopy>(getAppCopy("zh-CN"));
+type ThreadAssistantMessagePart = { type: "text"; text: string };
+type ChatModelMessage = {
+  id?: string;
+  role: string;
+  content?: unknown[];
+  createdAt?: Date;
+};
+type ChatModelRunOptions = {
+  messages: ChatModelMessage[];
+  unstable_assistantMessageId?: string;
+  abortSignal: AbortSignal;
+};
+type ChatModelAdapter = {
+  run(options: ChatModelRunOptions): AsyncGenerator<{
+    content: ThreadAssistantMessagePart[];
+    status: unknown;
+  }>;
+};
+type AssistantPrimitiveGroup = Record<string, ComponentType<any>>;
+type AssistantThreadRuntime = {
+  append: (message: unknown) => void;
+  composer: {
+    reset: () => void | Promise<void>;
+    setQuote: (quote?: { text: string; messageId: string }) => void;
+    setText: (text: string) => void;
+    send: () => void;
+  };
+};
+type AssistantUiRuntime = {
+  AssistantRuntimeProvider: ComponentType<{ runtime: unknown; children?: ReactNode }>;
+  ThreadPrimitive: AssistantPrimitiveGroup;
+  MessagePrimitive: AssistantPrimitiveGroup;
+  ActionBarPrimitive: AssistantPrimitiveGroup;
+  BranchPickerPrimitive: AssistantPrimitiveGroup;
+  ErrorPrimitive: AssistantPrimitiveGroup;
+  ComposerPrimitive: AssistantPrimitiveGroup;
+  useLocalRuntime: (adapter: ChatModelAdapter, options: { initialMessages: ThreadMessageLike[] }) => {
+    thread: {
+      reset: () => void;
+      composer: { reset: () => void | Promise<void> };
+    };
+  };
+  useThreadRuntime: () => AssistantThreadRuntime;
+  useAuiState: <T>(selector: (state: {
+    message: {
+      role: string;
+      status?: { type?: string; reason?: string };
+      content: unknown[];
+    };
+    part: { type?: string; text?: string };
+  }) => T) => T;
+};
+const AssistantUiContext = createContext<AssistantUiRuntime | null>(null);
+const MarkdownRenderer = lazy(() => import("./components/MarkdownRenderer"));
+let assistantUiRuntimePromise: Promise<AssistantUiRuntime> | null = null;
+let pdfJsRuntimePromise: Promise<typeof import("./lib/pdf/pdfjs")> | null = null;
 
 function useAppCopy() {
   return useContext(AppCopyContext);
+}
+
+function useAssistantUi() {
+  const runtime = useContext(AssistantUiContext);
+  if (!runtime) throw new Error("assistant-ui runtime is not loaded");
+  return runtime;
+}
+
+function loadAssistantUiRuntime() {
+  assistantUiRuntimePromise ??= import("./lib/assistant/assistantUiRuntime") as unknown as Promise<AssistantUiRuntime>;
+  return assistantUiRuntimePromise;
+}
+
+function useAssistantUiRuntime(shouldLoad: boolean) {
+  const [runtime, setRuntime] = useState<AssistantUiRuntime | null>(null);
+
+  useEffect(() => {
+    if (!shouldLoad || runtime) return undefined;
+    let cancelled = false;
+    void loadAssistantUiRuntime().then((loadedRuntime) => {
+      if (!cancelled) setRuntime(loadedRuntime);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [runtime, shouldLoad]);
+
+  return runtime;
+}
+
+function loadPdfJsRuntime() {
+  pdfJsRuntimePromise ??= import("./lib/pdf/pdfjs");
+  return pdfJsRuntimePromise;
 }
 
 type PagePack = {
@@ -1190,152 +1252,6 @@ function composerContextPreview(contexts: AgentContextItem[], attachments: Agent
     return `${copy.agent.imagePreview(compactText(first.name, 28))}${extra}`;
   }
   return "";
-}
-
-const markdownRemarkPlugins = [
-  remarkGfm,
-  [remarkMath, { singleDollarTextMath: true }],
-] as const;
-const markdownRehypePlugins = [[rehypeKatex, { strict: false, throwOnError: false }]] as const;
-
-function preprocessMathMarkdown(text: string) {
-  return text
-    .split(/(```[\s\S]*?```)/g)
-    .map((segment) => {
-      if (segment.startsWith("```")) return segment;
-      return preprocessMarkdownTextSegment(segment);
-    })
-    .join("");
-}
-
-function preprocessMarkdownTextSegment(text: string) {
-  return text
-    .split(/(`[^`\n]*`)/g)
-    .map((segment) => {
-      if (segment.startsWith("`") && segment.endsWith("`")) return cleanupInlineCodeMathDollars(segment);
-      const normalized = repairBinaryTransitionMathSpillover(normalizeMathDelimiters(escapeCurrencyDollarsPreservingMath(segment)));
-      return normalized
-        .split(/(\$\$[\s\S]*?\$\$|\$(?!\$)(?:\\.|[^$])*\$)/g)
-        .map((part) => {
-          if (part.startsWith("$")) return sanitizeMathMarkdownSegment(part);
-          return wrapBareCircuitMath(part);
-        })
-        .join("");
-    })
-    .join("");
-}
-
-function cleanupInlineCodeMathDollars(segment: string) {
-  return segment.replace(/\$([A-Za-z0-9_{}\\^+\-.]+)\$/g, (_match, token: string) => token.replace(/\\_/g, "_"));
-}
-
-function escapeCurrencyDollarsPreservingMath(text: string) {
-  let output = "";
-  let index = 0;
-  while (index < text.length) {
-    if (text.startsWith("$$", index) && !isEscapedAt(text, index)) {
-      const close = findNextDoubleDollar(text, index + 2);
-      if (close !== -1) {
-        output += text.slice(index, close + 2);
-        index = close + 2;
-        continue;
-      }
-    }
-
-    if (text[index] === "$" && !isEscapedAt(text, index) && text[index - 1] !== "$" && text[index + 1] !== "$") {
-      const close = findNextSingleDollar(text, index + 1);
-      if (close !== -1) {
-        const body = text.slice(index + 1, close);
-        if (isLikelyInlineMathBody(body)) {
-          output += text.slice(index, close + 1);
-          index = close + 1;
-          continue;
-        }
-      }
-      output += /\d/.test(text[index + 1] || "") ? "\\$" : "$";
-      index += 1;
-      continue;
-    }
-
-    output += text[index];
-    index += 1;
-  }
-  return output;
-}
-
-function isEscapedAt(text: string, index: number) {
-  let slashCount = 0;
-  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
-    slashCount += 1;
-  }
-  return slashCount % 2 === 1;
-}
-
-function findNextSingleDollar(text: string, start: number) {
-  for (let index = start; index < text.length; index += 1) {
-    if (text[index] === "$" && !isEscapedAt(text, index) && text[index - 1] !== "$" && text[index + 1] !== "$") {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function findNextDoubleDollar(text: string, start: number) {
-  for (let index = start; index < text.length - 1; index += 1) {
-    if (text.startsWith("$$", index) && !isEscapedAt(text, index)) return index;
-  }
-  return -1;
-}
-
-function isLikelyInlineMathBody(body: string) {
-  const value = body.trim();
-  if (!value || value.includes("\n")) return false;
-  if (/^\d+(?:[.,]\d+)?$/.test(value)) return true;
-  if (/^[A-Za-z][A-Za-z0-9_{}\\^+\-.]*$/.test(value)) return true;
-  if (/[\\_^=+\-*/<>]|→|≤|≥|≠|≈|[{}]/.test(value)) return true;
-  if (/^[01]{2,}(?:\s*(?:\\to|\\rightarrow|→)\s*[01]{2,})+$/.test(value)) return true;
-  return false;
-}
-
-function repairBinaryTransitionMathSpillover(text: string) {
-  return text.replace(
-    /\$((?:[01]{2,}|\\cdots)(?:\s*(?:\\to|\\rightarrow|→)\s*(?:[01]{2,}|\\cdots))+)(\s*)([。；，、](?=[\u3400-\u9fff]))/g,
-    (_match, expression: string, spacing: string, punctuation: string) => `$${expression}$${spacing}${punctuation}`,
-  );
-}
-
-function sanitizeMathMarkdownSegment(segment: string) {
-  const delimiter = segment.startsWith("$$") ? "$$" : "$";
-  if (!segment.endsWith(delimiter)) return segment;
-  const body = segment.slice(delimiter.length, -delimiter.length);
-  return `${delimiter}${sanitizeKatexBody(body)}${delimiter}`;
-}
-
-function sanitizeKatexBody(body: string) {
-  let normalized = body.replace(/\\(?=\d)/g, "").replace(/\\_/g, "_");
-  const hdlIdentifier = hdlIdentifierMathBody(normalized);
-  if (hdlIdentifier) return hdlIdentifier;
-  if (!/\\(?:text|mathrm|operatorname)\s*\{/.test(normalized)) {
-    normalized = normalized.replace(/([\u3400-\u9fff，。、；：！？、]+)/g, "\\text{$1}");
-  }
-  return normalized;
-}
-
-function hdlIdentifierMathBody(body: string) {
-  const value = body.trim();
-  if (!/^[A-Za-z][A-Za-z0-9]*_[A-Za-z][A-Za-z0-9_]*(?:\^\+)?$/.test(value)) return "";
-  return `\\text{${escapeKatexText(value)}}`;
-}
-
-function escapeKatexText(value: string) {
-  return value.replace(/\\/g, "\\textbackslash{}").replace(/([{}_$%&#])/g, "\\$1");
-}
-
-function wrapBareCircuitMath(text: string) {
-  return text
-    .replace(/^(\s*)([01]{2,}\s*(?:\\rightarrow|→)\s*[01]{2,}(?:\s*(?:\\rightarrow|→)\s*[01]{2,})+)(\s*)$/gm, (_match, lead, expression, tail) => `${lead}$$${sanitizeKatexBody(expression)}$$${tail}`)
-    .replace(/^(\s*)([A-Za-z][A-Za-z0-9]*_\{?[A-Za-z0-9]+\}?(?:\^\+)?\s*=\s*[A-Za-z][A-Za-z0-9]*_\{?[A-Za-z0-9]+\}?(?:\^\+)?)(\s*)$/gm, (_match, lead, expression, tail) => `${lead}$${sanitizeKatexBody(expression)}$${tail}`)
-    .replace(/\b([A-Z][A-Za-z0-9]*_\{?[A-Za-z0-9]+\}?(?:\^\+)?|[A-Z]\^\+)\b/g, (_match, token) => `$${sanitizeKatexBody(token)}$`);
 }
 
 function pageSuggestions(page: PageData, pageAware: boolean, copy: AppCopy) {
@@ -4004,31 +3920,33 @@ export default function App() {
           {panels.notes && panels.agent && <WorkspaceResizeHandle />}
 
           <Panel className="workspace-panel" hidden={!panels.agent} defaultSize={25} minSize={22}>
-            <AgentPanel
-              key={agentRuntimeKey}
-              contexts={contexts}
-              attachments={attachments}
-              selectedContext={selectedContext}
-              initialMessages={persistedMessages}
-              pendingSelectionPrompt={pendingSelectionPrompt}
-              setContexts={setContexts}
-              setAttachments={setAttachments}
-              setSelectedContext={setSelectedContext}
-              clearPendingSelectionPrompt={(id) => {
-                setPendingSelectionPrompt((current) => (current?.id === id ? null : current));
-              }}
-              composerInputRef={composerInputRef}
-              getSnapshot={getSnapshot}
-              getDocumentFile={getDocumentFile}
-              getPack={getPack}
-              getPage={getPage}
-              backendOffline={oauthMode === "offline" || oauthMode === "mock"}
-              oauthMode={oauthMode}
-              showSourcePills={uiPreferences.showSourcePills}
-              pageAwareSuggestions={uiPreferences.pageAwareSuggestions}
-              persistChatMessage={persistChatMessage}
-              onNewConversation={startNewPersistedConversation}
-            />
+            {panels.agent && (
+              <AgentPanel
+                key={agentRuntimeKey}
+                contexts={contexts}
+                attachments={attachments}
+                selectedContext={selectedContext}
+                initialMessages={persistedMessages}
+                pendingSelectionPrompt={pendingSelectionPrompt}
+                setContexts={setContexts}
+                setAttachments={setAttachments}
+                setSelectedContext={setSelectedContext}
+                clearPendingSelectionPrompt={(id) => {
+                  setPendingSelectionPrompt((current) => (current?.id === id ? null : current));
+                }}
+                composerInputRef={composerInputRef}
+                getSnapshot={getSnapshot}
+                getDocumentFile={getDocumentFile}
+                getPack={getPack}
+                getPage={getPage}
+                backendOffline={oauthMode === "offline" || oauthMode === "mock"}
+                oauthMode={oauthMode}
+                showSourcePills={uiPreferences.showSourcePills}
+                pageAwareSuggestions={uiPreferences.pageAwareSuggestions}
+                persistChatMessage={persistChatMessage}
+                onNewConversation={startNewPersistedConversation}
+              />
+            )}
           </Panel>
         </PanelGroup>
       </main>
@@ -4061,7 +3979,7 @@ function WorkspaceResizeHandle() {
   );
 }
 
-function AgentPanel(props: {
+type AgentPanelProps = {
   contexts: AgentContextItem[];
   attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
@@ -4082,8 +4000,36 @@ function AgentPanel(props: {
   pageAwareSuggestions: boolean;
   persistChatMessage?: (input: ChatPersistInput) => Promise<void>;
   onNewConversation: () => void;
-}) {
+};
+
+function AgentPanel(props: AgentPanelProps) {
   const copy = useAppCopy();
+  const assistantUi = useAssistantUiRuntime(true);
+  if (!assistantUi) {
+    return (
+      <aside className="agent-panel">
+        <div className="agent-toolbar">
+          <div className="toolbar-title">
+            <span className="agent-dot" />
+            <span>{copy.common.assistant}</span>
+          </div>
+          <div className="toolbar-actions">
+            <span className="agent-model">{copy.agent.thinking}</span>
+          </div>
+        </div>
+      </aside>
+    );
+  }
+  return (
+    <AssistantUiContext.Provider value={assistantUi}>
+      <AgentPanelLoaded {...props} />
+    </AssistantUiContext.Provider>
+  );
+}
+
+function AgentPanelLoaded(props: AgentPanelProps) {
+  const copy = useAppCopy();
+  const assistantUi = useAssistantUi();
   const adapter = useMemo(
     () =>
       createPdfAgentAdapter({
@@ -4098,7 +4044,8 @@ function AgentPanel(props: {
       }),
     [copy, props.backendOffline, props.getDocumentFile, props.getPage, props.getPack, props.getSnapshot, props.persistChatMessage, props.setSelectedContext],
   );
-  const runtime = useLocalRuntime(adapter, { initialMessages: props.initialMessages });
+  const runtime = assistantUi.useLocalRuntime(adapter, { initialMessages: props.initialMessages });
+  const { AssistantRuntimeProvider } = assistantUi;
   const page = props.getPage();
   const suggestions = pageSuggestions(page, props.pageAwareSuggestions, copy);
   const contextPreview = composerContextPreview(props.contexts, props.attachments, copy);
@@ -4411,12 +4358,16 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
     setPageGeometries({});
     pageElementsRef.current.clear();
     restoredUrlRef.current = "";
-    const pdfWorker = PDFWorker.create({ port: new PdfJsWorker() });
-    const loadingTask = getDocument({ url, worker: pdfWorker });
+    let loadingTask: { promise: Promise<PDFDocumentProxy>; destroy: () => Promise<void> } | null = null;
 
-    loadingTask.promise
+    void loadPdfJsRuntime()
+      .then((pdfJs) => {
+        if (cancelled) return null;
+        loadingTask = pdfJs.getDocument({ url, worker: pdfJs.createPdfWorker() });
+        return loadingTask.promise;
+      })
       .then((document) => {
-        if (cancelled) {
+        if (!document || cancelled) {
           return;
         }
         setPdfDocument(document);
@@ -4488,7 +4439,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
       if (textExtractionTimer !== null) window.clearTimeout(textExtractionTimer);
       if (activePageTimerRef.current) window.clearTimeout(activePageTimerRef.current);
       if (activePageFrameRef.current) window.cancelAnimationFrame(activePageFrameRef.current);
-      void loadingTask.destroy().catch(() => undefined);
+      void loadingTask?.destroy().catch(() => undefined);
     };
   }, [documentId, documentTitle, pdfContextEdgePageCount, pdfContextFullPageLimit, rememberPageGeometry, url]);
 
@@ -4667,11 +4618,13 @@ function PdfPageLayer({
 
     let cancelled = false;
     let renderTask: RenderTask | null = null;
-    let textLayer: TextLayer | null = null;
+    let textLayer: { cancel: () => void; render: () => Promise<void> } | null = null;
     const textLayerElement = textLayerRef.current;
     const canvas = canvasRef.current;
 
     const renderPage = async () => {
+      const pdfJs = await loadPdfJsRuntime();
+      if (cancelled) return;
       setPageStatus("loading");
       setPageError("");
       textLayerElement.replaceChildren();
@@ -4730,7 +4683,7 @@ function PdfPageLayer({
           return;
         }
 
-        textLayer = new TextLayer({
+        textLayer = new pdfJs.TextLayer({
           textContentSource: textContent,
           container: textLayerElement,
           viewport,
@@ -4815,8 +4768,8 @@ function QuickSelectionPromptRunner(props: {
   prompt: QuickSelectionPrompt | null;
   onConsumed: (id: string) => void;
 }) {
-  const copy = useAppCopy();
-  const thread = useThreadRuntime();
+  const assistantUi = useAssistantUi();
+  const thread = assistantUi.useThreadRuntime();
   const consumedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -4904,7 +4857,9 @@ function AssistantThread({
   onPasteImages: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
 }) {
   const copy = useAppCopy();
-  const thread = useThreadRuntime();
+  const assistantUi = useAssistantUi();
+  const { ThreadPrimitive } = assistantUi;
+  const thread = assistantUi.useThreadRuntime();
   const sendSuggestion = useCallback((suggestion: string) => {
     thread.append({
       role: "user",
@@ -4951,17 +4906,19 @@ function AssistantThread({
 }
 
 function AssistantMessage() {
-  const role = useAuiState((state) => state.message.role);
+  const assistantUi = useAssistantUi();
+  const role = assistantUi.useAuiState((state) => state.message.role);
   return role === "user" ? <UserMessage /> : <AgentMessage />;
 }
 
 function UserMessage() {
   const copy = useAppCopy();
+  const { ActionBarPrimitive, MessagePrimitive } = useAssistantUi();
   return (
     <MessagePrimitive.Root className="aui-message user-message">
       <div className="message-bubble user-bubble">
         <MessagePrimitive.Quote>
-          {(quote) => (
+          {(quote: { text: string }) => (
             <div className="message-quote">
               <span>{copy.agent.quoteLabel}</span>
               <p>{compactText(quote.text, 220)}</p>
@@ -4981,8 +4938,15 @@ function UserMessage() {
 
 function AgentMessage() {
   const copy = useAppCopy();
-  const status = useAuiState((state) => state.message.status);
-  const content = useAuiState((state) => state.message.content);
+  const assistantUi = useAssistantUi();
+  const {
+    ActionBarPrimitive,
+    BranchPickerPrimitive,
+    ErrorPrimitive,
+    MessagePrimitive,
+  } = assistantUi;
+  const status = assistantUi.useAuiState((state) => state.message.status);
+  const content = assistantUi.useAuiState((state) => state.message.content);
   const isThinking = status?.type === "running" && content.length === 0;
   const isStopped = status?.type === "incomplete" && status.reason === "cancelled";
 
@@ -5036,7 +5000,9 @@ function AssistantComposer({
   onPasteImages: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
 }) {
   const copy = useAppCopy();
-  const thread = useThreadRuntime();
+  const assistantUi = useAssistantUi();
+  const { ComposerPrimitive } = assistantUi;
+  const thread = assistantUi.useThreadRuntime();
 
   useEffect(() => {
     thread.composer.setQuote(
@@ -5081,9 +5047,10 @@ function AssistantComposer({
 }
 
 function MarkdownPart() {
-  const text = useAuiState((state) => {
+  const assistantUi = useAssistantUi();
+  const text = assistantUi.useAuiState((state) => {
     if (state.part.type !== "text" && state.part.type !== "reasoning") return "";
-    return state.part.text;
+    return state.part.text || "";
   });
 
   return (
@@ -5230,14 +5197,9 @@ function MarkdownBlock({ markdown, concepts }: { markdown: string; concepts: str
 
 function ReaderMarkdown({ className, text }: { className: string; text: string }) {
   return (
-    <div className={className}>
-      <ReactMarkdown
-        remarkPlugins={markdownRemarkPlugins as never}
-        rehypePlugins={markdownRehypePlugins as never}
-      >
-        {preprocessMathMarkdown(text)}
-      </ReactMarkdown>
-    </div>
+    <Suspense fallback={<div className={className}>{text}</div>}>
+      <MarkdownRenderer className={className} text={text} />
+    </Suspense>
   );
 }
 
