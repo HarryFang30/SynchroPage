@@ -207,7 +207,7 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("Target page:", content[2]["text"])
         self.assertIn("page_no: 2", content[2]["text"])
 
-    def test_teaching_generation_fast_model_uses_compact_cache_prefix(self) -> None:
+    def test_teaching_generation_fast_model_uses_compact_prompt_cache(self) -> None:
         payload = _build_teaching_generation_payload(
             {
                 "model": "gpt-5.4-mini",
@@ -239,8 +239,8 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("[p.1] Intro", content[0]["text"])
         self.assertEqual(content[1]["type"], "input_text")
         self.assertIn("Pages JSONL:", content[1]["text"])
-        self.assertNotIn("prompt_cache_key", payload)
-        self.assertNotIn("prompt_cache_retention", payload)
+        self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_1:"))
+        self.assertEqual(payload["prompt_cache_retention"], "24h")
 
     def test_teaching_generation_candidate_bodies_try_fast_model_then_fallback(self) -> None:
         candidates = _teaching_generation_candidate_bodies(
@@ -474,6 +474,32 @@ class WebAppTest(unittest.TestCase):
         )
 
         self.assertIn("BALANCED_VISIBLE", prompt)
+
+    def test_balanced_teaching_model_uses_prompt_cache_fields(self) -> None:
+        payload = _build_teaching_generation_payload(
+            {
+                "model": "gpt-5.4",
+                "qualityPlan": {
+                    "model": "gpt-5.4",
+                    "reasoningEffort": "medium",
+                    "attachPdf": False,
+                    "batchable": True,
+                    "reasons": ["formula"],
+                },
+                "document": {"id": "doc_balanced", "title": "Balanced PDF", "page_count": 1},
+                "documentContext": {
+                    "documentId": "doc_balanced",
+                    "documentTitle": "Balanced PDF",
+                    "pageCount": 1,
+                    "pages": [{"page_no": 1, "title": "Formula", "text_md": "$a+b$"}],
+                },
+                "page": {"page_no": 1, "source": {"text_md": "$a+b$", "pdf_page_ref": "#page=1"}},
+            },
+            default_model="fallback",
+        )
+
+        self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_balanced:"))
+        self.assertEqual(payload["prompt_cache_retention"], "24h")
 
     def test_agent_and_teaching_share_document_cache_prefix(self) -> None:
         body = {

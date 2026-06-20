@@ -1234,7 +1234,7 @@ def _apply_prompt_cache_fields(payload: dict[str, Any], body: Mapping[str, Any],
 
 
 def _supports_prompt_cache(model: str) -> bool:
-    return model.startswith("gpt-5.5")
+    return model.startswith(("gpt-5.5", "gpt-5.4"))
 
 
 def _should_retry_without_prompt_cache(exc: HttpError, payload: Mapping[str, Any]) -> bool:
