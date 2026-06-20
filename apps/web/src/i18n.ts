@@ -275,6 +275,7 @@ export type AppCopy = {
     documents: string;
     courses: string;
     recents: string;
+    settings: string;
     newCourse: string;
     courseDialogTitle: string;
     courseNamePlaceholder: string;
@@ -663,6 +664,7 @@ const zhCN: AppCopy = {
     documents: "文档",
     courses: "课程",
     recents: "最近",
+    settings: "设置",
     newCourse: "新建课程",
     courseDialogTitle: "新建课程",
     courseNamePlaceholder: "课程名称",
@@ -1051,6 +1053,7 @@ const enUS: AppCopy = {
     documents: "Documents",
     courses: "Courses",
     recents: "Recents",
+    settings: "Settings",
     newCourse: "New course",
     courseDialogTitle: "New course",
     courseNamePlaceholder: "Course name",

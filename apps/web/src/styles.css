@@ -1264,23 +1264,29 @@ svg {
 }
 
 .rail-footer button {
-  min-height: 36px;
+  min-height: 40px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 0 8px;
   border-radius: 7px;
 }
 
+.rail-footer svg {
+  width: 17px;
+  height: 17px;
+  color: color-mix(in oklch, var(--text) 72%, var(--muted));
+}
+
 .rail-footer span {
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 560;
 }
 
 .rail-footer small {
-  max-width: 96px;
+  max-width: 110px;
   overflow: hidden;
   color: var(--muted);
   font-size: 10.5px;
