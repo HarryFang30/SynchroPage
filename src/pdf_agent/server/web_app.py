@@ -47,6 +47,11 @@ DOCUMENT_CACHE_PREFIX_VERSION = "pagepair.document-prefix.v2"
 TEACHING_API_CONCURRENCY = 3
 TEACHING_RETRY_DELAYS_SECONDS = (0.5, 1.5, 3.0)
 
+PAGEPAIR_SHARED_INSTRUCTIONS = """You are the model backend for PagePair Reader.
+Use the provided PDF/page context, selected text, formulas, images, and task-specific instructions as primary evidence.
+Preserve LaTeX formulas, cite page numbers when available, and do not invent facts that are not supported by the provided source material.
+Follow the task-specific instructions included in each request, including any required output format."""
+
 AGENT_INSTRUCTIONS = """You are the AI agent panel inside PagePair Reader.
 Use the current PDF/page context, selected text, formulas, and image attachments as primary evidence.
 Answer in the user's language, preserve LaTeX formulas, cite page numbers when available, and keep the response useful for study, review, or editing.
@@ -127,7 +132,7 @@ class AgentChatGateway:
             },
             "account_id": auth.account_id,
             "model": payload.get("model"),
-            "cache": _prompt_cache_metadata(payload),
+            "cache": _prompt_cache_metadata(payload, response_text=text, content_type=content_type),
         }
 
     async def _post_payload_with_cache_fallback(
@@ -187,7 +192,7 @@ class TeachingGenerationGateway:
     async def generate_page(self, body: Mapping[str, Any]) -> dict[str, Any]:
         auth = await build_chatgpt_codex_auth(self.manager, session_id=_string_or_none(body.get("session_id")))
         async with self._api_semaphore:
-            content, payload, document_file_used = await self._generate_content_with_fallback(
+            content, payload, document_file_used, cache_metadata = await self._generate_content_with_fallback(
                 codex_responses_url(base_url=auth.upstream_base_url),
                 body,
                 auth.headers,
@@ -198,7 +203,7 @@ class TeachingGenerationGateway:
             "account_id": auth.account_id,
             "model": payload.get("model"),
             "cache": {
-                **_prompt_cache_metadata(payload),
+                **cache_metadata,
                 "document_file_input": document_file_used,
             },
         }
@@ -208,7 +213,7 @@ class TeachingGenerationGateway:
         url: str,
         body: Mapping[str, Any],
         headers: dict[str, str],
-    ) -> tuple[str, dict[str, Any], bool]:
+    ) -> tuple[str, dict[str, Any], bool, dict[str, Any]]:
         candidate_bodies: list[tuple[Mapping[str, Any], bool]] = [(body, bool(_pdf_file_input(body.get("documentFile"))))]
         if candidate_bodies[0][1]:
             fallback_body = dict(body)
@@ -228,7 +233,12 @@ class TeachingGenerationGateway:
                 content = _extract_gateway_text(text, content_type)
                 if not content:
                     raise HttpError(502, "OpenAI gateway returned an empty generation response", code="empty_gateway_response")
-                return content, payload, document_file_used
+                return (
+                    content,
+                    payload,
+                    document_file_used,
+                    _prompt_cache_metadata(payload, response_text=text, content_type=content_type),
+                )
             except HttpError as exc:
                 last_error = exc
                 if document_file_used and exc.status in {400, 413, 415, 422, 500, 502}:
@@ -494,7 +504,7 @@ def _build_responses_payload(body: Mapping[str, Any], *, default_model: str) -> 
         content.append({"type": "input_image", "image_url": image["data_url"]})
     payload: dict[str, Any] = {
         "model": model,
-        "instructions": AGENT_INSTRUCTIONS,
+        "instructions": PAGEPAIR_SHARED_INSTRUCTIONS,
         "input": [{"role": "user", "content": content}],
         "reasoning": {"effort": _reasoning_effort(body)},
     }
@@ -514,7 +524,7 @@ def _build_teaching_generation_payload(body: Mapping[str, Any], *, default_model
     content.append({"type": "input_text", "text": _build_teaching_generation_prompt(body)})
     payload: dict[str, Any] = {
         "model": model,
-        "instructions": TEACHING_GENERATOR_INSTRUCTIONS,
+        "instructions": PAGEPAIR_SHARED_INSTRUCTIONS,
         "input": [{"role": "user", "content": content}],
         "reasoning": {"effort": _reasoning_effort(body)},
     }
@@ -575,6 +585,9 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
     existing_notes = str(teaching.get("speaker_notes_md") or "").strip()
 
     sections = [
+        "Task-specific instructions:",
+        TEACHING_GENERATOR_INSTRUCTIONS,
+        "",
         "Generate one PagePair teaching page JSON for the given PDF page.",
         "",
         "Output shape:",
@@ -749,15 +762,25 @@ def _without_prompt_cache(payload: Mapping[str, Any]) -> dict[str, Any]:
     return fallback_payload
 
 
-def _prompt_cache_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _prompt_cache_metadata(
+    payload: Mapping[str, Any],
+    *,
+    response_text: str | None = None,
+    content_type: str = "",
+) -> dict[str, Any]:
     prefix = _payload_document_cache_prefix(payload)
-    return {
+    metadata: dict[str, Any] = {
         "prompt_cache_key": payload.get("prompt_cache_key"),
         "prompt_cache_retention": payload.get("prompt_cache_retention"),
         "prefix_hash": _sha256_text(prefix)[:24] if prefix else None,
         "prefix_chars": len(prefix),
         "fallback_without_cache": bool(payload.get("_pagepair_cache_fallback_without_fields")),
     }
+    if response_text is not None:
+        usage = _extract_prompt_cache_usage(response_text, content_type)
+        if usage:
+            metadata["usage"] = usage
+    return metadata
 
 
 def _payload_document_cache_prefix(payload: Mapping[str, Any]) -> str:
@@ -1223,6 +1246,8 @@ def _build_agent_interaction_prompt(body: Mapping[str, Any]) -> str:
     answer_mode = _agent_answer_mode(body)
 
     sections = [
+        "# Task-specific instructions",
+        AGENT_INSTRUCTIONS,
         "# User request",
         input_text or "Continue from the provided context.",
         "# Answer mode",
@@ -1626,11 +1651,66 @@ def _extract_gateway_text(text: str, content_type: str) -> str:
     return _extract_response_text(value)
 
 
-def _extract_event_stream_text(text: str) -> str:
-    chunks: list[str] = []
-    completed: Any = None
-    last_event: Any = None
+def _extract_prompt_cache_usage(text: str, content_type: str) -> dict[str, Any]:
+    value: Any = None
+    if "text/event-stream" in content_type or text.lstrip().startswith("event:") or text.lstrip().startswith("data:"):
+        for event in _iter_event_stream_payloads(text):
+            event_type = event.get("type") or event.get("event")
+            if event_type == "response.completed":
+                candidate = event.get("response") or event
+                if _find_response_usage(candidate):
+                    value = candidate
+            elif isinstance(event.get("usage"), Mapping):
+                value = event
+    else:
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            return {}
+    usage = _find_response_usage(value)
+    if not usage:
+        return {}
 
+    input_tokens = _int_value(usage.get("input_tokens") or usage.get("prompt_tokens"), 0)
+    output_tokens = _int_value(usage.get("output_tokens") or usage.get("completion_tokens"), 0)
+    total_tokens = _int_value(usage.get("total_tokens"), 0)
+    details = usage.get("input_tokens_details")
+    if not isinstance(details, Mapping):
+        details = usage.get("prompt_tokens_details")
+    if not isinstance(details, Mapping):
+        details = {}
+    cached_tokens = _int_value(details.get("cached_tokens") or usage.get("cached_input_tokens"), 0)
+
+    metadata: dict[str, Any] = {
+        "cached_tokens": cached_tokens,
+        "cache_hit": cached_tokens > 0,
+    }
+    if input_tokens:
+        metadata["input_tokens"] = input_tokens
+        metadata["cached_ratio"] = round(cached_tokens / input_tokens, 4)
+    if output_tokens:
+        metadata["output_tokens"] = output_tokens
+    if total_tokens:
+        metadata["total_tokens"] = total_tokens
+    return metadata
+
+
+def _find_response_usage(value: Any) -> Mapping[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    usage = value.get("usage")
+    if isinstance(usage, Mapping):
+        return usage
+    response = value.get("response")
+    if isinstance(response, Mapping):
+        found = _find_response_usage(response)
+        if found:
+            return found
+    return None
+
+
+def _iter_event_stream_payloads(text: str) -> list[Mapping[str, Any]]:
+    events: list[Mapping[str, Any]] = []
     for line in text.splitlines():
         if not line.startswith("data:"):
             continue
@@ -1641,6 +1721,17 @@ def _extract_event_stream_text(text: str) -> str:
             event = json.loads(data)
         except json.JSONDecodeError:
             continue
+        if isinstance(event, Mapping):
+            events.append(event)
+    return events
+
+
+def _extract_event_stream_text(text: str) -> str:
+    chunks: list[str] = []
+    completed: Any = None
+    last_event: Any = None
+
+    for event in _iter_event_stream_payloads(text):
         last_event = event
         event_type = event.get("type") or event.get("event")
         if event_type in {"response.output_text.delta", "response.refusal.delta"}:

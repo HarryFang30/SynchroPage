@@ -10,6 +10,7 @@ from pdf_agent.server.web_app import (
     _build_responses_payload,
     _build_teaching_generation_payload,
     _extract_gateway_text,
+    _extract_prompt_cache_usage,
     _parse_generated_page,
     _request_etag_matches,
     _resolve_static_path,
@@ -220,6 +221,9 @@ class WebAppTest(unittest.TestCase):
             teaching_payload["input"][0]["content"][0]["text"],
         )
         self.assertEqual(agent_payload["prompt_cache_key"], teaching_payload["prompt_cache_key"])
+        self.assertEqual(agent_payload["instructions"], teaching_payload["instructions"])
+        self.assertIn("You are the AI agent panel inside PagePair Reader.", agent_payload["input"][0]["content"][1]["text"])
+        self.assertIn("You are the PagePair per-page teaching generator.", teaching_payload["input"][0]["content"][1]["text"])
 
     def test_document_cache_prefix_is_stable_for_page_order(self) -> None:
         base = {
@@ -349,6 +353,26 @@ class WebAppTest(unittest.TestCase):
         )
         self.assertEqual(_extract_gateway_text(stream, "text/event-stream"), "hello world")
 
+    def test_extracts_streaming_prompt_cache_usage(self) -> None:
+        stream = "\n".join(
+            [
+                'data: {"type":"response.output_text.delta","delta":"hello"}',
+                'data: {"type":"response.completed","response":{"usage":{"input_tokens":2048,"output_tokens":12,"total_tokens":2060,"input_tokens_details":{"cached_tokens":1536}}}}',
+                "data: [DONE]",
+            ]
+        )
+        self.assertEqual(
+            _extract_prompt_cache_usage(stream, "text/event-stream"),
+            {
+                "cached_tokens": 1536,
+                "cache_hit": True,
+                "input_tokens": 2048,
+                "cached_ratio": 0.75,
+                "output_tokens": 12,
+                "total_tokens": 2060,
+            },
+        )
+
     def test_extracts_json_response_text(self) -> None:
         text = json.dumps(
             {
@@ -362,6 +386,29 @@ class WebAppTest(unittest.TestCase):
             }
         )
         self.assertEqual(_extract_gateway_text(text, "application/json"), "json reply")
+
+    def test_extracts_json_prompt_cache_usage(self) -> None:
+        text = json.dumps(
+            {
+                "usage": {
+                    "prompt_tokens": 2006,
+                    "completion_tokens": 300,
+                    "total_tokens": 2306,
+                    "prompt_tokens_details": {"cached_tokens": 1920},
+                }
+            }
+        )
+        self.assertEqual(
+            _extract_prompt_cache_usage(text, "application/json"),
+            {
+                "cached_tokens": 1920,
+                "cache_hit": True,
+                "input_tokens": 2006,
+                "cached_ratio": 0.9571,
+                "output_tokens": 300,
+                "total_tokens": 2306,
+            },
+        )
 
     def test_static_path_rejects_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
