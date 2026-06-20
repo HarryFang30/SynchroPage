@@ -74,6 +74,7 @@ import {
   deleteCourseProject,
   deleteWorkspaceDocument,
   estimateStorage,
+  ensureWorkspace,
   exportWorkspace,
   importWorkspace,
   loadCourseProjects,
@@ -3137,15 +3138,20 @@ export default function App() {
 
   const createProjectFromDialog = useCallback(() => {
     const name = courseDraftName.trim();
-    if (!workspaceId || !name) {
+    if (!name) {
       setCourseDialogOpen(false);
       setCourseDraftName("");
       return;
     }
     void persistOperation(async () => {
       await forceSaveSnapshot();
-      const project = await createCourseProject({ workspaceId, name });
-      const loaded = await loadWorkspaceProject(workspaceId, project.id);
+      const workspace = await ensureWorkspace({
+        workspaceId,
+        settingsSnapshot: uiPreferences,
+        layoutState: currentLayoutState(),
+      });
+      const project = await createCourseProject({ workspaceId: workspace.id, name });
+      const loaded = await loadWorkspaceProject(workspace.id, project.id);
       applyLoadedWorkspace(loaded);
       setCourseDialogOpen(false);
       setCourseDraftName("");
@@ -3156,8 +3162,10 @@ export default function App() {
     copy.persistence.failed,
     copy.persistence.saved,
     courseDraftName,
+    currentLayoutState,
     forceSaveSnapshot,
     persistOperation,
+    uiPreferences,
     workspaceId,
   ]);
 
@@ -3709,7 +3717,6 @@ export default function App() {
                         <button
                           type="button"
                           role="menuitem"
-                          disabled={!workspaceId}
                           onClick={() => {
                             setRailActionMenuOpen(false);
                             setCourseDialogOpen(true);

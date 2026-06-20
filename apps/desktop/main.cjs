@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, screen, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -9,6 +9,11 @@ const HOST = "127.0.0.1";
 const DEFAULT_PORT = Number(process.env.PAGEPAIR_DESKTOP_PORT || 8765);
 const PORT_SCAN_LIMIT = Number(process.env.PAGEPAIR_DESKTOP_PORT_SCAN_LIMIT || 20);
 const BACKEND_START_TIMEOUT_MS = Number(process.env.PAGEPAIR_BACKEND_START_TIMEOUT_MS || 30_000);
+const DEFAULT_WINDOW_WIDTH = 1680;
+const DEFAULT_WINDOW_HEIGHT = 920;
+const MIN_WINDOW_WIDTH = 1180;
+const MIN_WINDOW_HEIGHT = 720;
+const WORK_AREA_MARGIN = 24;
 
 let mainWindow = null;
 let backendProcess = null;
@@ -52,11 +57,9 @@ process.on("exit", () => {
 });
 
 function createMainWindow(url) {
+  const bounds = getDefaultWindowBounds();
   const win = new BrowserWindow({
-    width: 1680,
-    height: 980,
-    minWidth: 1280,
-    minHeight: 760,
+    ...bounds,
     title: "PagePair Reader",
     autoHideMenuBar: true,
     backgroundColor: "#f7f4ec",
@@ -85,6 +88,23 @@ function createMainWindow(url) {
 
   void win.loadURL(url);
   return win;
+}
+
+function getDefaultWindowBounds() {
+  const { workArea } = screen.getPrimaryDisplay();
+  const maxWidth = Math.max(960, workArea.width - WORK_AREA_MARGIN * 2);
+  const maxHeight = Math.max(640, workArea.height - WORK_AREA_MARGIN * 2);
+  const width = Math.min(DEFAULT_WINDOW_WIDTH, maxWidth);
+  const height = Math.min(DEFAULT_WINDOW_HEIGHT, maxHeight);
+
+  return {
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: Math.round(workArea.y + (workArea.height - height) / 2),
+    width,
+    height,
+    minWidth: Math.min(MIN_WINDOW_WIDTH, width),
+    minHeight: Math.min(MIN_WINDOW_HEIGHT, height)
+  };
 }
 
 async function ensureBackend(webRoot) {
