@@ -208,6 +208,17 @@ export function SettingsModal(props: SettingsModalProps) {
                       onCheckedChange={(checked) => props.onPreferenceChange("pageAwareSuggestions", checked)}
                     />
                   </SettingsRow>
+                  <SettingsRow label={copy.settings.agent.explanationLanguageLabel} description={copy.settings.agent.explanationLanguageDescription}>
+                    <SettingsSelect
+                      value={props.preferences.explanationLanguage}
+                      onChange={(value) => props.onPreferenceChange("explanationLanguage", value as UiPreferences["explanationLanguage"])}
+                      options={[
+                        ["auto", copy.settings.agent.explanationLanguageAuto],
+                        ["zh-CN", copy.settings.agent.explanationLanguageChinese],
+                        ["en-US", copy.settings.agent.explanationLanguageEnglish],
+                      ]}
+                    />
+                  </SettingsRow>
                   <SettingsRow label={copy.settings.agent.pdfContextFullPageLimitLabel} description={copy.settings.agent.pdfContextFullPageLimitDescription}>
                     <SettingsNumberInput
                       value={props.preferences.pdfContextFullPageLimit}

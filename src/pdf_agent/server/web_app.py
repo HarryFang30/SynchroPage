@@ -51,7 +51,7 @@ Answer in the user's language, preserve LaTeX formulas, cite page numbers when a
 TEACHING_GENERATOR_INSTRUCTIONS = """You are the PagePair per-page teaching generator.
 Generate page-aligned study notes for one PDF page at a time.
 Return strict JSON only. Do not wrap JSON in Markdown fences.
-Use the user's language. Preserve formulas in LaTeX using $...$ or $$...$$.
+Use the requested output language from the prompt for all prose. Preserve formulas in LaTeX using $...$ or $$...$$.
 Do not put natural-language Chinese text directly inside math delimiters. Write ranges like $0$ 到 $2^n - 1$, or use $0 \\text{ 到 } 2^n - 1$.
 Never escape digits in LaTeX; write 2^n, not \\2^n.
 Never escape binary strings; write 000, 111, not \\000 or \\111.
@@ -481,6 +481,20 @@ def _build_teaching_generation_payload(body: Mapping[str, Any], *, default_model
     return payload
 
 
+def _teaching_output_language(body: Mapping[str, Any]) -> tuple[str, str]:
+    value = str(body.get("outputLanguage") or "").strip()
+    label = str(body.get("outputLanguageLabel") or "").strip()
+    if value in {"zh-CN", "zh", "zh_CN"}:
+        return "zh-CN", label or "Simplified Chinese"
+    if value in {"en-US", "en", "en_US"}:
+        return "en-US", label or "English"
+
+    ui_language = str(body.get("uiLanguage") or "").strip()
+    if ui_language == "en-US":
+        return "en-US", "English"
+    return "zh-CN", "Simplified Chinese"
+
+
 def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
     page = body.get("page") if isinstance(body.get("page"), Mapping) else {}
@@ -490,6 +504,7 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
     next_page = body.get("nextPage") if isinstance(body.get("nextPage"), Mapping) else {}
     page_no = _int_value(page.get("page_no"), 1)
     page_count = _int_value(body.get("pageCount"), _int_value(document.get("page_count"), 0))
+    output_language_code, output_language_label = _teaching_output_language(body)
     source_text = str(source.get("text_md") or "").strip()
     existing_notes = str(teaching.get("speaker_notes_md") or "").strip()
 
@@ -499,16 +514,24 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
         "Output shape:",
         json.dumps(_teaching_page_output_contract(page_no), ensure_ascii=False, indent=2),
         "",
+        "Output language:",
+        f"code: {output_language_code}",
+        f"name: {output_language_label}",
+        f"- Write every heading, paragraph, bullet, table heading, and explanatory sentence in {output_language_label}.",
+        "- Do not mix Chinese and English prose unless quoting source text or preserving a technical term from the PDF.",
+        "- Keep source code identifiers, Verilog keywords, signal names, module names, and formulas exactly as technical tokens.",
+        "- Set teaching.output_language to the exact language code above.",
+        "",
         "Rules:",
         "- Return JSON only, no Markdown fences and no prose outside JSON.",
         "- Keep page_no exactly equal to the input page number.",
         "- source.text_md must preserve the source page text you received.",
         "- speaker_notes_md must be Markdown suitable for side-by-side learning.",
         "- Use headings, short paragraphs, bullet lists, Markdown tables, and LaTeX math when helpful.",
-        "- For mixed language and math, keep prose outside math delimiters when possible: write $0$ 到 $2^n - 1$, not $0 到 \\2^n-1$.",
+        "- For mixed prose and math, keep prose outside math delimiters when possible: Chinese example $0$ 到 $2^n - 1$; English example $0$ to $2^n - 1$.",
         "- Never escape digits in LaTeX. Use 2^n, not \\2^n.",
         "- Never escape binary strings. Use 000 and 111, not \\000 or \\111.",
-        "- For binary counting sequences, close math before Chinese prose: $000 \\to 001 \\to 010 \\to \\cdots \\to 111 \\to 000$。表中的...",
+        "- For binary counting sequences, close math before prose: $000 \\to 001 \\to 010 \\to \\cdots \\to 111 \\to 000$, then continue in the requested output language.",
         "- If the page contains formulas, explain symbols and intuition in speaker_notes_md and formula_explanations.",
         "- If the page contains table-like content, reconstruct a concise Markdown table when possible.",
         "- If source text is empty or unreadable, do not hallucinate; set needs_parser_fallback=true, needs_review=true, confidence<=0.35.",
@@ -723,6 +746,7 @@ def _teaching_page_output_contract(page_no: int) -> dict[str, Any]:
             "page_type": "title|agenda|concept|example|figure|table|formula|exercise|summary|blank|unknown",
         },
         "teaching": {
+            "output_language": "zh-CN|en-US",
             "slide_title": "short page title",
             "speaker_notes_md": "Markdown teaching notes with LaTeX and Markdown tables when useful",
             "concepts": ["key concept"],
@@ -744,6 +768,7 @@ def _parse_generated_page(content: str, body: Mapping[str, Any]) -> dict[str, An
     page_input = body.get("page") if isinstance(body.get("page"), Mapping) else {}
     source_input = page_input.get("source") if isinstance(page_input.get("source"), Mapping) else {}
     page_no = _int_value(page_input.get("page_no"), 1)
+    output_language_code, _output_language_label = _teaching_output_language(body)
 
     candidate: Any = value
     if isinstance(value, Mapping) and isinstance(value.get("page"), Mapping):
@@ -765,10 +790,16 @@ def _parse_generated_page(content: str, body: Mapping[str, Any]) -> dict[str, An
 
     notes = str(teaching.get("speaker_notes_md") or "").strip()
     if no_text and not notes:
-        notes = (
-            "## 当前页暂无法生成可靠讲解\n\n"
-            "这一页没有可提取的 PDF 文本层。本轮不会编造内容；请后续接入 OCR 或手动补充页面文本后再重新生成。"
-        )
+        if output_language_code == "en-US":
+            notes = (
+                "## This page cannot be explained reliably yet\n\n"
+                "This page has no extractable PDF text layer. PagePair will not invent content; add OCR or page text, then regenerate."
+            )
+        else:
+            notes = (
+                "## 当前页暂无法生成可靠讲解\n\n"
+                "这一页没有可提取的 PDF 文本层。本轮不会编造内容；请后续接入 OCR 或手动补充页面文本后再重新生成。"
+            )
     notes = _normalize_markdown_math(notes)
 
     evidence = teaching.get("evidence")
@@ -785,6 +816,7 @@ def _parse_generated_page(content: str, body: Mapping[str, Any]) -> dict[str, An
             "page_type": _page_type_value(source.get("page_type")),
         },
         "teaching": {
+            "output_language": output_language_code,
             "slide_title": _string_value(teaching.get("slide_title"), f"PDF p.{page_no}"),
             "speaker_notes_md": notes,
             "concepts": _string_list(teaching.get("concepts")),

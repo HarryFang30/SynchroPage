@@ -69,6 +69,11 @@ export type AppCopy = {
       sourcePillsDescription: string;
       pageSuggestionsLabel: string;
       pageSuggestionsDescription: string;
+      explanationLanguageLabel: string;
+      explanationLanguageDescription: string;
+      explanationLanguageAuto: string;
+      explanationLanguageChinese: string;
+      explanationLanguageEnglish: string;
       pdfContextFullPageLimitLabel: string;
       pdfContextFullPageLimitDescription: string;
       pdfContextEdgePageCountLabel: string;
@@ -458,6 +463,11 @@ const zhCN: AppCopy = {
       sourcePillsDescription: "在对话上方显示紧凑来源上下文。",
       pageSuggestionsLabel: "页面感知建议",
       pageSuggestionsDescription: "根据当前页标题和概念生成空状态提示。",
+      explanationLanguageLabel: "讲解输出语言",
+      explanationLanguageDescription: "控制一键生成讲解的标题、正文和表格说明语言。默认跟随界面语言。",
+      explanationLanguageAuto: "跟随界面",
+      explanationLanguageChinese: "中文",
+      explanationLanguageEnglish: "English",
       pdfContextFullPageLimitLabel: "全文上下文页数阈值",
       pdfContextFullPageLimitDescription: "PDF 页数不超过这个值时，发送全部可提取文本给模型。",
       pdfContextEdgePageCountLabel: "长 PDF 前后截取页数",
@@ -847,6 +857,11 @@ const enUS: AppCopy = {
       sourcePillsDescription: "Show compact source context above the conversation.",
       pageSuggestionsLabel: "Page-aware suggestions",
       pageSuggestionsDescription: "Generate empty-state prompts from the current page title and concepts.",
+      explanationLanguageLabel: "Notes output language",
+      explanationLanguageDescription: "Controls the language for generated note headings, prose, and table explanations. Defaults to the interface language.",
+      explanationLanguageAuto: "Follow interface",
+      explanationLanguageChinese: "中文",
+      explanationLanguageEnglish: "English",
       pdfContextFullPageLimitLabel: "Full-context page limit",
       pdfContextFullPageLimitDescription: "When the PDF is at or below this page count, send all extractable page text to the model.",
       pdfContextEdgePageCountLabel: "Long-PDF edge pages",

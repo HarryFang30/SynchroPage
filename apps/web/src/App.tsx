@@ -85,6 +85,9 @@ import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import {
   defaultUiPreferences,
   loadUiPreferences,
+  normalizeExplanationLanguage,
+  normalizeLanguage,
+  type ExplanationLanguage,
   type UiPreferences,
   uiPreferencesStorageKey,
 } from "./settings";
@@ -145,6 +148,8 @@ type PagePack = {
   pages: PageData[];
 };
 
+type TeachingOutputLanguage = Exclude<ExplanationLanguage, "auto">;
+
 type PageData = {
   page_no: number;
   source: {
@@ -155,6 +160,7 @@ type PageData = {
     page_type?: string;
   };
   teaching: {
+    output_language?: TeachingOutputLanguage;
     slide_title: string;
     speaker_notes_md: string;
     concepts: string[];
@@ -342,6 +348,7 @@ const samplePack: PagePack = {
         parser: "docling",
       },
       teaching: {
+        output_language: "zh-CN",
         slide_title: "从讲解 PDF 改为双栏工作台",
         speaker_notes_md:
           "## 从讲解 PDF 改为双栏工作台\n\n这一页建立产品方向：系统不再把讲解重新排成 PDF，而是保留原始 PDF 页面作为左侧参照，在右侧生成可编辑的讲解内容。\n\n### 讲课口径\n\n- 先强调原 PDF 是事实来源，讲解只是对当前页的教学化展开。\n- 再说明 PagePair JSON 会把页号、解析文本、讲解稿和置信度绑定在一起。\n- 最后指出这种格式更适合校对、重跑和版本管理。",
@@ -361,6 +368,7 @@ const samplePack: PagePack = {
         parser: "docling",
       },
       teaching: {
+        output_language: "zh-CN",
         slide_title: "最优技术路径",
         speaker_notes_md:
           "## 最优技术路径\n\n解析层使用 Docling 或 PyMuPDF 生成稳定 Page JSON；生成层通过 OpenAI Gateway 调用 Responses API；展示层读取 lecture_pairpack.v1.json。\n\n### 讲课口径\n\n- 解析和生成分离，避免把整份 PDF 直接塞给模型。\n- OpenAI Gateway 是唯一模型入口，前端只关心任务状态和结果数据。\n- 如果遇到扫描件或公式密集页，再通过 fallback 路由切换 OCR 或专业解析器。",
@@ -380,6 +388,7 @@ const samplePack: PagePack = {
         parser: "docling",
       },
       teaching: {
+        output_language: "zh-CN",
         slide_title: "OAuth 与输出格式",
         speaker_notes_md:
           "## OAuth 与输出格式\n\n浏览器不应直接持有模型 API 凭据。用户通过 OpenAI OAuth 或应用会话进入系统，后端再统一代理模型调用。\n\n### 讲课口径\n\n- OAuth 负责用户身份和授权入口。\n- OpenAI Gateway 负责模型调用、限流、日志和缓存。\n- 最终展示格式是 JSON 加 Markdown 渲染，必要时再导出 Markdown 或 PPTX。",
@@ -411,6 +420,7 @@ const englishSamplePack: PagePack = {
         parser: "docling",
       },
       teaching: {
+        output_language: "en-US",
         slide_title: "From Notes PDF to Split Workspace",
         speaker_notes_md:
           "## From Notes PDF to Split Workspace\n\nThis page sets the product direction: instead of regenerating an explanation PDF, the app keeps the original PDF page as the reference and places editable teaching notes beside it.\n\n### Teaching Line\n\n- Emphasize that the original PDF remains the source of truth, while notes are a teaching-oriented expansion of the current page.\n- Explain that PagePair JSON binds page number, parsed text, notes, and confidence together.\n- Close by pointing out why this format is easier to review, rerun, and version.",
@@ -430,6 +440,7 @@ const englishSamplePack: PagePack = {
         parser: "docling",
       },
       teaching: {
+        output_language: "en-US",
         slide_title: "Recommended Technical Path",
         speaker_notes_md:
           "## Recommended Technical Path\n\nUse Docling or PyMuPDF in the parsing layer to generate stable Page JSON; use OpenAI Gateway and the Responses API in the generation layer; render lecture_pairpack.v1.json in the web layer.\n\n### Teaching Line\n\n- Keep parsing and generation separate instead of sending the full PDF directly to the model.\n- Treat OpenAI Gateway as the only model entry point, while the frontend only tracks task status and result data.\n- For scanned or formula-heavy pages, route through OCR or a specialized parser fallback.",
@@ -449,6 +460,7 @@ const englishSamplePack: PagePack = {
         parser: "docling",
       },
       teaching: {
+        output_language: "en-US",
         slide_title: "OAuth and Output Format",
         speaker_notes_md:
           "## OAuth and Output Format\n\nThe browser should not hold model API credentials directly. The user enters through OpenAI OAuth or an app session, and the backend proxies model calls in one place.\n\n### Teaching Line\n\n- OAuth handles user identity and authorization entry.\n- OpenAI Gateway handles model calls, rate limits, logs, and caching.\n- The final display format is JSON plus Markdown rendering, with optional export to Markdown or PPTX later.",
@@ -466,6 +478,27 @@ const samplePacks: Record<UiPreferences["language"], PagePack> = {
   "zh-CN": samplePack,
   "en-US": englishSamplePack,
 };
+
+function normalizeTeachingOutputLanguage(value: unknown): TeachingOutputLanguage | undefined {
+  return value === "zh-CN" || value === "en-US" ? value : undefined;
+}
+
+function resolveTeachingOutputLanguage(preferences: UiPreferences): TeachingOutputLanguage {
+  return preferences.explanationLanguage === "zh-CN" || preferences.explanationLanguage === "en-US"
+    ? preferences.explanationLanguage
+    : preferences.language;
+}
+
+function teachingOutputLanguageName(language: TeachingOutputLanguage) {
+  return language === "en-US" ? "English" : "Simplified Chinese";
+}
+
+function generationFailureMarkdown(message: string, language: TeachingOutputLanguage) {
+  if (language === "en-US") {
+    return `## Page notes generation failed\n\n${message}`;
+  }
+  return `## 本页讲解生成失败\n\n${message}`;
+}
 
 function createId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -543,6 +576,8 @@ function settingsRecordToPreferences(record: Partial<UiPreferences> | null | und
   const merged = { ...defaultUiPreferences, ...(record || {}) };
   return {
     ...merged,
+    language: normalizeLanguage(merged.language),
+    explanationLanguage: normalizeExplanationLanguage(merged.explanationLanguage),
     pdfContextFullPageLimit: clampPreferenceNumber(merged.pdfContextFullPageLimit, defaultUiPreferences.pdfContextFullPageLimit, 1, 500),
     pdfContextEdgePageCount: clampPreferenceNumber(merged.pdfContextEdgePageCount, defaultUiPreferences.pdfContextEdgePageCount, 1, 100),
   };
@@ -677,6 +712,7 @@ function normalizePack(raw: unknown, copy: AppCopy): PagePack {
           page_type: page.source?.page_type,
         },
         teaching: {
+          output_language: normalizeTeachingOutputLanguage(teaching.output_language),
           slide_title: teaching.slide_title || teaching.title || copy.errors.importedPageTitle(index),
           speaker_notes_md: teaching.speaker_notes_md || teaching.notes || "",
           concepts: Array.isArray(teaching.concepts) ? teaching.concepts : [],
@@ -1725,15 +1761,18 @@ function pageWithSourceText(page: PageData, sourceText: string): PageData {
   };
 }
 
-function hasCompletedTeaching(page: PageData | undefined) {
+function hasCompletedTeaching(page: PageData | undefined, outputLanguage?: TeachingOutputLanguage) {
   if (!page) return false;
-  return page.status !== "failed" && page.status !== "running" && Boolean(page.teaching.speaker_notes_md.trim());
+  if (page.status === "failed" || page.status === "running" || !page.teaching.speaker_notes_md.trim()) return false;
+  return !outputLanguage || page.teaching.output_language === outputLanguage;
 }
 
-function generationPageStatus(page: PageData | undefined): GenerationPageStatus {
-  if (!page || !page.teaching.speaker_notes_md.trim()) return "pending";
+function generationPageStatus(page: PageData | undefined, outputLanguage?: TeachingOutputLanguage): GenerationPageStatus {
+  if (!page) return "pending";
   if (page.status === "running") return "running";
   if (page.status === "failed") return "failed";
+  if (!page.teaching.speaker_notes_md.trim()) return "pending";
+  if (outputLanguage && page.teaching.output_language !== outputLanguage) return "pending";
   return "done";
 }
 
@@ -1805,18 +1844,19 @@ export default function App() {
 
   const pdfNavigationPageCount = Math.max(pdfUrl ? pdfPageCount || pack.document.page_count || pack.pages.length : pack.pages.length, 1);
   const currentPdfPageNo = Math.min(Math.max(currentPageNo, 1), pdfNavigationPageCount);
+  const teachingOutputLanguage = resolveTeachingOutputLanguage(uiPreferences);
   const page =
     pack.pages.find((item) => item.page_no === currentPdfPageNo) ||
     pack.pages[Math.min(Math.max(currentPdfPageNo - 1, 0), Math.max(pack.pages.length - 1, 0))] ||
     samplePacks[uiPreferences.language].pages[0];
   const currentIndex = Math.max(0, pack.pages.findIndex((item) => item.page_no === page.page_no));
-  const generatedPageCount = pack.pages.filter((item) => hasCompletedTeaching(item)).length;
+  const generatedPageCount = pack.pages.filter((item) => hasCompletedTeaching(item, teachingOutputLanguage)).length;
   const generationProgressPages = Array.from({ length: pdfNavigationPageCount }, (_, index) => {
     const pageNo = index + 1;
     const progressPage = pack.pages.find((item) => item.page_no === pageNo);
     return {
       pageNo,
-      status: generationPageStatus(progressPage),
+      status: generationPageStatus(progressPage, teachingOutputLanguage),
     };
   });
   const generationProgressSummary = generationProgressPages.reduce(
@@ -3032,6 +3072,8 @@ export default function App() {
 
   const handleGenerateNotes = useCallback(() => {
     if (isGeneratingNotes) return;
+    const pageOutputLanguage = teachingOutputLanguage;
+    const pageOutputLanguageLabel = teachingOutputLanguageName(pageOutputLanguage);
     const totalPages = Math.max(pdfPageCount || pack.document.page_count || pack.pages.length || pdfExtractedPages.length, 1);
     if (pdfUrl && pdfExtractedPages.length < totalPages) {
       setJobStatus(copy.status.pdfTextExtracting(pdfExtractedPages.length, totalPages));
@@ -3066,7 +3108,7 @@ export default function App() {
     }
     const targetPageSet = new Set(targetPageNumbers);
     const scopedPages = workingPack.pages.filter((item) => targetPageSet.has(item.page_no));
-    const pagesToGenerate = scopedPages.filter((item) => !hasCompletedTeaching(item));
+    const pagesToGenerate = scopedPages.filter((item) => !hasCompletedTeaching(item, pageOutputLanguage));
     const skippedPages = scopedPages.length - pagesToGenerate.length;
     if (!pagesToGenerate.length) {
       setPack(workingPack);
@@ -3096,7 +3138,11 @@ export default function App() {
             status: "running",
             teaching: {
               ...basePage.teaching,
-              speaker_notes_md: basePage.status === "failed" ? "" : basePage.teaching.speaker_notes_md,
+              output_language: pageOutputLanguage,
+              speaker_notes_md:
+                basePage.status === "failed" || basePage.teaching.output_language !== pageOutputLanguage
+                  ? ""
+                  : basePage.teaching.speaker_notes_md,
             },
           };
           workingPack = mergePageIntoPack(workingPack, runningPage);
@@ -3116,6 +3162,9 @@ export default function App() {
                   document: workingPack.document,
                   documentContext,
                   documentFile,
+                  outputLanguage: pageOutputLanguage,
+                  outputLanguageLabel: pageOutputLanguageLabel,
+                  uiLanguage: uiPreferences.language,
                   page: runningPage,
                   pageCount: totalPages,
                   previousPage: previousPage
@@ -3128,7 +3177,14 @@ export default function App() {
               },
               copy.errors.accountNotFound,
             );
-            const generatedPage = normalizeGeneratedPage(response.page, runningPage, copy);
+            const normalizedGeneratedPage = normalizeGeneratedPage(response.page, runningPage, copy);
+            const generatedPage: PageData = {
+              ...normalizedGeneratedPage,
+              teaching: {
+                ...normalizedGeneratedPage.teaching,
+                output_language: pageOutputLanguage,
+              },
+            };
             workingPack = mergePageIntoPack(workingPack, generatedPage);
             setPack(workingPack);
             completed += 1;
@@ -3155,8 +3211,9 @@ export default function App() {
               status: "failed",
               teaching: {
                 ...runningPage.teaching,
+                output_language: pageOutputLanguage,
                 slide_title: runningPage.teaching.slide_title || `PDF p.${pageNo}`,
-                speaker_notes_md: `## 本页讲解生成失败\n\n${message}`,
+                speaker_notes_md: generationFailureMarkdown(message, pageOutputLanguage),
                 confidence: 0,
                 needs_review: true,
               },
@@ -3205,6 +3262,8 @@ export default function App() {
     pdfPageCount,
     pdfUrl,
     refreshDocumentItems,
+    teachingOutputLanguage,
+    uiPreferences.language,
     workspaceId,
   ]);
 
