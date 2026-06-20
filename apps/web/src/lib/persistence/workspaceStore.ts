@@ -597,6 +597,151 @@ export async function saveDocumentPatch(documentId: string, patch: Partial<Docum
   });
 }
 
+async function deleteDocumentCascade(documentIds: string[]) {
+  if (!documentIds.length) return;
+  const threads = await pagePairDb.chatThreads.where("documentId").anyOf(documentIds).toArray();
+  const threadIds = threads.map((thread) => thread.id);
+  await Promise.all([
+    pagePairDb.documents.bulkDelete(documentIds),
+    pagePairDb.fileBlobs.where("documentId").anyOf(documentIds).delete(),
+    pagePairDb.generatedPages.where("documentId").anyOf(documentIds).delete(),
+    pagePairDb.chatThreads.where("documentId").anyOf(documentIds).delete(),
+    threadIds.length ? pagePairDb.chatMessages.where("threadId").anyOf(threadIds).delete() : Promise.resolve(),
+    pagePairDb.selectedContexts.where("documentId").anyOf(documentIds).delete(),
+  ]);
+}
+
+async function loadWorkspaceAfterNavigationChange(workspaceId: string, preferredProjectId?: string | null) {
+  const workspace = await pagePairDb.workspaces.get(workspaceId);
+  if (!workspace) return null;
+  if (workspace.activeDocumentId) {
+    const activeDocument = await pagePairDb.documents.get(workspace.activeDocumentId);
+    if (activeDocument?.workspaceId === workspaceId) return loadWorkspaceDocument(workspaceId, activeDocument.id);
+  }
+
+  const preferredProject = preferredProjectId ? await pagePairDb.courseProjects.get(preferredProjectId) : null;
+  if (preferredProject?.workspaceId === workspaceId) return loadWorkspaceProject(workspaceId, preferredProject.id);
+  if (workspace.activeProjectId) {
+    const activeProject = await pagePairDb.courseProjects.get(workspace.activeProjectId);
+    if (activeProject?.workspaceId === workspaceId) return loadWorkspaceProject(workspaceId, activeProject.id);
+  }
+  const projects = await loadCourseProjects(workspaceId);
+  if (projects[0]) return loadWorkspaceProject(workspaceId, projects[0].id);
+  const defaultProjectId = await ensureDefaultCourseProject(workspace);
+  return loadWorkspaceProject(workspaceId, defaultProjectId);
+}
+
+export async function deleteWorkspaceDocument(workspaceId: string, documentId: string): Promise<LoadedWorkspace | null> {
+  const [workspace, document] = await Promise.all([
+    pagePairDb.workspaces.get(workspaceId),
+    pagePairDb.documents.get(documentId),
+  ]);
+  if (!workspace) throw new PersistenceError("not_found", "Workspace not found");
+  if (!document || document.workspaceId !== workspaceId) {
+    throw new PersistenceError("not_found", "Document not found");
+  }
+  const now = Date.now();
+  const projectId = document.projectId || workspace.activeProjectId || await ensureDefaultCourseProject(workspace);
+  const project = await pagePairDb.courseProjects.get(projectId);
+
+  await pagePairDb.transaction(
+    "rw",
+    [
+      pagePairDb.workspaces,
+      pagePairDb.courseProjects,
+      pagePairDb.documents,
+      pagePairDb.fileBlobs,
+      pagePairDb.generatedPages,
+      pagePairDb.chatThreads,
+      pagePairDb.chatMessages,
+      pagePairDb.selectedContexts,
+    ],
+    async () => {
+      await deleteDocumentCascade([documentId]);
+      const workspacePatch: Partial<WorkspaceRecord> = {
+        updatedAt: now,
+        lastOpenedAt: now,
+      };
+      if (workspace.activeDocumentId === documentId) {
+        workspacePatch.activeDocumentId = undefined;
+        workspacePatch.activeThreadId = undefined;
+        workspacePatch.currentGeneratedPageIndex = 0;
+        workspacePatch.currentPdfPageNumber = 1;
+      }
+      await pagePairDb.workspaces.update(workspaceId, workspacePatch);
+      await pagePairDb.courseProjects.update(projectId, {
+        activeDocumentId: project?.activeDocumentId === documentId ? undefined : project?.activeDocumentId,
+        updatedAt: now,
+        lastOpenedAt: now,
+      });
+    },
+  );
+
+  return loadWorkspaceAfterNavigationChange(workspaceId, projectId);
+}
+
+export async function deleteCourseProject(workspaceId: string, projectId: string): Promise<LoadedWorkspace | null> {
+  const [workspace, project] = await Promise.all([
+    pagePairDb.workspaces.get(workspaceId),
+    pagePairDb.courseProjects.get(projectId),
+  ]);
+  if (!workspace) throw new PersistenceError("not_found", "Workspace not found");
+  if (!project || project.workspaceId !== workspaceId) {
+    throw new PersistenceError("not_found", "Course project not found");
+  }
+  const now = Date.now();
+  const [documents, projects] = await Promise.all([
+    pagePairDb.documents.where("projectId").equals(projectId).toArray(),
+    pagePairDb.courseProjects.where("workspaceId").equals(workspaceId).toArray(),
+  ]);
+  const documentIds = documents.map((document) => document.id);
+  const deletesActiveProject = workspace.activeProjectId === projectId;
+  const deletesActiveDocument = Boolean(workspace.activeDocumentId && documentIds.includes(workspace.activeDocumentId));
+  const nextProject = projects
+    .filter((item) => item.id !== projectId)
+    .sort((left, right) => (right.lastOpenedAt || right.updatedAt) - (left.lastOpenedAt || left.updatedAt))[0];
+
+  await pagePairDb.transaction(
+    "rw",
+    [
+      pagePairDb.workspaces,
+      pagePairDb.courseProjects,
+      pagePairDb.documents,
+      pagePairDb.fileBlobs,
+      pagePairDb.generatedPages,
+      pagePairDb.chatThreads,
+      pagePairDb.chatMessages,
+      pagePairDb.selectedContexts,
+    ],
+    async () => {
+      await deleteDocumentCascade(documentIds);
+      await pagePairDb.courseProjects.delete(projectId);
+      await pagePairDb.workspaces.update(workspaceId, {
+        activeProjectId: deletesActiveProject ? nextProject?.id : workspace.activeProjectId,
+        activeDocumentId: deletesActiveDocument ? undefined : workspace.activeDocumentId,
+        activeThreadId: deletesActiveDocument ? undefined : workspace.activeThreadId,
+        currentGeneratedPageIndex: deletesActiveDocument ? 0 : workspace.currentGeneratedPageIndex,
+        currentPdfPageNumber: deletesActiveDocument ? 1 : workspace.currentPdfPageNumber,
+        updatedAt: now,
+        lastOpenedAt: now,
+      });
+      if (deletesActiveProject && nextProject) {
+        await pagePairDb.courseProjects.update(nextProject.id, {
+          activeDocumentId: undefined,
+          updatedAt: now,
+          lastOpenedAt: now,
+        });
+      }
+    },
+  );
+
+  const nextWorkspace = await pagePairDb.workspaces.get(workspaceId);
+  if (!nextWorkspace) return null;
+  if (!deletesActiveProject) return loadWorkspaceAfterNavigationChange(workspaceId, workspace.activeProjectId);
+  const nextProjectId = nextProject?.id || await ensureDefaultCourseProject(nextWorkspace);
+  return loadWorkspaceProject(workspaceId, nextProjectId);
+}
+
 export async function saveGeneratedPagesFromPack(input: {
   workspaceId: string;
   documentId: string;

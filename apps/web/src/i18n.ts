@@ -304,6 +304,12 @@ export type AppCopy = {
     archivedToCourse: (documentTitle: string, courseName: string) => string;
     alreadyArchivedToCourse: (documentTitle: string, courseName: string) => string;
     archiveUnavailable: string;
+    deleteDocument: (documentTitle: string) => string;
+    deleteCourse: (courseName: string) => string;
+    confirmDeleteDocument: (documentTitle: string) => string;
+    confirmDeleteCourse: (courseName: string, documentCount: number) => string;
+    documentDeleted: (documentTitle: string) => string;
+    courseDeleted: (courseName: string) => string;
     documentMeta: (pageCount: number, generatedCount: number) => string;
     documentCount: (count: number) => string;
     courseDocumentCount: (count: number) => string;
@@ -705,6 +711,12 @@ const zhCN: AppCopy = {
     archivedToCourse: (documentTitle, courseName) => `已将「${documentTitle}」归档到 ${courseName}`,
     alreadyArchivedToCourse: (documentTitle, courseName) => `「${documentTitle}」已在 ${courseName}`,
     archiveUnavailable: "请先选择一个课程",
+    deleteDocument: (documentTitle) => `删除文档「${documentTitle}」`,
+    deleteCourse: (courseName) => `删除课程「${courseName}」`,
+    confirmDeleteDocument: (documentTitle) => `删除文档「${documentTitle}」？这会同时删除本地 PDF、讲解、对话和选区上下文。`,
+    confirmDeleteCourse: (courseName, documentCount) => `删除课程「${courseName}」？其中 ${documentCount} 个文档及其讲解、对话都会被删除。`,
+    documentDeleted: (documentTitle) => `已删除「${documentTitle}」`,
+    courseDeleted: (courseName) => `已删除课程「${courseName}」`,
     documentCount: (count) => `${count} 个文档`,
     courseDocumentCount: (count) => `${count} 个文档`,
     documentMeta: (pageCount, generatedCount) => `${pageCount} 页 · ${generatedCount} 页讲解`,
@@ -1106,6 +1118,12 @@ const enUS: AppCopy = {
     archivedToCourse: (documentTitle, courseName) => `Archived "${documentTitle}" to ${courseName}`,
     alreadyArchivedToCourse: (documentTitle, courseName) => `"${documentTitle}" is already in ${courseName}`,
     archiveUnavailable: "Select a course first",
+    deleteDocument: (documentTitle) => `Delete "${documentTitle}"`,
+    deleteCourse: (courseName) => `Delete "${courseName}"`,
+    confirmDeleteDocument: (documentTitle) => `Delete "${documentTitle}"? This also removes its local PDF, notes, chat, and selected context.`,
+    confirmDeleteCourse: (courseName, documentCount) => `Delete "${courseName}"? This removes ${documentCount} ${documentCount === 1 ? "document" : "documents"} plus their notes and chats.`,
+    documentDeleted: (documentTitle) => `Deleted "${documentTitle}"`,
+    courseDeleted: (courseName) => `Deleted course "${courseName}"`,
     documentCount: (count) => `${count} ${count === 1 ? "document" : "documents"}`,
     courseDocumentCount: (count) => `${count} ${count === 1 ? "document" : "documents"}`,
     documentMeta: (pageCount, generatedCount) => `${pageCount} ${pageCount === 1 ? "page" : "pages"} · ${generatedCount} generated`,

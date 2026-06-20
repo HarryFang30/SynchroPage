@@ -99,6 +99,8 @@ import {
   classifyPersistenceError,
   createChatThread,
   createCourseProject,
+  deleteCourseProject,
+  deleteWorkspaceDocument,
   estimateStorage,
   exportWorkspace,
   importWorkspace,
@@ -3015,10 +3017,18 @@ export default function App() {
   ]);
 
   const openDocumentFromKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>, nextDocumentId: string) => {
+    if (event.target !== event.currentTarget) return;
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     switchDocument(nextDocumentId);
   }, [switchDocument]);
+
+  const openProjectFromKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>, nextProjectId: string) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    switchProject(nextProjectId);
+  }, [switchProject]);
 
   const archiveDocumentToCurrentProject = useCallback((item: DocumentSidebarItem) => {
     if (!workspaceId || !currentProjectId || !activeProject) {
@@ -3044,6 +3054,46 @@ export default function App() {
     documentId,
     persistOperation,
     refreshDocumentItems,
+    workspaceId,
+  ]);
+
+  const deleteDocumentFromRail = useCallback((item: DocumentSidebarItem) => {
+    if (!workspaceId) return;
+    if (!window.confirm(copy.rail.confirmDeleteDocument(item.title))) return;
+    void persistOperation(async () => {
+      await forceSaveSnapshot();
+      const loaded = await deleteWorkspaceDocument(workspaceId, item.documentId);
+      if (loaded) applyLoadedWorkspace(loaded);
+      return loaded;
+    }, copy.rail.documentDeleted(item.title)).catch((error) => {
+      setJobStatus((error as Error).message || copy.persistence.failed);
+    });
+  }, [
+    applyLoadedWorkspace,
+    copy.persistence.failed,
+    copy.rail,
+    forceSaveSnapshot,
+    persistOperation,
+    workspaceId,
+  ]);
+
+  const deleteProjectFromRail = useCallback((project: CourseProjectRecord) => {
+    if (!workspaceId) return;
+    if (!window.confirm(copy.rail.confirmDeleteCourse(project.name, project.documentCount))) return;
+    void persistOperation(async () => {
+      await forceSaveSnapshot();
+      const loaded = await deleteCourseProject(workspaceId, project.id);
+      if (loaded) applyLoadedWorkspace(loaded);
+      return loaded;
+    }, copy.rail.courseDeleted(project.name)).catch((error) => {
+      setJobStatus((error as Error).message || copy.persistence.failed);
+    });
+  }, [
+    applyLoadedWorkspace,
+    copy.persistence.failed,
+    copy.rail,
+    forceSaveSnapshot,
+    persistOperation,
     workspaceId,
   ]);
 
@@ -3613,16 +3663,35 @@ export default function App() {
                     <small>{sidebarProjects.length}</small>
                   </div>
                   {filteredProjects.map((project) => (
-                    <button
+                    <div
                       className={`course-item ${project.id === currentProjectId ? "active" : ""}`}
                       key={project.id}
-                      type="button"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => switchProject(project.id)}
+                      onKeyDown={(event) => openProjectFromKeyboard(event, project.id)}
                     >
                       <BookOpen />
                       <span>{project.name}</span>
                       <small>{copy.rail.courseDocumentCount(project.documentCount)}</small>
-                    </button>
+                      {workspaceId && (
+                        <span className="rail-row-actions">
+                          <button
+                            className="rail-row-action rail-delete-button"
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              deleteProjectFromRail(project);
+                            }}
+                            title={copy.rail.deleteCourse(project.name)}
+                            aria-label={copy.rail.deleteCourse(project.name)}
+                          >
+                            <Trash2 />
+                          </button>
+                        </span>
+                      )}
+                    </div>
                   ))}
                 </section>
 
@@ -3647,20 +3716,37 @@ export default function App() {
                           <span>{copy.rail.documentMeta(Math.max(item.pageCount || 1, 1), item.generatedPageCount)}</span>
                         </span>
                         <span className={`document-state ${item.status === "missing-file" ? "missing" : ""}`} />
-                        {item.projectId !== currentProjectId && (
-                          <button
-                            className="document-archive-button"
-                            type="button"
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              archiveDocumentToCurrentProject(item);
-                            }}
-                            title={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
-                            aria-label={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
-                          >
-                            <Archive />
-                          </button>
+                        {workspaceId && (
+                          <span className="rail-row-actions">
+                            {item.projectId !== currentProjectId && (
+                              <button
+                                className="rail-row-action document-archive-button"
+                                type="button"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  archiveDocumentToCurrentProject(item);
+                                }}
+                                title={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
+                                aria-label={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
+                              >
+                                <Archive />
+                              </button>
+                            )}
+                            <button
+                              className="rail-row-action rail-delete-button"
+                              type="button"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                deleteDocumentFromRail(item);
+                              }}
+                              title={copy.rail.deleteDocument(item.title)}
+                              aria-label={copy.rail.deleteDocument(item.title)}
+                            >
+                              <Trash2 />
+                            </button>
+                          </span>
                         )}
                       </div>
                     ))}
@@ -3685,20 +3771,37 @@ export default function App() {
                         onKeyDown={(event) => openDocumentFromKeyboard(event, item.documentId)}
                       >
                         <span>{item.title}</span>
-                        {item.projectId !== currentProjectId && (
-                          <button
-                            className="document-archive-button"
-                            type="button"
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              archiveDocumentToCurrentProject(item);
-                            }}
-                            title={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
-                            aria-label={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
-                          >
-                            <Archive />
-                          </button>
+                        {workspaceId && (
+                          <span className="rail-row-actions">
+                            {item.projectId !== currentProjectId && (
+                              <button
+                                className="rail-row-action document-archive-button"
+                                type="button"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  archiveDocumentToCurrentProject(item);
+                                }}
+                                title={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
+                                aria-label={copy.rail.archiveToCourse(activeProject?.name || copy.rail.defaultCourse)}
+                              >
+                                <Archive />
+                              </button>
+                            )}
+                            <button
+                              className="rail-row-action rail-delete-button"
+                              type="button"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                deleteDocumentFromRail(item);
+                              }}
+                              title={copy.rail.deleteDocument(item.title)}
+                              aria-label={copy.rail.deleteDocument(item.title)}
+                            >
+                              <Trash2 />
+                            </button>
+                          </span>
                         )}
                       </div>
                     ))}

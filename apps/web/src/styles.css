@@ -1098,9 +1098,10 @@ svg {
 }
 
 .course-item {
+  position: relative;
   grid-template-columns: 20px minmax(0, 1fr) auto;
   gap: 8px;
-  padding: 0 8px;
+  padding: 0 34px 0 8px;
 }
 
 .course-item svg {
@@ -1156,8 +1157,13 @@ svg {
   align-items: center;
   gap: 6px;
   min-height: 44px;
-  padding: 5px 34px 5px 14px;
+  padding: 5px 64px 5px 14px;
   border-radius: 7px;
+}
+
+.recent-item {
+  position: relative;
+  padding-right: 64px;
 }
 
 .document-copy {
@@ -1207,10 +1213,20 @@ svg {
   background: var(--destructive);
 }
 
-.document-archive-button {
+.rail-row-actions {
   position: absolute;
   right: 6px;
   top: 50%;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: opacity 120ms ease;
+}
+
+.rail-row-action {
   display: grid;
   width: 26px;
   height: 26px;
@@ -1220,28 +1236,32 @@ svg {
   border-radius: 7px;
   background: color-mix(in oklch, var(--secondary) 72%, var(--background));
   color: var(--muted);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-50%);
   transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
 }
 
-.document-archive-button svg {
+.rail-row-action svg {
   width: 15px;
   height: 15px;
 }
 
-.document-item:hover .document-archive-button,
-.document-item:focus-within .document-archive-button,
-.recent-item:hover .document-archive-button,
-.recent-item:focus-within .document-archive-button {
+.course-item:hover .rail-row-actions,
+.course-item:focus-within .rail-row-actions,
+.document-item:hover .rail-row-actions,
+.document-item:focus-within .rail-row-actions,
+.recent-item:hover .rail-row-actions,
+.recent-item:focus-within .rail-row-actions {
   opacity: 1;
   pointer-events: auto;
 }
 
-.document-archive-button:hover {
+.rail-row-action:hover {
   background: color-mix(in oklch, var(--brand) 18%, var(--secondary));
   color: color-mix(in oklch, var(--brand) 72%, var(--text));
+}
+
+.rail-delete-button:hover {
+  background: color-mix(in oklch, var(--destructive) 12%, var(--secondary));
+  color: var(--destructive);
 }
 
 .rail-empty {
