@@ -4199,6 +4199,12 @@ function SelectionToolbar(props: {
 
 type PdfPageRenderStatus = "loading" | "ready" | "empty-text" | "error";
 
+type PdfPageGeometry = {
+  width: number;
+  height: number;
+  rotation: number;
+};
+
 type PdfScrollViewerProps = {
   documentId: string;
   documentTitle: string;
@@ -4242,6 +4248,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [documentError, setDocumentError] = useState("");
   const [renderWindowCenter, setRenderWindowCenter] = useState(pageNumber);
+  const [pageGeometries, setPageGeometries] = useState<Record<number, PdfPageGeometry>>({});
   const onDocumentReadyRef = useRef(onDocumentReady);
   const onPdfContextReadyRef = useRef(onPdfContextReady);
   const onPdfPagesTextReadyRef = useRef(onPdfPagesTextReady);
@@ -4250,16 +4257,36 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
   const pageNumbers = viewMode === "single-page"
     ? [safePageNumber]
     : Array.from({ length: pageCount }, (_, index) => index + 1);
+  const pageGeometryFallback = pageGeometries[safePageNumber] || pageGeometries[1] || Object.values(pageGeometries)[0] || null;
+
+  const updateRenderWindowCenter = useCallback((nextPage: number) => {
+    setRenderWindowCenter((current) => current === nextPage ? current : nextPage);
+  }, []);
+
+  const rememberPageGeometry = useCallback((pageNo: number, geometry: PdfPageGeometry) => {
+    setPageGeometries((current) => {
+      const existing = current[pageNo];
+      if (
+        existing &&
+        Math.abs(existing.width - geometry.width) < 0.5 &&
+        Math.abs(existing.height - geometry.height) < 0.5 &&
+        existing.rotation === geometry.rotation
+      ) {
+        return current;
+      }
+      return { ...current, [pageNo]: geometry };
+    });
+  }, []);
 
   const scheduleActivePage = useCallback((nextPage: number) => {
     if (lastActivePageRef.current === nextPage) return;
     if (activePageTimerRef.current) window.clearTimeout(activePageTimerRef.current);
     activePageTimerRef.current = window.setTimeout(() => {
       lastActivePageRef.current = nextPage;
-      setRenderWindowCenter(nextPage);
+      updateRenderWindowCenter(nextPage);
       onActivePageChange(nextPage);
     }, 130);
-  }, [onActivePageChange]);
+  }, [onActivePageChange, updateRenderWindowCenter]);
 
   const chooseActivePage = useCallback(() => {
     const root = scrollContainerRef.current;
@@ -4284,7 +4311,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
 
     const currentPage = visiblePages.find((entry) => entry.pageNo === lastActivePageRef.current);
     if (currentPage && currentPage.top <= anchorY && currentPage.bottom >= anchorY) {
-      setRenderWindowCenter(currentPage.pageNo);
+      updateRenderWindowCenter(currentPage.pageNo);
       return;
     }
 
@@ -4296,9 +4323,9 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
       if (Math.abs(edgeDelta) > 1) return edgeDelta;
       return left.centerDistance - right.centerDistance;
     });
-    setRenderWindowCenter(candidates[0].pageNo);
+    updateRenderWindowCenter(candidates[0].pageNo);
     scheduleActivePage(candidates[0].pageNo);
-  }, [scheduleActivePage]);
+  }, [scheduleActivePage, updateRenderWindowCenter]);
 
   const requestActivePageFromLayout = useCallback(() => {
     if (activePageFrameRef.current) return;
@@ -4312,7 +4339,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
     const pageNo = Math.min(Math.max(targetPage, 1), Math.max(pageCount, 1));
     const root = scrollContainerRef.current;
     const pageElement = pageElementsRef.current.get(pageNo);
-    setRenderWindowCenter(pageNo);
+    updateRenderWindowCenter(pageNo);
     if (!root || !pageElement) {
       onActivePageChange(pageNo);
       return;
@@ -4321,7 +4348,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
     const pageRect = pageElement.getBoundingClientRect();
     const top = Math.max(0, root.scrollTop + pageRect.top - rootRect.top - 14);
     root.scrollTo({ top, behavior });
-  }, [onActivePageChange, pageCount]);
+  }, [onActivePageChange, pageCount, updateRenderWindowCenter]);
 
   useImperativeHandle(ref, () => ({ scrollToPage }), [scrollToPage]);
 
@@ -4344,6 +4371,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
     let textExtractionTimer: number | null = null;
     setPdfDocument(null);
     setDocumentError("");
+    setPageGeometries({});
     pageElementsRef.current.clear();
     restoredUrlRef.current = "";
     const pdfWorker = PDFWorker.create({ port: new PdfJsWorker() });
@@ -4356,6 +4384,18 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
         }
         setPdfDocument(document);
         onDocumentReadyRef.current(document.numPages);
+        const initialGeometryPage = Math.min(Math.max(pageNumber, 1), document.numPages);
+        void document.getPage(initialGeometryPage)
+          .then((page) => {
+            if (cancelled) return;
+            const viewport = page.getViewport({ scale: 1 });
+            rememberPageGeometry(initialGeometryPage, {
+              width: viewport.width,
+              height: viewport.height,
+              rotation: viewport.rotation,
+            });
+          })
+          .catch(() => undefined);
         textExtractionTimer = window.setTimeout(() => {
           void extractPdfPagesFromDocument(document, {
             shouldCancel: () => cancelled,
@@ -4391,12 +4431,12 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
       if (activePageFrameRef.current) window.cancelAnimationFrame(activePageFrameRef.current);
       void loadingTask.destroy().catch(() => undefined);
     };
-  }, [documentId, documentTitle, pdfContextEdgePageCount, pdfContextFullPageLimit, url]);
+  }, [documentId, documentTitle, pdfContextEdgePageCount, pdfContextFullPageLimit, rememberPageGeometry, url]);
 
   useEffect(() => {
     lastActivePageRef.current = pageNumber;
-    setRenderWindowCenter(pageNumber);
-  }, [pageNumber]);
+    updateRenderWindowCenter(pageNumber);
+  }, [pageNumber, updateRenderWindowCenter]);
 
   useEffect(() => {
     if (!pdfDocument || !scrollContainerRef.current || viewMode !== "continuous") return undefined;
@@ -4485,9 +4525,11 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
                     pdfDocument={pdfDocument}
                     pageNumber={pageNo}
                     viewportWidth={viewportWidth}
+                    geometry={pageGeometries[pageNo] || pageGeometryFallback}
+                    onGeometryReady={rememberPageGeometry}
                   />
                 ) : (
-                  <PdfPagePlaceholder viewportWidth={viewportWidth} />
+                  <PdfPagePlaceholder viewportWidth={viewportWidth} geometry={pageGeometries[pageNo] || pageGeometryFallback} />
                 )}
               </div>
             );
@@ -4498,15 +4540,30 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
   );
 });
 
-function PdfPagePlaceholder({ viewportWidth }: { viewportWidth: number }) {
-  const estimatedWidth = Math.min(Math.max((viewportWidth || 760) - 56, 280), 980);
+function pdfPageDisplayMetrics(viewportWidth: number, geometry: PdfPageGeometry | null | undefined) {
+  const naturalWidth = Math.max(geometry?.width || 612, 1);
+  const naturalHeight = Math.max(geometry?.height || 792, 1);
+  const availableWidth = Math.max((viewportWidth || 760) - 56, 280);
+  const scale = Math.min(2.2, Math.max(0.45, availableWidth / naturalWidth));
+  const width = naturalWidth * scale;
+  const height = naturalHeight * scale;
+  return {
+    width,
+    height,
+    aspectRatio: `${naturalWidth} / ${naturalHeight}`,
+  };
+}
+
+function PdfPagePlaceholder({ viewportWidth, geometry }: { viewportWidth: number; geometry?: PdfPageGeometry | null }) {
+  const displayMetrics = pdfPageDisplayMetrics(viewportWidth, geometry);
   return (
     <div
       className="pdf-page-placeholder"
       aria-hidden="true"
       style={{
-        width: `${estimatedWidth}px`,
-        aspectRatio: "8.5 / 11",
+        width: `${displayMetrics.width}px`,
+        height: `${displayMetrics.height}px`,
+        aspectRatio: displayMetrics.aspectRatio,
       }}
     />
   );
@@ -4516,19 +4573,23 @@ function PdfPageLayer({
   pdfDocument,
   pageNumber,
   viewportWidth,
+  geometry,
+  onGeometryReady,
 }: {
   pdfDocument: PDFDocumentProxy;
   pageNumber: number;
   viewportWidth: number;
+  geometry?: PdfPageGeometry | null;
+  onGeometryReady: (pageNo: number, geometry: PdfPageGeometry) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [pageStatus, setPageStatus] = useState<PdfPageRenderStatus>("loading");
   const [pageError, setPageError] = useState("");
-  const estimatedWidth = Math.min(Math.max((viewportWidth || 760) - 56, 280), 980);
+  const displayMetrics = pdfPageDisplayMetrics(viewportWidth, geometry);
   const [viewportMeta, setViewportMeta] = useState({
-    width: estimatedWidth,
-    height: 0,
+    width: displayMetrics.width,
+    height: displayMetrics.height,
     scale: 1,
     rotation: 0,
     pageNumber,
@@ -4537,9 +4598,10 @@ function PdfPageLayer({
   useEffect(() => {
     setViewportMeta((current) => ({
       ...current,
-      width: current.height ? current.width : estimatedWidth,
+      width: displayMetrics.width,
+      height: displayMetrics.height,
     }));
-  }, [estimatedWidth]);
+  }, [displayMetrics.height, displayMetrics.width]);
 
   useEffect(() => {
     if (!canvasRef.current || !textLayerRef.current) return undefined;
@@ -4560,6 +4622,11 @@ function PdfPageLayer({
       if (cancelled) return;
 
       const baseViewport = pdfPage.getViewport({ scale: 1 });
+      onGeometryReady(safePageNumber, {
+        width: baseViewport.width,
+        height: baseViewport.height,
+        rotation: baseViewport.rotation,
+      });
       const availableWidth = Math.max((viewportWidth || 760) - 56, 280);
       const scale = Math.min(2.2, Math.max(0.45, availableWidth / baseViewport.width));
       const viewport = pdfPage.getViewport({ scale });
@@ -4630,7 +4697,7 @@ function PdfPageLayer({
       textLayer?.cancel();
       textLayerElement.replaceChildren();
     };
-  }, [pageNumber, pdfDocument, viewportWidth]);
+  }, [onGeometryReady, pageNumber, pdfDocument, viewportWidth]);
 
   return (
     <>
@@ -4642,7 +4709,7 @@ function PdfPageLayer({
         style={{
           width: viewportMeta.width ? `${viewportMeta.width}px` : undefined,
           height: viewportMeta.height ? `${viewportMeta.height}px` : undefined,
-          aspectRatio: viewportMeta.height ? undefined : "8.5 / 11",
+          aspectRatio: `${Math.max(viewportMeta.width, 1)} / ${Math.max(viewportMeta.height, 1)}`,
         }}
       >
         <canvas ref={canvasRef} className="pdf-visual-layer" />
