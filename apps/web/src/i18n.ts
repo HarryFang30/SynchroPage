@@ -201,6 +201,10 @@ export type AppCopy = {
     generationPage: (current: number, total: number, pageNo: number) => string;
     generationPageFailed: (pageNo: number, message: string) => string;
     generationDone: (completed: number, total: number, skipped?: number) => string;
+    generationBatchStarted: (documents: number, pages: number) => string;
+    generationBatchDocument: (current: number, total: number, title: string) => string;
+    generationBatchDone: (completed: number, pages: number, documents: number, skipped?: number) => string;
+    generationBatchNoDocuments: string;
     generationAlreadyComplete: (total: number) => string;
     generationScopeAlreadyComplete: (scope: string) => string;
     generationInvalidPageRange: (total: number) => string;
@@ -276,6 +280,8 @@ export type AppCopy = {
     generateScopeCustomDescription: string;
     generateScopeCustomPlaceholder: string;
     generateScopeCustomSummary: (value: string) => string;
+    generateScopeProjectMissing: string;
+    generateScopeProjectMissingDescription: string;
     generationDetailsLabel: string;
     generationDetailsGenerated: string;
     generationDetailsPending: string;
@@ -613,6 +619,10 @@ const zhCN: AppCopy = {
     generationPage: (current, total, pageNo) => `正在生成第 ${pageNo} 页讲解（${current}/${total}）`,
     generationPageFailed: (pageNo, message) => `第 ${pageNo} 页讲解生成失败：${message}`,
     generationDone: (completed, total, skipped = 0) => `讲解生成完成：新生成 ${completed} 页，已跳过 ${skipped} 页，当前 ${total} 页已检查`,
+    generationBatchStarted: (documents, pages) => `开始批量生成 ${documents} 个文件，共 ${pages} 页待检查`,
+    generationBatchDocument: (current, total, title) => `正在生成文件 ${current}/${total}：${title}`,
+    generationBatchDone: (completed, pages, documents, skipped = 0) => `批量生成完成：${documents} 个文件，新生成 ${completed} 页，跳过 ${skipped} 页，共检查 ${pages} 页`,
+    generationBatchNoDocuments: "当前课程没有可批量生成的 PDF 文件",
     generationAlreadyComplete: (total) => `${total} 页讲解已全部生成，无需重复生成`,
     generationScopeAlreadyComplete: (scope) => `选定页码 ${scope} 已全部生成，无需重复生成`,
     generationInvalidPageRange: (total) => `页码范围无效，请输入 1-${total} 之间的页码，例如 1-3, 8`,
@@ -688,6 +698,8 @@ const zhCN: AppCopy = {
     generateScopeCustomDescription: "输入页码或范围",
     generateScopeCustomPlaceholder: "例如 1-3, 8, 10-12",
     generateScopeCustomSummary: (value) => `指定页码：${value}`,
+    generateScopeProjectMissing: "当前课程全部文件",
+    generateScopeProjectMissingDescription: "补齐当前课程中所有 PDF 的未生成页面",
     generationDetailsLabel: "生成情况",
     generationDetailsGenerated: "已生成",
     generationDetailsPending: "待生成",
@@ -1025,6 +1037,10 @@ const enUS: AppCopy = {
     generationPage: (current, total, pageNo) => `Generating notes for page ${pageNo} (${current}/${total})`,
     generationPageFailed: (pageNo, message) => `Page ${pageNo} generation failed: ${message}`,
     generationDone: (completed, total, skipped = 0) => `Generation complete: ${completed} new, ${skipped} skipped, ${total} pages checked`,
+    generationBatchStarted: (documents, pages) => `Batch generation started for ${documents} documents, ${pages} pages to check`,
+    generationBatchDocument: (current, total, title) => `Generating document ${current}/${total}: ${title}`,
+    generationBatchDone: (completed, pages, documents, skipped = 0) => `Batch generation complete: ${documents} documents, ${completed} new pages, ${skipped} skipped, ${pages} pages checked`,
+    generationBatchNoDocuments: "No PDF documents are available for batch generation in this course",
     generationAlreadyComplete: (total) => `All ${total} pages already have notes`,
     generationScopeAlreadyComplete: (scope) => `Selected pages ${scope} already have notes`,
     generationInvalidPageRange: (total) => `Invalid page range. Enter pages from 1-${total}, for example 1-3, 8`,
@@ -1100,6 +1116,8 @@ const enUS: AppCopy = {
     generateScopeCustomDescription: "Enter page numbers or ranges",
     generateScopeCustomPlaceholder: "e.g. 1-3, 8, 10-12",
     generateScopeCustomSummary: (value) => `Specific pages: ${value}`,
+    generateScopeProjectMissing: "All course documents",
+    generateScopeProjectMissingDescription: "Fill missing pages across every PDF in the current course",
     generationDetailsLabel: "Generation status",
     generationDetailsGenerated: "Generated",
     generationDetailsPending: "Pending",

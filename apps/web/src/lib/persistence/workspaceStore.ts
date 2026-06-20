@@ -437,6 +437,28 @@ export async function loadWorkspaceDocument(
   };
 }
 
+export async function loadDocumentGenerationBundle(
+  workspaceId: string,
+  documentId: string,
+) {
+  const document = await pagePairDb.documents.get(documentId);
+  if (!document || document.workspaceId !== workspaceId) {
+    throw new PersistenceError("not_found", "Document not found");
+  }
+  const [pdfBlob, generatedPages] = await Promise.all([
+    document.pdfBlobId ? pagePairDb.fileBlobs.get(document.pdfBlobId) : Promise.resolve(null),
+    pagePairDb.generatedPages
+      .where("documentId")
+      .equals(document.id)
+      .sortBy("generatedPageIndex"),
+  ]);
+  return {
+    document,
+    pdfBlob: pdfBlob || null,
+    generatedPages,
+  };
+}
+
 export async function loadWorkspaceProject(
   workspaceId: string,
   projectId: string,

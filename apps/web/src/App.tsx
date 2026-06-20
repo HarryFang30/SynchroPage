@@ -77,6 +77,7 @@ import {
   ensureWorkspace,
   exportWorkspace,
   importWorkspace,
+  loadDocumentGenerationBundle,
   loadCourseProjects,
   loadLastWorkspace,
   loadWorkspaceDocument,
@@ -310,6 +311,7 @@ type PdfDirectFileInput = {
 type GenerationPageStatus = "done" | "running" | "failed" | "pending";
 type GeneratePageMode = "missing" | "all" | "current" | "custom";
 const TEACHING_GENERATION_CONCURRENCY = 3;
+const TEACHING_DOCUMENT_GENERATION_CONCURRENCY = 1;
 
 type PdfViewMode = "continuous" | "single-page";
 
@@ -1089,6 +1091,10 @@ async function pdfDirectFileInputFromUrl(url: string, filename: string): Promise
   const response = await fetch(url);
   if (!response.ok) throw new Error(`PDF file read failed: HTTP ${response.status}`);
   const blob = await response.blob();
+  return pdfDirectFileInputFromBlob(blob, filename);
+}
+
+async function pdfDirectFileInputFromBlob(blob: Blob, filename: string): Promise<PdfDirectFileInput | null> {
   if (!blob.size) return null;
   const buffer = await blob.arrayBuffer();
   const sha256 = await sha256ArrayBuffer(buffer).catch(() => undefined);
@@ -1099,6 +1105,25 @@ async function pdfDirectFileInputFromUrl(url: string, filename: string): Promise
     sha256,
     fileData: arrayBufferToBase64(buffer),
   };
+}
+
+async function extractPdfPagesFromBlob(blob: Blob, priorityPageNumbers: number[] = []) {
+  const url = URL.createObjectURL(blob);
+  let loadingTask: { promise: Promise<PDFDocumentProxy>; destroy: () => Promise<void> } | null = null;
+  try {
+    const pdfJs = await loadPdfJsRuntime();
+    loadingTask = pdfJs.getDocument({ url, worker: pdfJs.createPdfWorker() });
+    const document = await loadingTask.promise;
+    const pages = await extractPdfPagesFromDocument(document, {
+      priorityPageNumbers,
+      progressBatchSize: 12,
+      delayMs: 20,
+    });
+    return { pageCount: document.numPages, pages };
+  } finally {
+    void loadingTask?.destroy().catch(() => undefined);
+    URL.revokeObjectURL(url);
+  }
 }
 
 async function extractPdfContextFromDocument(
@@ -3411,6 +3436,222 @@ export default function App() {
     workspaceId,
   ]);
 
+  const handleGenerateProjectMissingNotes = useCallback(() => {
+    if (isGeneratingNotes || !workspaceId) return;
+    const projectDocumentItems = documentItems.filter((item) =>
+      item.mimeType === "application/pdf" &&
+      item.status !== "missing-file" &&
+      (!activeProjectId || !item.projectId || item.projectId === activeProjectId),
+    );
+    if (!projectDocumentItems.length) {
+      setJobStatus(copy.status.generationBatchNoDocuments);
+      return;
+    }
+
+    setIsGeneratingNotes(true);
+    setPanels((current) => ({ ...current, notes: true }));
+    setActiveTab("notes");
+    const estimatedPages = projectDocumentItems.reduce((sum, item) => sum + Math.max(item.pageCount || 0, 1), 0);
+    setJobStatus(copy.status.generationBatchStarted(projectDocumentItems.length, estimatedPages));
+
+    void (async () => {
+      let completedTotal = 0;
+      let checkedTotal = 0;
+      let skippedTotal = 0;
+      let processedDocuments = 0;
+      try {
+        await runWithConcurrencyLimit(projectDocumentItems, TEACHING_DOCUMENT_GENERATION_CONCURRENCY, async (item, index) => {
+          processedDocuments += 1;
+          setJobStatus(copy.status.generationBatchDocument(index + 1, projectDocumentItems.length, item.title));
+
+          const bundle = await loadDocumentGenerationBundle(workspaceId, item.documentId);
+          if (!bundle.pdfBlob?.blob) {
+            return;
+          }
+
+          const activeDocumentExtractionReady =
+            item.documentId === documentId &&
+            pdfExtractedPages.length >= Math.max(pdfPageCount || pack.document.page_count || item.pageCount || 0, 1);
+          const extracted = activeDocumentExtractionReady
+            ? {
+                pageCount: Math.max(pdfPageCount || pack.document.page_count || item.pageCount || pdfExtractedPages.length, 1),
+                pages: pdfExtractedPages,
+              }
+            : await extractPdfPagesFromBlob(bundle.pdfBlob.blob, [item.currentPdfPageNumber || 1]);
+          const totalPages = Math.max(extracted.pageCount, bundle.document.pageCount || 0, bundle.generatedPages.length, 1);
+          const sourceTextByPage = new Map<number, string>();
+          for (const page of extracted.pages) {
+            sourceTextByPage.set(page.page_no, page.text_md);
+          }
+
+          const sourcePack = pagePackFromPersistence(bundle.document, bundle.generatedPages, copy);
+          const draftPack = createDraftPagePack(sourcePack.document.title, sourcePack.document.source_pdf_url, totalPages, sourcePack.document.id);
+          const sourcePagesByNumber = new Map(sourcePack.pages.map((page) => [page.page_no, page]));
+          let workingPack: PagePack = {
+            ...sourcePack,
+            document: {
+              ...sourcePack.document,
+              page_count: totalPages,
+            },
+            pages: Array.from({ length: totalPages }, (_, pageIndex) => {
+              const pageNo = pageIndex + 1;
+              const existing = sourcePagesByNumber.get(pageNo) || draftPack.pages[pageIndex];
+              return pageWithSourceText(existing, sourceTextByPage.get(pageNo) || "");
+            }),
+          };
+          const workingPagesByNumber = new Map(workingPack.pages.map((page) => [page.page_no, page]));
+          const pagesToGenerate = workingPack.pages.filter((page) => !hasCompletedTeaching(page, teachingOutputLanguage));
+          const skippedPages = workingPack.pages.length - pagesToGenerate.length;
+          checkedTotal += workingPack.pages.length;
+          skippedTotal += skippedPages;
+          if (!pagesToGenerate.length) {
+            if (item.documentId === documentId) setPack(workingPack);
+            return;
+          }
+
+          const documentFile = await pdfDirectFileInputFromBlob(bundle.pdfBlob.blob, bundle.document.fileName).catch(() => null);
+          const documentContext = fullPdfContextForTeachingGeneration(workingPack, totalPages, extracted.pages);
+          const generationInputPagesByNumber = new Map(workingPagesByNumber);
+          let started = 0;
+          await runWithConcurrencyLimit(pagesToGenerate, TEACHING_GENERATION_CONCURRENCY, async (pageToGenerate) => {
+            const pageNo = pageToGenerate.page_no;
+            const basePage = generationInputPagesByNumber.get(pageNo) || draftPack.pages[pageNo - 1];
+            const runningPage: PageData = {
+              ...basePage,
+              status: "running",
+              teaching: {
+                ...basePage.teaching,
+                output_language: teachingOutputLanguage,
+                speaker_notes_md:
+                  basePage.status === "failed" || basePage.teaching.output_language !== teachingOutputLanguage
+                    ? ""
+                    : basePage.teaching.speaker_notes_md,
+              },
+            };
+            workingPack = mergePageIntoPack(workingPack, runningPage);
+            workingPagesByNumber.set(pageNo, runningPage);
+            if (item.documentId === documentId) setPack(workingPack);
+            started += 1;
+            setJobStatus(`${copy.status.generationBatchDocument(index + 1, projectDocumentItems.length, item.title)} · ${copy.status.generationPage(started, pagesToGenerate.length, pageNo)}`);
+
+            try {
+              const previousPage = generationInputPagesByNumber.get(pageNo - 1);
+              const nextPage = generationInputPagesByNumber.get(pageNo + 1);
+              const response = await requestJson<GeneratedTeachingPageResponse>(
+                "/api/generate/page",
+                {
+                  method: "POST",
+                  body: JSON.stringify({
+                    model: "gpt-5.5",
+                    reasoningEffort: uiPreferences.modelReasoningEffort,
+                    document: workingPack.document,
+                    documentContext,
+                    documentFile,
+                    outputLanguage: teachingOutputLanguage,
+                    outputLanguageLabel: teachingOutputLanguageName(teachingOutputLanguage),
+                    uiLanguage: uiPreferences.language,
+                    page: runningPage,
+                    pageCount: totalPages,
+                    previousPage: previousPage
+                      ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
+                      : null,
+                    nextPage: nextPage
+                      ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
+                      : null,
+                  }),
+                },
+                copy.errors.accountNotFound,
+              );
+              const normalizedGeneratedPage = normalizeGeneratedPage(response.page, runningPage, copy);
+              const generatedPage: PageData = {
+                ...normalizedGeneratedPage,
+                teaching: {
+                  ...normalizedGeneratedPage.teaching,
+                  output_language: teachingOutputLanguage,
+                },
+              };
+              workingPack = mergePageIntoPack(workingPack, generatedPage);
+              workingPagesByNumber.set(pageNo, generatedPage);
+              completedTotal += 1;
+              if (item.documentId === documentId) setPack(workingPack);
+              await saveGeneratedPage({
+                id: `${item.documentId}:page:${generatedPage.page_no}`,
+                workspaceId,
+                documentId: item.documentId,
+                generatedPageIndex: generatedPage.page_no - 1,
+                sourcePdfPageNumber: generatedPage.page_no,
+                title: generatedPage.teaching.slide_title,
+                markdown: generatedPage.teaching.speaker_notes_md,
+                json: asPersistedRecord(generatedPage),
+                confidence: generatedPage.teaching.confidence,
+                status: generatedPage.status === "failed" ? "failed" : "completed",
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              });
+            } catch (error) {
+              const message = (error as Error).message || copy.agent.generationFailed;
+              const failedPage: PageData = {
+                ...runningPage,
+                status: "failed",
+                teaching: {
+                  ...runningPage.teaching,
+                  output_language: teachingOutputLanguage,
+                  slide_title: runningPage.teaching.slide_title || `PDF p.${pageNo}`,
+                  speaker_notes_md: generationFailureMarkdown(message, teachingOutputLanguage),
+                  confidence: 0,
+                  needs_review: true,
+                },
+              };
+              workingPack = mergePageIntoPack(workingPack, failedPage);
+              workingPagesByNumber.set(pageNo, failedPage);
+              if (item.documentId === documentId) setPack(workingPack);
+              setJobStatus(copy.status.generationPageFailed(pageNo, message));
+              await saveGeneratedPage({
+                id: `${item.documentId}:page:${pageNo}`,
+                workspaceId,
+                documentId: item.documentId,
+                generatedPageIndex: pageNo - 1,
+                sourcePdfPageNumber: pageNo,
+                title: failedPage.teaching.slide_title,
+                markdown: failedPage.teaching.speaker_notes_md,
+                json: asPersistedRecord(failedPage),
+                confidence: 0,
+                status: "failed",
+                errorSummary: message,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              });
+            }
+          });
+
+          await saveGeneratedPagesFromPack({ workspaceId, documentId: item.documentId, pack: workingPack });
+          if (item.documentId === documentId) setPack(workingPack);
+        });
+
+        await refreshDocumentItems(workspaceId, documentId, activeProjectId);
+        setJobStatus(copy.status.generationBatchDone(completedTotal, checkedTotal || estimatedPages, processedDocuments, skippedTotal));
+      } catch (error) {
+        setJobStatus((error as Error).message || copy.agent.generationFailed);
+      } finally {
+        setIsGeneratingNotes(false);
+      }
+    })();
+  }, [
+    activeProjectId,
+    copy,
+    documentId,
+    documentItems,
+    isGeneratingNotes,
+    pack.document.page_count,
+    pdfExtractedPages,
+    pdfPageCount,
+    refreshDocumentItems,
+    teachingOutputLanguage,
+    uiPreferences.language,
+    uiPreferences.modelReasoningEffort,
+    workspaceId,
+  ]);
+
   const authText =
     oauthMode === "connected"
       ? copy.auth.gatewayConnected(oauthAccount)
@@ -3620,6 +3861,20 @@ export default function App() {
                     }}
                   />
                 </label>
+                <button
+                  className="generate-scope-option"
+                  type="button"
+                  onClick={() => {
+                    setGenerateMenuOpen(false);
+                    handleGenerateProjectMissingNotes();
+                  }}
+                >
+                  <FileInput />
+                  <span>
+                    <strong>{copy.topbar.generateScopeProjectMissing}</strong>
+                    <small>{copy.topbar.generateScopeProjectMissingDescription}</small>
+                  </span>
+                </button>
               </div>
             ) : null}
           </div>
