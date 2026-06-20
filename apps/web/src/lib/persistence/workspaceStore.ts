@@ -179,7 +179,7 @@ export async function loadCourseProjects(workspaceId: string, activeProjectId?: 
 
   return projects
     .slice()
-    .sort((left, right) => (right.lastOpenedAt || right.updatedAt) - (left.lastOpenedAt || left.updatedAt))
+    .sort((left, right) => (left.createdAt || left.updatedAt || 0) - (right.createdAt || right.updatedAt || 0))
     .map((project) => ({
       ...project,
       documentCount: documentCounts.get(project.id) || 0,
@@ -226,7 +226,7 @@ export async function loadWorkspaceDocuments(
         .filter((document) => document.workspaceId === workspaceId)
     : await pagePairDb.documents.where("workspaceId").equals(workspaceId).toArray();
   const visibleDocuments = documents
-    .sort((left, right) => right.updatedAt - left.updatedAt);
+    .sort((left, right) => (left.uploadedAt || left.updatedAt || 0) - (right.uploadedAt || right.updatedAt || 0));
   const generatedCounts = await loadGeneratedPageCounts(visibleDocuments.map((document) => document.id));
 
   return visibleDocuments.map((document) => ({
