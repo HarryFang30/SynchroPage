@@ -17,6 +17,7 @@
 
 ```text
 apps/
+  desktop/                    Electron macOS app shell，自动启动后端并打开 Reader
   web/                         React + TypeScript PagePair Reader 前端
     src/                       App 组件、assistant-ui adapter、CSS 视觉系统
       lib/persistence/         Dexie/IndexedDB schema、store、migration、import/export、repair
@@ -37,6 +38,7 @@ examples/
   auth/                        OAuth device flow 示例
   openai/                      Responses API 请求示例
 scripts/
+  build-desktop-backend.sh     用 PyInstaller 构建 Electron sidecar 后端
   check.sh                     完整本地校验入口
   run-web.sh                   构建前端并启动本地 Python server
 src/pdf_agent/
@@ -58,6 +60,7 @@ tests/
 
 - Python 3.11 或更新版本。
 - Node.js 20 或更新版本。当前开发机使用 Node `v24.6.0`、npm `11.12.1`。
+- 构建 macOS App 需要 Electron / electron-builder 依赖，以及 PyInstaller。
 - Ruby 可选。`scripts/check.sh` 会在 Ruby 存在时用它校验 YAML 语法。
 - 浏览器需要支持 IndexedDB。建议使用 Chrome / Edge / Safari 当前稳定版。
 - 首次安装前端依赖和真实 OpenAI OAuth / 模型调用需要网络。
@@ -68,6 +71,13 @@ tests/
 
 ```bash
 npm --prefix apps/web install
+```
+
+如果需要构建或运行 macOS 桌面 App，再安装桌面端依赖：
+
+```bash
+npm --prefix apps/desktop install
+python3 -m pip install pyinstaller
 ```
 
 当前 Python 后端只依赖标准库，不强制安装包。直接从源码运行时使用 `PYTHONPATH=src`。
@@ -111,6 +121,124 @@ PYTHONPATH=src python3 -m pdf_agent.server.web_app --port 8765
 
 ```bash
 PYTHONPATH=src python3 -m pdf_agent.web_app --port 8765
+```
+
+## macOS App
+
+桌面端位于 `apps/desktop`。它使用 Electron 作为 macOS 外壳，启动时会：
+
+1. 找到可用端口，默认优先 `127.0.0.1:8765`。
+2. 如果该端口已经是 PagePair 后端，就直接复用。
+3. 否则启动内置 Python sidecar `pagepair-backend`。
+4. 把打包进 App 的 `web-dist` 通过 `--web-root` 传给后端。
+5. 在桌面窗口中打开 `http://127.0.0.1:<port>/`。
+
+本地开发方式：
+
+```bash
+npm --prefix apps/desktop run dev
+```
+
+构建可双击的 `.app`：
+
+```bash
+npm --prefix apps/desktop run pack
+open "apps/desktop/release/mac-arm64/PagePair Reader.app"
+```
+
+`pack` 会依次执行：
+
+```text
+npm --prefix apps/web run build
+scripts/build-desktop-backend.sh
+electron-builder --mac --dir
+```
+
+生成物：
+
+```text
+apps/desktop/release/mac-arm64/PagePair Reader.app
+```
+
+如果要生成 DMG / zip：
+
+```bash
+npm --prefix apps/desktop run dist
+```
+
+默认 `pack` 和 `dist` 会跳过 macOS 自动签名，适合本机使用和测试，避免钥匙串/证书交互卡住构建。正式发布签名包时使用：
+
+```bash
+npm --prefix apps/desktop run dist:signed
+```
+
+### Mac App Store 发布
+
+App Store 发布使用 Electron MAS target，配置在 [apps/desktop/package.json](apps/desktop/package.json) 的 `build.mas` / `build.masDev` 中。
+
+项目已提供：
+
+- [apps/desktop/entitlements/entitlements.mas.plist](apps/desktop/entitlements/entitlements.mas.plist)：MAS 主应用 sandbox entitlements；
+- [apps/desktop/entitlements/entitlements.mas.inherit.plist](apps/desktop/entitlements/entitlements.mas.inherit.plist)：Electron helper / sidecar 继承 entitlements；
+- [apps/desktop/profiles](apps/desktop/profiles)：本机 provisioning profile 放置目录，真实 profile 不进 git；
+- [scripts/check-mas-signing.sh](scripts/check-mas-signing.sh)：构建前检查证书和 provisioning profile。
+
+需要你在 Apple Developer / App Store Connect 中准备：
+
+1. Apple Developer Program 账号。
+2. App Store Connect app 记录。
+3. 显式 App ID / bundle ID：`com.pagepair.reader`。如果要换 bundle ID，需要同步修改 `apps/desktop/package.json` 的 `build.appId`，并重新创建 profiles。
+4. 本机 Keychain 中安装 `Apple Development` 证书，用于 `mas-dev` 本地 sandbox 测试。
+5. 本机 Keychain 中安装 `Apple Distribution` / `3rd Party Mac Developer Application` 证书，用于 App Store 构建。
+6. 本机 Keychain 中安装 Mac App Store installer 证书。electron-builder 当前会查找 legacy 名称 `3rd Party Mac Developer Installer`。
+7. 下载匹配 bundle ID 的 provisioning profiles：
+   - `apps/desktop/profiles/PagePair_Development.provisionprofile`
+   - `apps/desktop/profiles/PagePair_AppStore.provisionprofile`
+
+检查当前机器是否具备 MAS 构建条件：
+
+```bash
+npm --prefix apps/desktop run mas:check -- --dev
+npm --prefix apps/desktop run mas:check -- --dist
+```
+
+构建本地 MAS sandbox 测试版：
+
+```bash
+npm --prefix apps/desktop run mas:dev
+```
+
+构建 App Store 上传包：
+
+```bash
+npm --prefix apps/desktop run mas:dist
+```
+
+成功后会在 `apps/desktop/release/` 下生成 MAS `.pkg`，用 Transporter 上传到 App Store Connect。
+
+如果 profile 不放在默认目录，可以使用环境变量：
+
+```bash
+PAGEPAIR_MAS_DEV_PROFILE=/path/to/dev.provisionprofile npm --prefix apps/desktop run mas:dev
+PAGEPAIR_MAS_PROFILE=/path/to/appstore.provisionprofile npm --prefix apps/desktop run mas:dist
+```
+
+注意：App Store 构建必须启用 Apple App Sandbox。当前 entitlements 开启了本应用需要的最小能力：本地后端 localhost 通信、OpenAI 网络请求、用户选择文件读写、Downloads 导出，以及 Electron 在 MAS 下需要的 JIT 权限。真实提交前需要在一台干净机器上测试 `mas-dev`，确认 PDF 上传、IndexedDB 持久化、OpenAI OAuth、Agent 请求和 Python sidecar 启动都能在 sandbox 下工作。
+
+桌面端日志写入 macOS app logs 目录，例如：
+
+```text
+~/Library/Logs/PagePair Reader/backend.log
+```
+
+可选环境变量：
+
+```text
+PAGEPAIR_DESKTOP_PORT=8765              默认端口
+PAGEPAIR_DESKTOP_PORT_SCAN_LIMIT=20     端口扫描数量
+PAGEPAIR_BACKEND_START_TIMEOUT_MS=30000 后端启动超时
+PAGEPAIR_DESKTOP_DEVTOOLS=1             打开 Electron DevTools
+PAGEPAIR_BACKEND_BINARY=/path/to/bin    使用指定后端 sidecar
 ```
 
 ## 开发模式
@@ -259,7 +387,7 @@ POST   /auth/openai/default
 DELETE /auth/openai/accounts/:account_id
 ```
 
-静态资源优先从 `apps/web/dist` 提供。没有构建产物时会指向 `apps/web`，源码开发请使用 Vite。
+静态资源优先从 `apps/web/dist` 提供。没有构建产物时会指向 `apps/web`，源码开发请使用 Vite。桌面 App 会通过 `--web-root` 明确指定打包进 `.app` 的前端资源目录。
 
 ## 校验
 

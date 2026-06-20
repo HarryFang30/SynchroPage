@@ -1,0 +1,88 @@
+{
+  "name": "pagepair-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "macOS desktop shell for PagePair Reader.",
+  "author": "PagePair",
+  "main": "main.cjs",
+  "scripts": {
+    "build:web": "npm --prefix ../web run build",
+    "build:backend": "../../scripts/build-desktop-backend.sh",
+    "dev": "npm run build:web && electron .",
+    "start": "electron .",
+    "pack": "npm run build:web && npm run build:backend && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir",
+    "dist": "npm run build:web && npm run build:backend && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
+    "dist:signed": "npm run build:web && npm run build:backend && electron-builder --mac",
+    "mas:check": "../../scripts/check-mas-signing.sh",
+    "mas:dev": "npm run mas:check -- --dev && npm run build:web && npm run build:backend && electron-builder --mac mas-dev",
+    "mas:dist": "npm run mas:check -- --dist && npm run build:web && npm run build:backend && electron-builder --mac mas"
+  },
+  "build": {
+    "appId": "com.pagepair.reader",
+    "productName": "PagePair Reader",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web-dist",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "bin",
+        "to": "backend",
+        "filter": [
+          "pagepair-backend*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.education",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "extendInfo": {
+        "NSCameraUsageDescription": "PagePair can attach user-selected images. Camera access is only used if a future capture workflow explicitly requests it.",
+        "NSMicrophoneUsageDescription": "PagePair can support voice input in the agent composer when enabled by the user.",
+        "NSDocumentsFolderUsageDescription": "PagePair reads and writes only documents selected by the user.",
+        "NSDownloadsFolderUsageDescription": "PagePair may export workspace backups to a location selected by the user."
+      }
+    },
+    "mas": {
+      "category": "public.app-category.education",
+      "hardenedRuntime": false,
+      "entitlements": "entitlements/entitlements.mas.plist",
+      "entitlementsInherit": "entitlements/entitlements.mas.inherit.plist",
+      "provisioningProfile": "profiles/PagePair_AppStore.provisionprofile",
+      "binaries": [
+        "Contents/Resources/backend/pagepair-backend"
+      ],
+      "artifactName": "${productName}-${version}-mas.${ext}"
+    },
+    "masDev": {
+      "category": "public.app-category.education",
+      "type": "development",
+      "hardenedRuntime": false,
+      "entitlements": "entitlements/entitlements.mas.plist",
+      "entitlementsInherit": "entitlements/entitlements.mas.inherit.plist",
+      "provisioningProfile": "profiles/PagePair_Development.provisionprofile",
+      "binaries": [
+        "Contents/Resources/backend/pagepair-backend"
+      ],
+      "artifactName": "${productName}-${version}-mas-dev.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3"
+  }
+}

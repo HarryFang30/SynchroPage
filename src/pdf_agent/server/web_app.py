@@ -441,10 +441,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the local PDF Agent web app.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--web-root", type=Path, default=None, help="Directory containing the built web UI.")
     parser.add_argument("--model", default=DEFAULT_AGENT_MODEL)
     args = parser.parse_args(argv)
 
-    server = create_server(args.host, args.port, model=args.model)
+    server = create_server(args.host, args.port, web_root=args.web_root, model=args.model)
     url = f"http://{args.host}:{server.server_address[1]}/"
     print(f"PDF Agent web app: {url}")
     try:

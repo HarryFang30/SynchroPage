@@ -27,7 +27,6 @@ import {
   Settings,
   Settings2,
   Trash2,
-  Upload,
   X,
   Zap,
 } from "lucide-react";
@@ -3427,9 +3426,6 @@ export default function App() {
               {isBrowserFullscreen ? <Minimize2 /> : <Maximize2 />}
             </IconButton>
           </div>
-          <FileButton label={copy.topbar.uploadPdf} accept="application/pdf" onFile={loadPdf}>
-            <Upload />
-          </FileButton>
           <div className="command-menu" ref={commandMenuRef}>
             <button
               className={`mini-button ${commandMenuOpen ? "active" : ""}`}
@@ -3673,9 +3669,6 @@ export default function App() {
                     >
                       <Plus />
                     </button>
-                    <FileButton label={copy.rail.uploadDocument} accept="application/pdf" onFile={loadPdf}>
-                      <Upload />
-                    </FileButton>
                   </div>
                 </div>
                 <div className="search-box">

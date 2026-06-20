@@ -1,0 +1,7 @@
+*.provisionprofile
+*.mobileprovision
+*.cer
+*.p12
+*.keychain
+*.keychain-db
+*.xcarchive
