@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
 import tempfile
 import unittest
@@ -8,18 +10,40 @@ from pathlib import Path
 from pdf_agent.server.web_app import (
     HttpError,
     _build_responses_payload,
+    _build_teaching_generation_prompt,
     _build_teaching_generation_payload,
+    _cache_pdf_file_payload,
     _extract_gateway_text,
     _extract_prompt_cache_usage,
     _parse_generated_page,
+    _parse_generated_pages,
+    _pdf_file_input,
     _request_etag_matches,
+    _retry_after_seconds,
     _resolve_static_path,
     _static_cache_control,
     _static_file_etag,
+    _teaching_generation_candidate_bodies,
+    _transient_retry_delay_seconds,
 )
 
 
 class WebAppTest(unittest.TestCase):
+    def test_retry_after_seconds_accepts_delta_seconds(self) -> None:
+        self.assertEqual(_retry_after_seconds("2.5"), 2.5)
+        self.assertIsNone(_retry_after_seconds("-1"))
+        self.assertIsNone(_retry_after_seconds("not a date"))
+
+    def test_transient_retry_delay_respects_retry_after_and_cap(self) -> None:
+        original_uniform = __import__("pdf_agent.server.web_app", fromlist=["random"]).random.uniform
+        module = __import__("pdf_agent.server.web_app", fromlist=["random"])
+        try:
+            module.random.uniform = lambda _start, _end: 0.0
+            self.assertEqual(_transient_retry_delay_seconds(HttpError(429, "rate limited", retry_after_seconds=2.0), 0), 2.0)
+            self.assertEqual(_transient_retry_delay_seconds(HttpError(429, "rate limited", retry_after_seconds=120.0), 0), 12.0)
+        finally:
+            module.random.uniform = original_uniform
+
     def test_agent_payload_preserves_context_formula_and_image(self) -> None:
         payload = _build_responses_payload(
             {
@@ -183,6 +207,240 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("Target page:", content[2]["text"])
         self.assertIn("page_no: 2", content[2]["text"])
 
+    def test_teaching_generation_fast_model_skips_prompt_cache_fields(self) -> None:
+        payload = _build_teaching_generation_payload(
+            {
+                "model": "gpt-5.4-mini",
+                "qualityPlan": {
+                    "model": "gpt-5.4-mini",
+                    "reasoningEffort": "none",
+                    "attachPdf": False,
+                    "batchable": True,
+                    "reasons": ["text-fast-path"],
+                },
+                "document": {"id": "doc_1", "title": "Fast PDF", "page_count": 2},
+                "documentContext": {
+                    "documentId": "doc_1",
+                    "documentTitle": "Fast PDF",
+                    "pageCount": 2,
+                    "pages": [{"page_no": 1, "title": "Intro", "text_md": "overview"}],
+                },
+                "page": {"page_no": 1, "source": {"text_md": "overview", "pdf_page_ref": "#page=1"}},
+            },
+            default_model="fallback",
+        )
+
+        self.assertEqual(payload["model"], "gpt-5.4-mini")
+        self.assertEqual(payload["reasoning"]["effort"], "none")
+        self.assertIn("Generate PagePair teaching notes", payload["instructions"])
+        self.assertNotIn("Use the provided PDF/page context", payload["instructions"])
+        self.assertNotIn("prompt_cache_key", payload)
+        self.assertNotIn("prompt_cache_retention", payload)
+
+    def test_teaching_generation_candidate_bodies_try_fast_model_then_fallback(self) -> None:
+        candidates = _teaching_generation_candidate_bodies(
+            {
+                "model": "gpt-5.4-mini",
+                "fallbackModel": "gpt-5.5",
+                "documentFile": {"filename": "lecture.pdf", "fileData": "JVBERi0x"},
+                "page": {"page_no": 1},
+            }
+        )
+
+        self.assertEqual(
+            [candidate[0].get("model") for candidate in candidates],
+            ["gpt-5.4-mini", "gpt-5.5", "gpt-5.4-mini", "gpt-5.5"],
+        )
+        self.assertEqual([document_file_used for _body, document_file_used in candidates], [True, True, False, False])
+        self.assertIn("documentFile", candidates[0][0])
+        self.assertNotIn("documentFile", candidates[2][0])
+
+    def test_pdf_file_input_can_subset_to_target_pages(self) -> None:
+        from PyPDF2 import PdfReader, PdfWriter
+
+        writer = PdfWriter()
+        for _ in range(3):
+            writer.add_blank_page(width=72, height=72)
+        pdf_buffer = io.BytesIO()
+        writer.write(pdf_buffer)
+        file_data = base64.b64encode(pdf_buffer.getvalue()).decode("ascii")
+
+        file_input = _pdf_file_input({"filename": "three.pdf", "fileData": file_data}, page_numbers=[2])
+
+        self.assertIsNotNone(file_input)
+        assert file_input is not None
+        subset_reader = PdfReader(io.BytesIO(base64.b64decode(file_input["file_data"])))
+        self.assertEqual(len(subset_reader.pages), 1)
+
+    def test_pdf_file_input_reuses_cached_page_subset(self) -> None:
+        from PyPDF2 import PdfReader, PdfWriter
+
+        writer = PdfWriter()
+        for _ in range(3):
+            writer.add_blank_page(width=72, height=72)
+        pdf_buffer = io.BytesIO()
+        writer.write(pdf_buffer)
+        file_data = base64.b64encode(pdf_buffer.getvalue()).decode("ascii")
+        sha256 = "subset-cache-test"
+
+        first = _pdf_file_input({"filename": "three.pdf", "fileData": file_data, "sha256": sha256}, page_numbers=[2])
+        second = _pdf_file_input({"filename": "three.pdf", "fileData": "not-a-pdf", "sha256": sha256}, page_numbers=[2])
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        assert first is not None and second is not None
+        self.assertEqual(first["file_data"], second["file_data"])
+        subset_reader = PdfReader(io.BytesIO(base64.b64decode(second["file_data"])))
+        self.assertEqual(len(subset_reader.pages), 1)
+
+    def test_teaching_generation_payload_subsets_pdf_file_to_batch_pages(self) -> None:
+        from PyPDF2 import PdfReader, PdfWriter
+
+        writer = PdfWriter()
+        for _ in range(5):
+            writer.add_blank_page(width=72, height=72)
+        pdf_buffer = io.BytesIO()
+        writer.write(pdf_buffer)
+        file_data = base64.b64encode(pdf_buffer.getvalue()).decode("ascii")
+
+        payload = _build_teaching_generation_payload(
+            {
+                "model": "gpt-5.5",
+                "documentFile": {"filename": "five.pdf", "fileData": file_data},
+                "pages": [
+                    {"page_no": 2, "source": {"text_md": "", "pdf_page_ref": "#page=2"}},
+                    {"page_no": 4, "source": {"text_md": "", "pdf_page_ref": "#page=4"}},
+                ],
+            },
+            default_model="fallback",
+        )
+
+        file_part = payload["input"][0]["content"][0]
+        self.assertEqual(file_part["type"], "input_file")
+        subset_reader = PdfReader(io.BytesIO(base64.b64decode(file_part["file_data"])))
+        self.assertEqual(len(subset_reader.pages), 2)
+
+    def test_teaching_generation_payload_can_use_cached_pdf_reference(self) -> None:
+        from PyPDF2 import PdfReader, PdfWriter
+
+        writer = PdfWriter()
+        for _ in range(4):
+            writer.add_blank_page(width=72, height=72)
+        pdf_buffer = io.BytesIO()
+        writer.write(pdf_buffer)
+        file_data = base64.b64encode(pdf_buffer.getvalue()).decode("ascii")
+        cached = _cache_pdf_file_payload({"filename": "cached.pdf", "fileData": file_data})
+
+        payload = _build_teaching_generation_payload(
+            {
+                "model": "gpt-5.5",
+                "documentFile": {"filename": cached["filename"], "sha256": cached["sha256"]},
+                "page": {"page_no": 3, "source": {"text_md": "", "pdf_page_ref": "#page=3"}},
+            },
+            default_model="fallback",
+        )
+
+        file_part = payload["input"][0]["content"][0]
+        self.assertEqual(file_part["type"], "input_file")
+        subset_reader = PdfReader(io.BytesIO(base64.b64decode(file_part["file_data"])))
+        self.assertEqual(len(subset_reader.pages), 1)
+
+    def test_teaching_batch_prompt_uses_single_schema_contract(self) -> None:
+        prompt = _build_teaching_generation_prompt(
+            {
+                "pages": [
+                    {"page_no": 3, "source": {"text_md": "first target text", "pdf_page_ref": "#page=3"}},
+                    {"page_no": 7, "source": {"text_md": "second target text", "pdf_page_ref": "#page=7"}},
+                ],
+                "pageCount": 10,
+            }
+        )
+
+        self.assertIn("Target page numbers:", prompt)
+        self.assertEqual(prompt.count('"page_no":"<target_page_no>"'), 1)
+        self.assertEqual(prompt.count('"speaker_notes_md"'), 1)
+        self.assertNotIn('"concepts"', prompt)
+        self.assertNotIn('"evidence"', prompt)
+        self.assertIn("--- Target page 3 ---", prompt)
+        self.assertIn("--- Target page 7 ---", prompt)
+        self.assertIn("first target text", prompt)
+        self.assertIn("second target text", prompt)
+
+    def test_teaching_prompt_limits_fast_source_text_more_aggressively(self) -> None:
+        long_text = ("A" * 4100) + "AFTER_FAST_LIMIT"
+        prompt = _build_teaching_generation_prompt(
+            {
+                "model": "gpt-5.4-mini",
+                "qualityPlan": {
+                    "model": "gpt-5.4-mini",
+                    "reasoningEffort": "none",
+                    "attachPdf": False,
+                    "batchable": True,
+                    "reasons": ["text-fast-path"],
+                },
+                "document": {"id": "doc_fast", "title": "Fast PDF", "page_count": 1},
+                "page": {"page_no": 1, "source": {"text_md": long_text, "pdf_page_ref": "#page=1"}},
+            }
+        )
+
+        self.assertNotIn("AFTER_FAST_LIMIT", prompt)
+        self.assertNotIn("For binary counting sequences", prompt)
+        self.assertNotIn("Document:", prompt)
+        self.assertNotIn("Generation quality plan:", prompt)
+        self.assertIn("Pages JSONL:", prompt)
+
+    def test_fast_teaching_batch_prompt_uses_compact_jsonl_pages(self) -> None:
+        prompt = _build_teaching_generation_prompt(
+            {
+                "model": "gpt-5.4-mini",
+                "qualityPlan": {
+                    "model": "gpt-5.4-mini",
+                    "reasoningEffort": "low",
+                    "attachPdf": False,
+                    "batchable": True,
+                    "reasons": ["text-fast-path"],
+                },
+                "pages": [
+                    {"page_no": 3, "source": {"text_md": "first target text", "pdf_page_ref": "#page=3"}},
+                    {"page_no": 7, "source": {"text_md": "second target text", "pdf_page_ref": "#page=7"}},
+                ],
+                "pageCount": 10,
+            }
+        )
+
+        self.assertIn("Pages JSONL:", prompt)
+        self.assertIn('"page_no":3', prompt)
+        self.assertIn('"source_text":"first target text"', prompt)
+        self.assertIn('"page_no":7', prompt)
+        self.assertIn('"source_text":"second target text"', prompt)
+        self.assertEqual(prompt.count('"page_no":"<requested_page_no>"'), 1)
+        self.assertEqual(prompt.count('"speaker_notes_md"'), 1)
+        self.assertNotIn('"confidence"', prompt)
+        self.assertNotIn('"needs_review"', prompt)
+        self.assertNotIn('"needs_parser_fallback"', prompt)
+        self.assertNotIn("--- Target page", prompt)
+        self.assertNotIn("Document:", prompt)
+        self.assertNotIn("existing_notes:", prompt)
+
+    def test_teaching_prompt_keeps_more_source_text_for_balanced_pages(self) -> None:
+        long_text = ("A" * 4100) + "BALANCED_VISIBLE"
+        prompt = _build_teaching_generation_prompt(
+            {
+                "model": "gpt-5.4",
+                "qualityPlan": {
+                    "model": "gpt-5.4",
+                    "reasoningEffort": "medium",
+                    "attachPdf": False,
+                    "batchable": True,
+                    "reasons": ["formula"],
+                },
+                "document": {"id": "doc_balanced", "title": "Balanced PDF", "page_count": 1},
+                "page": {"page_no": 1, "source": {"text_md": long_text, "pdf_page_ref": "#page=1"}},
+            }
+        )
+
+        self.assertIn("BALANCED_VISIBLE", prompt)
+
     def test_agent_and_teaching_share_document_cache_prefix(self) -> None:
         body = {
             "model": "gpt-5.5",
@@ -342,6 +600,92 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("$\\frac{a}{b}$", notes)
         self.assertNotIn("\t", notes)
         self.assertNotIn("\f", notes)
+
+    def test_generated_pages_parse_batch_response_by_page_number(self) -> None:
+        content = json.dumps(
+            {
+                "pages": [
+                    {
+                        "page_no": 4,
+                        "source": {"text_md": "second target", "pdf_page_ref": "#page=4"},
+                        "teaching": {
+                            "slide_title": "Second target",
+                            "speaker_notes_md": "Notes for page 4",
+                            "confidence": 0.88,
+                        },
+                    },
+                    {
+                        "page_no": 3,
+                        "source": {"text_md": "first target", "pdf_page_ref": "#page=3"},
+                        "teaching": {
+                            "slide_title": "First target",
+                            "speaker_notes_md": "Notes for page 3",
+                            "confidence": 0.9,
+                        },
+                    },
+                ]
+            }
+        )
+        pages = _parse_generated_pages(
+            content,
+            {
+                "pages": [
+                    {"page_no": 3, "source": {"text_md": "first target", "pdf_page_ref": "#page=3"}},
+                    {"page_no": 4, "source": {"text_md": "second target", "pdf_page_ref": "#page=4"}},
+                ],
+            },
+        )
+
+        self.assertEqual([page["page_no"] for page in pages], [3, 4])
+        self.assertEqual(pages[0]["teaching"]["slide_title"], "First target")
+        self.assertEqual(pages[1]["teaching"]["slide_title"], "Second target")
+
+    def test_generated_page_preserves_input_source_text_when_model_omits_it(self) -> None:
+        page = _parse_generated_page(
+            json.dumps(
+                {
+                    "page_no": 7,
+                    "teaching": {
+                        "slide_title": "No Echo",
+                        "speaker_notes_md": "Concise notes without copying source.",
+                        "confidence": 0.86,
+                    },
+                }
+            ),
+            {
+                "page": {
+                    "page_no": 7,
+                    "source": {"text_md": "original source text that should stay local", "pdf_page_ref": "#page=7"},
+                }
+            },
+        )
+
+        self.assertEqual(page["source"]["text_md"], "original source text that should stay local")
+
+    def test_generated_page_with_pdf_file_does_not_force_parser_fallback_for_empty_text(self) -> None:
+        page = _parse_generated_page(
+            json.dumps(
+                {
+                    "page_no": 4,
+                    "teaching": {
+                        "slide_title": "Visual Page",
+                        "speaker_notes_md": "## Visual Page\n\nExplain the attached PDF page.",
+                        "confidence": 0.82,
+                    },
+                }
+            ),
+            {
+                "documentFile": {"filename": "visual.pdf", "fileData": "JVBERi0x"},
+                "page": {
+                    "page_no": 4,
+                    "source": {"text_md": "", "pdf_page_ref": "#page=4"},
+                },
+            },
+        )
+
+        self.assertFalse(page["teaching"]["needs_parser_fallback"])
+        self.assertFalse(page["teaching"]["needs_review"])
+        self.assertEqual(page["teaching"]["confidence"], 0.82)
 
     def test_extracts_streaming_response_text(self) -> None:
         stream = "\n".join(

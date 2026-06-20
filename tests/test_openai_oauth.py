@@ -219,6 +219,12 @@ class OpenAIOAuthManagerTest(unittest.TestCase):
         self.assertNotIn("top_p", payload)
         self.assertNotIn("max_output_tokens", payload)
 
+        generation_payload = build_codex_responses_payload(
+            {"model": "gpt-5.4-mini", "input": "generate json"},
+            include_reasoning_encrypted_content=False,
+        )
+        self.assertNotIn("include", generation_payload)
+
         models = parse_codex_models(
             {
                 "data": [{"id": "gpt-5.5", "owned_by": "openai"}],

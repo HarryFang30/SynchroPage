@@ -2,17 +2,24 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import datetime
 import hashlib
+import io
 import json
+import math
 import mimetypes
 import os
+import random
 import re
 import shutil
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections import OrderedDict
+from collections.abc import Mapping, Sequence
+from email.utils import parsedate_to_datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +41,9 @@ OAUTH_CONFIG_PATH = PROJECT_ROOT / "config" / "auth" / "openai_oauth.yaml"
 DEFAULT_AGENT_MODEL = os.environ.get("PDF_AGENT_MODEL", "gpt-5.5")
 MAX_CONTEXT_ITEMS = 10
 MAX_CONTEXT_CHARS = 16_000
+MAX_TEACHING_FAST_SOURCE_CHARS = 2_500
+MAX_TEACHING_BALANCED_SOURCE_CHARS = 8_000
+MAX_TEACHING_QUALITY_SOURCE_CHARS = 16_000
 MAX_PDF_CONTEXT_CHARS = 120_000
 MAX_TEACHING_CACHE_CHARS = 750_000
 PDF_CONTEXT_FULL_PAGE_LIMIT = 50
@@ -42,15 +52,32 @@ MAX_TRANSCRIPT_MESSAGES = 8
 MAX_IMAGE_ATTACHMENTS = 8
 MAX_IMAGE_DATA_URL_CHARS = 8_000_000
 MAX_PDF_FILE_DATA_CHARS = 80_000_000
+PDF_FILE_CACHE_MAX_ENTRIES = 8
+PDF_FILE_CACHE_MAX_BYTES = 240_000_000
+PDF_FILE_SUBSET_CACHE_MAX_ENTRIES = 64
+PDF_FILE_SUBSET_CACHE_MAX_BYTES = 120_000_000
 PROMPT_CACHE_VERSION = "pagepair.prompt-cache.v2"
 DOCUMENT_CACHE_PREFIX_VERSION = "pagepair.document-prefix.v2"
-TEACHING_API_CONCURRENCY = 4
+TEACHING_API_CONCURRENCY = 6
 TEACHING_RETRY_DELAYS_SECONDS = (0.5, 1.5, 3.0)
+TEACHING_MAX_RETRY_DELAY_SECONDS = 12.0
+TEACHING_RATE_LIMIT_MIN_COOLDOWN_SECONDS = 0.75
+_PDF_FILE_CACHE_LOCK = threading.Lock()
+_PDF_FILE_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
+_PDF_FILE_CACHE_BYTES = 0
+_PDF_FILE_SUBSET_CACHE_LOCK = threading.Lock()
+_PDF_FILE_SUBSET_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
+_PDF_FILE_SUBSET_CACHE_BYTES = 0
 
 PAGEPAIR_SHARED_INSTRUCTIONS = """You are the model backend for PagePair Reader.
 Use the provided PDF/page context, selected text, formulas, images, and task-specific instructions as primary evidence.
 Preserve LaTeX formulas, cite page numbers when available, and do not invent facts that are not supported by the provided source material.
 Follow the task-specific instructions included in each request, including any required output format."""
+
+PAGEPAIR_FAST_TEACHING_INSTRUCTIONS = (
+    "Generate PagePair teaching notes from the provided page source. "
+    "Return strict JSON only, preserve technical tokens/LaTeX, and do not invent unsupported facts."
+)
 
 AGENT_INSTRUCTIONS = """You are the AI agent panel inside PagePair Reader.
 Use the current PDF/page context, selected text, formulas, and image attachments as primary evidence.
@@ -68,14 +95,28 @@ Never escape digits in LaTeX; write 2^n, not \\2^n.
 Never escape binary strings; write 000, 111, not \\000 or \\111.
 For binary counting sequences, write $000 \\to 001 \\to 010 \\to \\cdots \\to 111 \\to 000$ and close math before Chinese prose.
 Render tables as GitHub-Flavored Markdown tables inside speaker_notes_md when the source page contains tabular content.
+Keep speaker_notes_md concise: prefer 4-7 focused bullets or short sections, avoid restating the source text line by line, and only expand when formulas, tables, or derivations need it.
 Do not invent facts that are not supported by the source page text. If the page has no extractable text, mark it as needs_parser_fallback."""
+
+TEACHING_GENERATOR_FAST_INSTRUCTIONS = """You are the PagePair per-page teaching generator.
+Return strict JSON only. Use the requested output language for all prose.
+Keep speaker_notes_md concise, explain rather than transcribe, preserve technical tokens, and do not invent unsupported facts.
+Escape LaTeX backslashes in JSON strings, for example write \\\\frac and \\\\to."""
 
 
 class HttpError(RuntimeError):
-    def __init__(self, status: int, message: str, *, code: str = "http_error") -> None:
+    def __init__(
+        self,
+        status: int,
+        message: str,
+        *,
+        code: str = "http_error",
+        retry_after_seconds: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
+        self.retry_after_seconds = retry_after_seconds
 
 
 class AsyncRunner:
@@ -188,18 +229,37 @@ class TeachingGenerationGateway:
         self.model = model
         self.timeout_seconds = timeout_seconds
         self._api_semaphore = asyncio.Semaphore(max(1, api_concurrency))
+        self._rate_limit_lock = asyncio.Lock()
+        self._rate_limit_cooldown_until = 0.0
 
     async def generate_page(self, body: Mapping[str, Any]) -> dict[str, Any]:
         auth = await build_chatgpt_codex_auth(self.manager, session_id=_string_or_none(body.get("session_id")))
-        async with self._api_semaphore:
-            content, payload, document_file_used, cache_metadata = await self._generate_content_with_fallback(
-                codex_responses_url(base_url=auth.upstream_base_url),
-                body,
-                auth.headers,
-            )
+        content, payload, document_file_used, cache_metadata = await self._generate_content_with_fallback(
+            codex_responses_url(base_url=auth.upstream_base_url),
+            body,
+            auth.headers,
+        )
         page = _parse_generated_page(content, body)
         return {
             "page": page,
+            "account_id": auth.account_id,
+            "model": payload.get("model"),
+            "cache": {
+                **cache_metadata,
+                "document_file_input": document_file_used,
+            },
+        }
+
+    async def generate_pages(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        auth = await build_chatgpt_codex_auth(self.manager, session_id=_string_or_none(body.get("session_id")))
+        content, payload, document_file_used, cache_metadata = await self._generate_content_with_fallback(
+            codex_responses_url(base_url=auth.upstream_base_url),
+            body,
+            auth.headers,
+        )
+        pages = _parse_generated_pages(content, body)
+        return {
+            "pages": pages,
             "account_id": auth.account_id,
             "model": payload.get("model"),
             "cache": {
@@ -214,19 +274,14 @@ class TeachingGenerationGateway:
         body: Mapping[str, Any],
         headers: dict[str, str],
     ) -> tuple[str, dict[str, Any], bool, dict[str, Any]]:
-        candidate_bodies: list[tuple[Mapping[str, Any], bool]] = [(body, bool(_pdf_file_input(body.get("documentFile"))))]
-        if candidate_bodies[0][1]:
-            fallback_body = dict(body)
-            fallback_body.pop("documentFile", None)
-            candidate_bodies.append((fallback_body, False))
+        candidate_bodies = _teaching_generation_candidate_bodies(body)
 
         last_error: HttpError | None = None
-        for candidate_body, document_file_used in candidate_bodies:
-            payload = build_codex_responses_payload(
-                _build_teaching_generation_payload(candidate_body, default_model=self.model),
-                force_stream=True,
-                include_reasoning_encrypted_content=True,
-                strip_unsupported_fields=True,
+        for candidate_index, (candidate_body, document_file_used) in enumerate(candidate_bodies):
+            payload = await asyncio.to_thread(
+                _build_teaching_codex_responses_payload,
+                candidate_body,
+                self.model,
             )
             try:
                 text, content_type, payload = await self._post_payload_with_cache_fallback(url, payload, headers)
@@ -241,7 +296,10 @@ class TeachingGenerationGateway:
                 )
             except HttpError as exc:
                 last_error = exc
-                if document_file_used and exc.status in {400, 413, 415, 422, 500, 502}:
+                if candidate_index < len(candidate_bodies) - 1 and _should_try_next_teaching_generation_candidate(
+                    exc,
+                    document_file_used=document_file_used,
+                ):
                     continue
                 raise
         if last_error:
@@ -273,12 +331,34 @@ class TeachingGenerationGateway:
     ) -> tuple[str, str]:
         for attempt in range(len(TEACHING_RETRY_DELAYS_SECONDS) + 1):
             try:
-                return await asyncio.to_thread(self._post_responses, url, payload, headers)
+                await self._wait_for_rate_limit_cooldown()
+                async with self._api_semaphore:
+                    return await asyncio.to_thread(self._post_responses, url, payload, headers)
             except HttpError as exc:
                 if attempt >= len(TEACHING_RETRY_DELAYS_SECONDS) or not _should_retry_transient_upstream_error(exc):
                     raise
-                await asyncio.sleep(TEACHING_RETRY_DELAYS_SECONDS[attempt])
+                delay_seconds = _transient_retry_delay_seconds(exc, attempt)
+                if exc.status == 429 or exc.retry_after_seconds is not None:
+                    await self._note_rate_limit_cooldown(delay_seconds)
+                await asyncio.sleep(delay_seconds)
         raise HttpError(502, "OpenAI gateway returned an empty generation response", code="empty_gateway_response")
+
+    async def _wait_for_rate_limit_cooldown(self) -> None:
+        while True:
+            async with self._rate_limit_lock:
+                delay_seconds = self._rate_limit_cooldown_until - asyncio.get_running_loop().time()
+            if delay_seconds <= 0:
+                return
+            await asyncio.sleep(min(delay_seconds, TEACHING_MAX_RETRY_DELAY_SECONDS))
+
+    async def _note_rate_limit_cooldown(self, delay_seconds: float) -> None:
+        cooldown_seconds = min(
+            max(delay_seconds, TEACHING_RATE_LIMIT_MIN_COOLDOWN_SECONDS),
+            TEACHING_MAX_RETRY_DELAY_SECONDS,
+        )
+        until = asyncio.get_running_loop().time() + cooldown_seconds
+        async with self._rate_limit_lock:
+            self._rate_limit_cooldown_until = max(self._rate_limit_cooldown_until, until)
 
     def _post_responses(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, str]:
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -298,7 +378,12 @@ class TeachingGenerationGateway:
                 return text, response.headers.get("Content-Type", "")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise HttpError(exc.code, redacted_gateway_error(detail), code="upstream_error") from exc
+            raise HttpError(
+                exc.code,
+                redacted_gateway_error(detail),
+                code="upstream_error",
+                retry_after_seconds=_retry_after_seconds(exc.headers.get("Retry-After")),
+            ) from exc
         except urllib.error.URLError as exc:
             raise HttpError(502, redacted_gateway_error(str(exc)), code="network_error") from exc
 
@@ -361,9 +446,15 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/agent/chat":
                 body = self._read_json()
                 self._send_json(self.server.runner.run(self.server.chat_gateway.chat(body)))
+            elif path == "/api/pdf/cache":
+                body = self._read_json()
+                self._send_json(_cache_pdf_file_payload(body.get("documentFile") or body))
             elif path == "/api/generate/page":
                 body = self._read_json()
                 self._send_json(self.server.runner.run(self.server.teaching_gateway.generate_page(body)))
+            elif path == "/api/generate/pages":
+                body = self._read_json()
+                self._send_json(self.server.runner.run(self.server.teaching_gateway.generate_pages(body)))
             else:
                 raise HttpError(404, f"Route not found: {path}", code="not_found")
         except Exception as exc:
@@ -518,18 +609,54 @@ def _build_teaching_generation_payload(body: Mapping[str, Any], *, default_model
     cache_prefix = _build_document_cache_prefix(body)
     if cache_prefix:
         content.append({"type": "input_text", "text": cache_prefix})
-    pdf_file = _pdf_file_input(body.get("documentFile"))
+    pdf_file = _pdf_file_input(body.get("documentFile"), page_numbers=_teaching_generation_page_numbers(body))
     if pdf_file:
         content.append(pdf_file)
     content.append({"type": "input_text", "text": _build_teaching_generation_prompt(body)})
     payload: dict[str, Any] = {
         "model": model,
-        "instructions": PAGEPAIR_SHARED_INSTRUCTIONS,
+        "instructions": _teaching_payload_instructions(body),
         "input": [{"role": "user", "content": content}],
         "reasoning": {"effort": _reasoning_effort(body)},
     }
     _apply_prompt_cache_fields(payload, body, model)
     return payload
+
+
+def _teaching_payload_instructions(body: Mapping[str, Any]) -> str:
+    return PAGEPAIR_FAST_TEACHING_INSTRUCTIONS if _is_fast_teaching_generation(body) else PAGEPAIR_SHARED_INSTRUCTIONS
+
+
+def _build_teaching_codex_responses_payload(body: Mapping[str, Any], default_model: str) -> dict[str, Any]:
+    return build_codex_responses_payload(
+        _build_teaching_generation_payload(body, default_model=default_model),
+        force_stream=True,
+        include_reasoning_encrypted_content=False,
+        strip_unsupported_fields=True,
+    )
+
+
+def _teaching_generation_candidate_bodies(body: Mapping[str, Any]) -> list[tuple[Mapping[str, Any], bool]]:
+    requested_model = _clean_model(body.get("model"))
+    fallback_model = _clean_model(body.get("fallbackModel"))
+    model_bodies: list[Mapping[str, Any]] = [body]
+    if fallback_model and fallback_model != requested_model:
+        fallback_body = dict(body)
+        fallback_body["model"] = fallback_model
+        fallback_body.pop("fallbackModel", None)
+        model_bodies.append(fallback_body)
+
+    has_pdf_file = bool(_pdf_file_input(body.get("documentFile")))
+    candidates: list[tuple[Mapping[str, Any], bool]] = []
+    if has_pdf_file:
+        candidates.extend((candidate, True) for candidate in model_bodies)
+        for candidate in model_bodies:
+            without_file = dict(candidate)
+            without_file.pop("documentFile", None)
+            candidates.append((without_file, False))
+    else:
+        candidates.extend((candidate, False) for candidate in model_bodies)
+    return candidates
 
 
 def _agent_answer_mode(body: Mapping[str, Any]) -> str:
@@ -549,7 +676,8 @@ def _agent_answer_mode_effort(mode: str) -> str:
 
 def _reasoning_effort(body: Mapping[str, Any]) -> str:
     reasoning = body.get("reasoning") if isinstance(body.get("reasoning"), Mapping) else {}
-    value = str(body.get("reasoningEffort") or reasoning.get("effort") or "").strip()
+    quality_plan = body.get("qualityPlan") if isinstance(body.get("qualityPlan"), Mapping) else {}
+    value = str(body.get("reasoningEffort") or reasoning.get("effort") or quality_plan.get("reasoningEffort") or "").strip()
     if value in {"none", "low", "medium", "high", "xhigh"}:
         return value
     if body.get("answerMode"):
@@ -571,9 +699,163 @@ def _teaching_output_language(body: Mapping[str, Any]) -> tuple[str, str]:
     return "zh-CN", "Simplified Chinese"
 
 
+def _teaching_generation_pages(body: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    pages = body.get("pages")
+    if isinstance(pages, list):
+        valid_pages = [page for page in pages if isinstance(page, Mapping)]
+        if valid_pages:
+            return valid_pages
+    page = body.get("page")
+    return [page] if isinstance(page, Mapping) else []
+
+
+def _teaching_generation_page_numbers(body: Mapping[str, Any]) -> list[int]:
+    numbers: list[int] = []
+    seen: set[int] = set()
+    for index, page in enumerate(_teaching_generation_pages(body), start=1):
+        page_no = _int_value(page.get("page_no"), index)
+        if page_no > 0 and page_no not in seen:
+            seen.add(page_no)
+            numbers.append(page_no)
+    return numbers
+
+
+def _teaching_quality_plan_lines(body: Mapping[str, Any]) -> list[str]:
+    plan = body.get("qualityPlan")
+    if not isinstance(plan, Mapping):
+        return []
+    if _is_fast_teaching_generation(body):
+        return ["mode: fast text-page path; concise output preferred."]
+    attempt = _string_value(plan.get("attempt"), "initial")
+    mode = "quality retry" if attempt == "retry" else "pdf-grounded" if bool(plan.get("attachPdf")) else "balanced text"
+    lines = [f"mode: {mode}; reasoning={_string_value(plan.get('reasoningEffort'), _reasoning_effort(body))}"]
+    reasons = _string_list(plan.get("reasons"))
+    if reasons:
+        lines.append(f"reasons: {', '.join(reasons)}")
+    if attempt == "retry":
+        lines.append("This is a quality retry. Prefer more complete visual/source grounding over speed.")
+    elif bool(plan.get("batchable")):
+        lines.append("This path can be batched. Keep the output concise and do not over-expand.")
+    return lines
+
+
+def _teaching_generator_instructions(body: Mapping[str, Any]) -> str:
+    return TEACHING_GENERATOR_FAST_INSTRUCTIONS if _is_fast_teaching_generation(body) else TEACHING_GENERATOR_INSTRUCTIONS
+
+
+def _teaching_source_text_limit(body: Mapping[str, Any]) -> int:
+    plan = body.get("qualityPlan")
+    if not isinstance(plan, Mapping):
+        return MAX_TEACHING_QUALITY_SOURCE_CHARS
+    model = _string_value(plan.get("model") or body.get("model"), "")
+    reasoning_effort = _string_value(plan.get("reasoningEffort"), _reasoning_effort(body))
+    attach_pdf = bool(plan.get("attachPdf"))
+    if attach_pdf or reasoning_effort in {"high", "xhigh"}:
+        return MAX_TEACHING_QUALITY_SOURCE_CHARS
+    if "mini" in model and reasoning_effort in {"none", "low"}:
+        return MAX_TEACHING_FAST_SOURCE_CHARS
+    return MAX_TEACHING_BALANCED_SOURCE_CHARS
+
+
+def _is_fast_teaching_generation(body: Mapping[str, Any]) -> bool:
+    plan = body.get("qualityPlan")
+    if not isinstance(plan, Mapping):
+        return False
+    model = _string_value(plan.get("model") or body.get("model"), "")
+    reasoning_effort = _string_value(plan.get("reasoningEffort"), _reasoning_effort(body))
+    return "mini" in model and reasoning_effort in {"none", "low"} and not bool(plan.get("attachPdf"))
+
+
+def _teaching_contract_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _teaching_prompt_rules(body: Mapping[str, Any], *, batch: bool) -> list[str]:
+    page_rule = (
+        "- Return exactly one object for each target page; each page_no must match one requested target page."
+        if batch
+        else "- Keep page_no exactly equal to the target page number."
+    )
+    empty_source_rule = (
+        "- If source text is empty but the original PDF is attached, inspect that exact PDF page. "
+        "If no PDF is attached, do not hallucinate; set needs_parser_fallback=true, needs_review=true, confidence<=0.35."
+    )
+    if _is_fast_teaching_generation(body):
+        return [
+            "Rules:",
+            "- Return JSON only, no Markdown fences or prose outside JSON.",
+            r"- Escape LaTeX backslashes in JSON strings: write \\frac, \\to, and \\cdots, not \frac, \to, or \cdots.",
+            page_rule,
+            "- Do not copy source text into the response; omit source unless setting source.pdf_page_ref.",
+            "- Keep speaker_notes_md concise: 4-7 focused bullets or short sections, explaining rather than transcribing.",
+            "- Use Markdown tables or LaTeX only when the page source clearly needs them.",
+            empty_source_rule,
+        ]
+    return [
+        "Rules:",
+        "- Return JSON only, no Markdown fences or prose outside JSON.",
+        r"- Escape LaTeX backslashes in JSON strings: write \\frac, \\to, and \\cdots, not \frac, \to, or \cdots.",
+        page_rule,
+        "- Do not copy source text into the response; omit source unless setting source.pdf_page_ref.",
+        "- Keep speaker_notes_md concise and suitable for side-by-side learning; explain rather than transcribe.",
+        "- Use headings, short paragraphs, bullets, Markdown tables, and LaTeX math when helpful.",
+        "- Put display math delimiters $$ on their own lines; keep prose outside math delimiters when possible.",
+        "- Never escape digits or binary strings in LaTeX; use 2^n, 000, and 111.",
+        "- Explain formulas, symbols, tables, and intuition in speaker_notes_md when present.",
+        empty_source_rule,
+    ]
+
+
+def _teaching_fast_output_shape(page_numbers: Sequence[int], *, batch: bool) -> str:
+    if batch:
+        return _teaching_contract_json({"pages": [_teaching_fast_page_output_contract("<requested_page_no>")]})
+    page_no = page_numbers[0] if page_numbers else 1
+    return _teaching_contract_json({"page": _teaching_fast_page_output_contract(page_no)})
+
+
+def _teaching_fast_page_jsonl(page: Mapping[str, Any], source_text_limit: int) -> str:
+    source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
+    page_no = _int_value(page.get("page_no"), 1)
+    source_text = str(source.get("text_md") or "").strip()
+    return json.dumps(
+        {
+            "page_no": page_no,
+            "pdf_page_ref": _string_value(source.get("pdf_page_ref"), f"#page={page_no}"),
+            "source_text": _truncate(source_text, source_text_limit)
+            if source_text
+            else "[No embedded text extracted for this page.]",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _build_fast_teaching_generation_prompt(body: Mapping[str, Any], target_pages: list[Mapping[str, Any]]) -> str:
+    output_language_code, output_language_label = _teaching_output_language(body)
+    target_page_numbers = [_int_value(page.get("page_no"), index + 1) for index, page in enumerate(target_pages)]
+    source_text_limit = _teaching_source_text_limit(body)
+    batch = len(target_pages) > 1
+    sections = [
+        f"Generate concise PagePair teaching JSON for PDF page(s): {_format_page_ranges(target_page_numbers)}.",
+        f"Output shape: {_teaching_fast_output_shape(target_page_numbers, batch=batch)}",
+        f"Language: {output_language_label} ({output_language_code}); write all prose in this language and preserve technical tokens.",
+        "Rules: JSON only; no Markdown fences; escape LaTeX backslashes as \\\\frac and \\\\to; do not copy source text; use 3-5 focused bullets/short sections.",
+        "If source_text is empty, keep notes brief; the server will mark parser fallback when needed.",
+        "Pages JSONL:",
+    ]
+    sections.extend(_teaching_fast_page_jsonl(page, source_text_limit) for page in target_pages)
+    return "\n".join(sections)
+
+
 def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
+    target_pages = _teaching_generation_pages(body)
+    if _is_fast_teaching_generation(body):
+        return _build_fast_teaching_generation_prompt(body, target_pages)
+    if len(target_pages) > 1:
+        return _build_teaching_batch_generation_prompt(body, target_pages)
+
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
-    page = body.get("page") if isinstance(body.get("page"), Mapping) else {}
+    page = target_pages[0] if target_pages else {}
     source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
     teaching = page.get("teaching") if isinstance(page.get("teaching"), Mapping) else {}
     previous_page = body.get("previousPage") if isinstance(body.get("previousPage"), Mapping) else {}
@@ -582,16 +864,18 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
     page_count = _int_value(body.get("pageCount"), _int_value(document.get("page_count"), 0))
     output_language_code, output_language_label = _teaching_output_language(body)
     source_text = str(source.get("text_md") or "").strip()
+    source_text_limit = _teaching_source_text_limit(body)
     existing_notes = str(teaching.get("speaker_notes_md") or "").strip()
+    quality_plan_lines = _teaching_quality_plan_lines(body)
 
     sections = [
         "Task-specific instructions:",
-        TEACHING_GENERATOR_INSTRUCTIONS,
+        _teaching_generator_instructions(body),
         "",
         "Generate one PagePair teaching page JSON for the given PDF page.",
         "",
         "Output shape:",
-        json.dumps(_teaching_page_output_contract(page_no), ensure_ascii=False, indent=2),
+        _teaching_contract_json(_teaching_page_output_contract(page_no)),
         "",
         "Output language:",
         f"code: {output_language_code}",
@@ -601,41 +885,95 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
         "- Keep source code identifiers, Verilog keywords, signal names, module names, and formulas exactly as technical tokens.",
         "- Set teaching.output_language to the exact language code above.",
         "",
-        "Rules:",
-        "- Return JSON only, no Markdown fences and no prose outside JSON.",
-        r"- JSON strings must escape LaTeX backslashes: write \\frac, \\to, and \\cdots in JSON text, not \frac, \to, or \cdots.",
-        "- Keep page_no exactly equal to the input page number.",
-        "- source.text_md must preserve the source page text you received.",
-        "- speaker_notes_md must be Markdown suitable for side-by-side learning.",
-        "- Use headings, short paragraphs, bullet lists, Markdown tables, and LaTeX math when helpful.",
-        "- For display math, put opening and closing $$ on their own lines and continue prose after the closing delimiter on a new paragraph.",
-        "- For mixed prose and math, keep prose outside math delimiters when possible: Chinese example $0$ 到 $2^n - 1$; English example $0$ to $2^n - 1$.",
-        "- Never escape digits in LaTeX. Use 2^n, not \\2^n.",
-        "- Never escape binary strings. Use 000 and 111, not \\000 or \\111.",
-        "- For binary counting sequences, close math before prose: $000 \\to 001 \\to 010 \\to \\cdots \\to 111 \\to 000$, then continue in the requested output language.",
-        "- If the page contains formulas, explain symbols and intuition in speaker_notes_md and formula_explanations.",
-        "- If the page contains table-like content, reconstruct a concise Markdown table when possible.",
-        "- If source text is empty or unreadable, do not hallucinate; set needs_parser_fallback=true, needs_review=true, confidence<=0.35.",
+        *_teaching_prompt_rules(body, batch=False),
+    ]
+    if quality_plan_lines:
+        sections.extend(["", "Generation quality plan:", *quality_plan_lines])
+    sections.extend([
         "",
         "Document:",
         f"title: {_string_value(document.get('title'), 'Untitled PDF')}",
-        f"id: {_string_value(document.get('id'), 'unknown')}",
         f"page_count: {page_count}",
         "",
         "Target page:",
         f"page_no: {page_no}",
         f"pdf_page_ref: {_string_value(source.get('pdf_page_ref'), f'#page={page_no}')}",
-        "",
-        "Neighbor context:",
-        f"previous_page_title: {_string_value(previous_page.get('title'), '')}",
-        f"next_page_title: {_string_value(next_page.get('title'), '')}",
-        "",
-        "Existing notes, if regenerating:",
-        _truncate(existing_notes, 4000) if existing_notes else "[none]",
+    ])
+    neighbor_lines = []
+    previous_title = _string_value(previous_page.get("title"), "")
+    next_title = _string_value(next_page.get("title"), "")
+    if previous_title:
+        neighbor_lines.append(f"previous_page_title: {previous_title}")
+    if next_title:
+        neighbor_lines.append(f"next_page_title: {next_title}")
+    if neighbor_lines:
+        sections.extend(["", "Neighbor context:", *neighbor_lines])
+    if existing_notes:
+        sections.extend(["", "Existing notes, if regenerating:", _truncate(existing_notes, 1200)])
+    sections.extend([
         "",
         "Extracted source text for this exact PDF page:",
-        _truncate(source_text, MAX_CONTEXT_CHARS) if source_text else "[No embedded text extracted for this page.]",
+        _truncate(source_text, source_text_limit) if source_text else "[No embedded text extracted for this page.]",
+    ])
+    return "\n".join(sections)
+
+
+def _build_teaching_batch_generation_prompt(body: Mapping[str, Any], target_pages: list[Mapping[str, Any]]) -> str:
+    document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
+    page_count = _int_value(body.get("pageCount"), _int_value(document.get("page_count"), 0))
+    output_language_code, output_language_label = _teaching_output_language(body)
+    target_page_numbers = [_int_value(page.get("page_no"), index + 1) for index, page in enumerate(target_pages)]
+    quality_plan_lines = _teaching_quality_plan_lines(body)
+    source_text_limit = _teaching_source_text_limit(body)
+    sections = [
+        "Task-specific instructions:",
+        _teaching_generator_instructions(body),
+        "",
+        f"Generate PagePair teaching page JSON for {len(target_pages)} PDF pages in one batch.",
+        "Return one page object for every target page. Do not skip pages. Do not merge pages.",
+        f"Target page numbers: {_format_page_ranges(target_page_numbers)}",
+        "",
+        "Output shape; repeat the single page object once per target page:",
+        _teaching_contract_json({"pages": [_teaching_page_output_contract("<target_page_no>")]}),
+        "",
+        "Output language:",
+        f"code: {output_language_code}",
+        f"name: {output_language_label}",
+        f"- Write every heading, paragraph, bullet, table heading, and explanatory sentence in {output_language_label}.",
+        "- Set every teaching.output_language to the exact language code above.",
+        "",
+        *_teaching_prompt_rules(body, batch=True),
     ]
+    if quality_plan_lines:
+        sections.extend(["", "Generation quality plan:", *quality_plan_lines])
+    sections.extend([
+        "",
+        "Document:",
+        f"title: {_string_value(document.get('title'), 'Untitled PDF')}",
+        f"page_count: {page_count}",
+        "",
+        "Target pages:",
+    ])
+    for page in target_pages:
+        source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
+        teaching = page.get("teaching") if isinstance(page.get("teaching"), Mapping) else {}
+        page_no = _int_value(page.get("page_no"), 1)
+        source_text = str(source.get("text_md") or "").strip()
+        existing_notes = str(teaching.get("speaker_notes_md") or "").strip()
+        sections.extend(
+            [
+                "",
+                f"--- Target page {page_no} ---",
+                f"page_no: {page_no}",
+                f"pdf_page_ref: {_string_value(source.get('pdf_page_ref'), f'#page={page_no}')}",
+            ]
+        )
+        if existing_notes:
+            sections.extend(["existing_notes:", _truncate(existing_notes, 1000)])
+        sections.extend([
+            "source_text:",
+            _truncate(source_text, source_text_limit) if source_text else "[No embedded text extracted for this page.]",
+        ])
     return "\n".join(sections)
 
 
@@ -647,7 +985,7 @@ def _build_document_cache_prefix(body: Mapping[str, Any]) -> str:
         "PAGEPAIR CACHEABLE DOCUMENT CONTEXT",
         f"cache_version: {context['cacheVersion']}",
         "This section is intentionally identical for repeated requests for this PDF so prompt caching can reuse it.",
-        "Use this whole-document context to understand course structure, symbols, terminology, and cross-page dependencies.",
+        "Use this compact document context to understand course structure, symbols, terminology, and cross-page dependencies.",
         "When answering a question or explaining a target page, prioritize the user's current request and selected source, but use this document context for prerequisites and continuity.",
         "",
         f"document_id: {context['documentId']}",
@@ -713,10 +1051,16 @@ def _normalized_document_cache_context(body: Mapping[str, Any]) -> dict[str, Any
     }
 
 
-def _pdf_file_input(value: Any) -> dict[str, Any] | None:
+def _pdf_file_input(value: Any, *, page_numbers: Sequence[int] | None = None) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     file_data = str(value.get("fileData") or value.get("file_data") or "").strip()
+    sha256 = _string_value(value.get("sha256"), "")
+    if not file_data and sha256:
+        cached = _cached_pdf_file_payload(sha256)
+        if cached:
+            value = {**cached, **value}
+            file_data = str(cached.get("fileData") or "").strip()
     if not file_data:
         return None
     if file_data.startswith("data:") and "," in file_data:
@@ -726,6 +1070,8 @@ def _pdf_file_input(value: Any) -> dict[str, Any] | None:
     filename = _string_value(value.get("filename") or value.get("fileName"), "document.pdf")
     if not filename.lower().endswith(".pdf"):
         filename = f"{filename}.pdf"
+    if page_numbers:
+        file_data = _cached_or_subset_pdf_file_data(file_data, page_numbers, sha256=sha256) or file_data
     return {
         "type": "input_file",
         "filename": filename,
@@ -733,15 +1079,160 @@ def _pdf_file_input(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _cache_pdf_file_payload(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise HttpError(400, "PDF cache request did not include a document file", code="invalid_pdf_cache")
+    file_data = str(value.get("fileData") or value.get("file_data") or "").strip()
+    if file_data.startswith("data:") and "," in file_data:
+        file_data = file_data.split(",", 1)[1].strip()
+    if not file_data or len(file_data) > MAX_PDF_FILE_DATA_CHARS:
+        raise HttpError(400, "PDF cache request did not include usable PDF data", code="invalid_pdf_cache")
+    try:
+        pdf_bytes = base64.b64decode(file_data, validate=False)
+    except Exception as exc:
+        raise HttpError(400, "PDF cache request contained invalid base64 data", code="invalid_pdf_cache") from exc
+    if not pdf_bytes:
+        raise HttpError(400, "PDF cache request contained an empty PDF", code="invalid_pdf_cache")
+
+    sha256 = _string_value(value.get("sha256"), "") or hashlib.sha256(pdf_bytes).hexdigest()
+    filename = _string_value(value.get("filename") or value.get("fileName"), "document.pdf")
+    if not filename.lower().endswith(".pdf"):
+        filename = f"{filename}.pdf"
+    record = {
+        "filename": filename,
+        "mimeType": _string_value(value.get("mimeType"), "application/pdf"),
+        "size": len(pdf_bytes),
+        "sha256": sha256,
+        "fileData": file_data,
+    }
+    _store_cached_pdf_file_payload(record)
+    return {key: record[key] for key in ("filename", "mimeType", "size", "sha256")}
+
+
+def _store_cached_pdf_file_payload(record: Mapping[str, Any]) -> None:
+    global _PDF_FILE_CACHE_BYTES
+    sha256 = _string_value(record.get("sha256"), "")
+    size = _int_value(record.get("size"), 0)
+    if not sha256 or size <= 0:
+        return
+    with _PDF_FILE_CACHE_LOCK:
+        previous = _PDF_FILE_CACHE.pop(sha256, None)
+        if previous:
+            _PDF_FILE_CACHE_BYTES -= _int_value(previous.get("size"), 0)
+        _PDF_FILE_CACHE[sha256] = dict(record)
+        _PDF_FILE_CACHE_BYTES += size
+        while (
+            len(_PDF_FILE_CACHE) > PDF_FILE_CACHE_MAX_ENTRIES
+            or _PDF_FILE_CACHE_BYTES > PDF_FILE_CACHE_MAX_BYTES
+        ) and _PDF_FILE_CACHE:
+            _key, evicted = _PDF_FILE_CACHE.popitem(last=False)
+            _PDF_FILE_CACHE_BYTES -= _int_value(evicted.get("size"), 0)
+
+
+def _cached_pdf_file_payload(sha256: str) -> dict[str, Any] | None:
+    if not sha256:
+        return None
+    with _PDF_FILE_CACHE_LOCK:
+        cached = _PDF_FILE_CACHE.pop(sha256, None)
+        if not cached:
+            return None
+        _PDF_FILE_CACHE[sha256] = cached
+        return dict(cached)
+
+
+def _normalized_pdf_subset_page_numbers(page_numbers: Sequence[int]) -> list[int]:
+    requested_pages: list[int] = []
+    seen: set[int] = set()
+    for value in page_numbers:
+        page_no = _int_value(value, 0)
+        if page_no > 0 and page_no not in seen:
+            seen.add(page_no)
+            requested_pages.append(page_no)
+    return requested_pages
+
+
+def _pdf_subset_cache_key(sha256: str, page_numbers: Sequence[int]) -> str:
+    return f"{sha256}:{','.join(str(page_no) for page_no in page_numbers)}"
+
+
+def _cached_or_subset_pdf_file_data(file_data: str, page_numbers: Sequence[int], *, sha256: str = "") -> str | None:
+    requested_pages = _normalized_pdf_subset_page_numbers(page_numbers)
+    if not requested_pages:
+        return None
+    cache_key = _pdf_subset_cache_key(sha256, requested_pages) if sha256 else ""
+    if cache_key:
+        cached = _cached_pdf_subset_file_data(cache_key)
+        if cached:
+            return cached
+    subset = _subset_pdf_file_data(file_data, requested_pages)
+    if subset and cache_key:
+        _store_cached_pdf_subset_file_data(cache_key, subset)
+    return subset
+
+
+def _cached_pdf_subset_file_data(cache_key: str) -> str | None:
+    if not cache_key:
+        return None
+    with _PDF_FILE_SUBSET_CACHE_LOCK:
+        cached = _PDF_FILE_SUBSET_CACHE.pop(cache_key, None)
+        if not cached:
+            return None
+        _PDF_FILE_SUBSET_CACHE[cache_key] = cached
+        return str(cached.get("fileData") or "") or None
+
+
+def _store_cached_pdf_subset_file_data(cache_key: str, file_data: str) -> None:
+    global _PDF_FILE_SUBSET_CACHE_BYTES
+    if not cache_key or not file_data:
+        return
+    size = len(file_data)
+    with _PDF_FILE_SUBSET_CACHE_LOCK:
+        previous = _PDF_FILE_SUBSET_CACHE.pop(cache_key, None)
+        if previous:
+            _PDF_FILE_SUBSET_CACHE_BYTES -= _int_value(previous.get("size"), 0)
+        _PDF_FILE_SUBSET_CACHE[cache_key] = {"fileData": file_data, "size": size}
+        _PDF_FILE_SUBSET_CACHE_BYTES += size
+        while (
+            len(_PDF_FILE_SUBSET_CACHE) > PDF_FILE_SUBSET_CACHE_MAX_ENTRIES
+            or _PDF_FILE_SUBSET_CACHE_BYTES > PDF_FILE_SUBSET_CACHE_MAX_BYTES
+        ) and _PDF_FILE_SUBSET_CACHE:
+            _key, evicted = _PDF_FILE_SUBSET_CACHE.popitem(last=False)
+            _PDF_FILE_SUBSET_CACHE_BYTES -= _int_value(evicted.get("size"), 0)
+
+
+def _subset_pdf_file_data(file_data: str, page_numbers: Sequence[int]) -> str | None:
+    requested_pages = _normalized_pdf_subset_page_numbers(page_numbers)
+    if not requested_pages:
+        return None
+    try:
+        from PyPDF2 import PdfReader, PdfWriter  # type: ignore[import-untyped]
+
+        source_bytes = base64.b64decode(file_data, validate=False)
+        reader = PdfReader(io.BytesIO(source_bytes))
+        total_pages = len(reader.pages)
+        page_indexes = [page_no - 1 for page_no in requested_pages if 1 <= page_no <= total_pages]
+        if not page_indexes or len(page_indexes) >= total_pages:
+            return None
+        writer = PdfWriter()
+        for page_index in page_indexes:
+            writer.add_page(reader.pages[page_index])
+        output = io.BytesIO()
+        writer.write(output)
+        return base64.b64encode(output.getvalue()).decode("ascii")
+    except Exception:
+        return None
+
+
 def _apply_prompt_cache_fields(payload: dict[str, Any], body: Mapping[str, Any], model: str) -> None:
+    if not _supports_prompt_cache(model):
+        return
     cache_key = _prompt_cache_key(body)
     if cache_key:
         payload["prompt_cache_key"] = cache_key
-    if _supports_prompt_cache_retention(model):
         payload["prompt_cache_retention"] = "24h"
 
 
-def _supports_prompt_cache_retention(model: str) -> bool:
+def _supports_prompt_cache(model: str) -> bool:
     return model.startswith("gpt-5.5")
 
 
@@ -753,6 +1244,42 @@ def _should_retry_without_prompt_cache(exc: HttpError, payload: Mapping[str, Any
 
 def _should_retry_transient_upstream_error(exc: HttpError) -> bool:
     return exc.code == "network_error" or exc.status in {429, 500, 502, 503, 504}
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        seconds = float(text)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(text)
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=datetime.timezone.utc)
+        seconds = retry_at.timestamp() - datetime.datetime.now(datetime.timezone.utc).timestamp()
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+    return seconds
+
+
+def _transient_retry_delay_seconds(exc: HttpError, attempt: int) -> float:
+    base_delay = TEACHING_RETRY_DELAYS_SECONDS[min(max(attempt, 0), len(TEACHING_RETRY_DELAYS_SECONDS) - 1)]
+    if exc.retry_after_seconds is not None:
+        base_delay = max(base_delay, exc.retry_after_seconds)
+    base_delay = min(base_delay, TEACHING_MAX_RETRY_DELAY_SECONDS)
+    jitter = random.uniform(0, min(base_delay * 0.2, 0.75))
+    return min(base_delay + jitter, TEACHING_MAX_RETRY_DELAY_SECONDS)
+
+
+def _should_try_next_teaching_generation_candidate(exc: HttpError, *, document_file_used: bool) -> bool:
+    if exc.status in {400, 404, 413, 415, 422}:
+        return True
+    return document_file_used and exc.status in {500, 502}
 
 
 def _without_prompt_cache(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -830,61 +1357,103 @@ def _cache_key_part(value: str) -> str:
     return cleaned[:48] or "unknown"
 
 
-def _teaching_page_output_contract(page_no: int) -> dict[str, Any]:
+def _teaching_page_output_contract(page_no: Any) -> dict[str, Any]:
     return {
         "page_no": page_no,
-        "source": {
-            "pdf_page_ref": f"#page={page_no}",
-            "text_md": "same source text received for this page",
-            "ocr_used": False,
-            "parser": "pdfjs",
-            "page_type": "title|agenda|concept|example|figure|table|formula|exercise|summary|blank|unknown",
-        },
         "teaching": {
             "output_language": "zh-CN|en-US",
             "slide_title": "short page title",
             "speaker_notes_md": "Markdown teaching notes with LaTeX and Markdown tables when useful",
-            "concepts": ["key concept"],
-            "prerequisites": ["needed prior knowledge"],
-            "contextual_bridge": "how this page connects to nearby pages, or empty string",
-            "visual_explanations": ["figure/table explanation if applicable"],
-            "formula_explanations": ["formula explanation if applicable"],
-            "evidence": [{"kind": "title|keyword|formula|figure|table|caption|layout|other", "quote_or_reference": "visible evidence from this page"}],
             "confidence": 0.82,
             "needs_review": False,
             "needs_parser_fallback": False,
         },
-        "status": "ready",
+    }
+
+
+def _teaching_fast_page_output_contract(page_no: Any) -> dict[str, Any]:
+    return {
+        "page_no": page_no,
+        "teaching": {
+            "slide_title": "short page title",
+            "speaker_notes_md": "concise Markdown teaching notes",
+        },
     }
 
 
 def _parse_generated_page(content: str, body: Mapping[str, Any]) -> dict[str, Any]:
     value = _json_from_model_text(content)
     page_input = body.get("page") if isinstance(body.get("page"), Mapping) else {}
+    candidate = _first_generated_page_candidate(value)
+    if not isinstance(candidate, Mapping):
+        raise HttpError(502, "Generation response did not contain a page JSON object", code="invalid_generation_json")
+    return _normalize_generated_page_candidate(candidate, page_input, body)
+
+
+def _parse_generated_pages(content: str, body: Mapping[str, Any]) -> list[dict[str, Any]]:
+    value = _json_from_model_text(content)
+    page_inputs = _teaching_generation_pages(body)
+    if not page_inputs:
+        raise HttpError(502, "Generation request did not contain target pages", code="invalid_generation_json")
+    candidates = _generated_page_candidates(value)
+    if not candidates:
+        raise HttpError(502, "Generation response did not contain page JSON objects", code="invalid_generation_json")
+
+    candidates_by_page_no: dict[int, Mapping[str, Any]] = {}
+    for candidate in candidates:
+        page_no = _int_value(candidate.get("page_no"), 0)
+        if page_no > 0:
+            candidates_by_page_no[page_no] = candidate
+
+    pages: list[dict[str, Any]] = []
+    for index, page_input in enumerate(page_inputs):
+        page_no = _int_value(page_input.get("page_no"), index + 1)
+        candidate = candidates_by_page_no.get(page_no)
+        if candidate is None and index < len(candidates):
+            candidate = candidates[index]
+        if candidate is None:
+            raise HttpError(502, f"Generation response did not contain page {page_no}", code="invalid_generation_json")
+        pages.append(_normalize_generated_page_candidate(candidate, page_input, body))
+    return pages
+
+
+def _first_generated_page_candidate(value: Any) -> Mapping[str, Any] | None:
+    candidates = _generated_page_candidates(value)
+    return candidates[0] if candidates else None
+
+
+def _generated_page_candidates(value: Any) -> list[Mapping[str, Any]]:
+    if isinstance(value, Mapping) and isinstance(value.get("page"), Mapping):
+        return [value["page"]]
+    if isinstance(value, Mapping) and isinstance(value.get("pages"), list):
+        return [candidate for candidate in value["pages"] if isinstance(candidate, Mapping)]
+    if isinstance(value, list):
+        return [candidate for candidate in value if isinstance(candidate, Mapping)]
+    return [value] if isinstance(value, Mapping) else []
+
+
+def _normalize_generated_page_candidate(
+    candidate: Mapping[str, Any],
+    page_input: Mapping[str, Any],
+    body: Mapping[str, Any],
+) -> dict[str, Any]:
     source_input = page_input.get("source") if isinstance(page_input.get("source"), Mapping) else {}
     page_no = _int_value(page_input.get("page_no"), 1)
     output_language_code, _output_language_label = _teaching_output_language(body)
 
-    candidate: Any = value
-    if isinstance(value, Mapping) and isinstance(value.get("page"), Mapping):
-        candidate = value["page"]
-    elif isinstance(value, Mapping) and isinstance(value.get("pages"), list) and value["pages"]:
-        candidate = value["pages"][0]
-    if not isinstance(candidate, Mapping):
-        raise HttpError(502, "Generation response did not contain a page JSON object", code="invalid_generation_json")
-
     source = candidate.get("source") if isinstance(candidate.get("source"), Mapping) else {}
     teaching = candidate.get("teaching") if isinstance(candidate.get("teaching"), Mapping) else {}
     source_text = str(source.get("text_md") or source_input.get("text_md") or "").strip()
-    no_text = not source_text
-    needs_fallback = bool(teaching.get("needs_parser_fallback")) or no_text
+    has_pdf_file = bool(_pdf_file_input(body.get("documentFile")))
+    no_source_available = not source_text and not has_pdf_file
+    needs_fallback = bool(teaching.get("needs_parser_fallback")) or no_source_available
     needs_review = bool(teaching.get("needs_review")) or needs_fallback
-    confidence = _float_value(teaching.get("confidence"), 0.28 if no_text else 0.78)
+    confidence = _float_value(teaching.get("confidence"), 0.28 if no_source_available else 0.78)
     if needs_fallback:
         confidence = min(confidence, 0.35)
 
     notes = str(teaching.get("speaker_notes_md") or "").strip()
-    if no_text and not notes:
+    if no_source_available and not notes:
         if output_language_code == "en-US":
             notes = (
                 "## This page cannot be explained reliably yet\n\n"
@@ -899,7 +1468,16 @@ def _parse_generated_page(content: str, body: Mapping[str, Any]) -> dict[str, An
 
     evidence = teaching.get("evidence")
     if not isinstance(evidence, list) or not evidence:
-        evidence = [{"kind": "other", "quote_or_reference": "PDF.js extracted page text" if source_text else "No embedded text layer"}]
+        evidence = [{
+            "kind": "other",
+            "quote_or_reference": (
+                "PDF.js extracted page text"
+                if source_text
+                else "Original PDF file input"
+                if has_pdf_file
+                else "No embedded text layer"
+            ),
+        }]
 
     return {
         "page_no": page_no,

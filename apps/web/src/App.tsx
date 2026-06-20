@@ -293,7 +293,7 @@ type PdfContextPayload = {
   documentTitle: string;
   pageCount: number;
   truncated: boolean;
-  truncationPolicy: "all-pages" | "first-last-edge";
+  truncationPolicy: "all-pages" | "first-last-edge" | "target-neighbor-edge";
   fullPageLimit: number;
   edgePageCount: number;
   includedPageNumbers: number[];
@@ -305,15 +305,69 @@ type PdfDirectFileInput = {
   mimeType: string;
   size: number;
   sha256?: string;
-  fileData: string;
+  fileData?: string;
 };
 
 type GenerationPageStatus = "done" | "running" | "failed" | "pending";
 type GeneratePageMode = "missing" | "all" | "current" | "custom";
-const TEACHING_GENERATION_CONCURRENCY = 4;
-const TEACHING_DOCUMENT_GENERATION_CONCURRENCY = 2;
-const TEACHING_CONTEXT_PAGE_CHARS = 900;
-const TEACHING_FILE_INPUT_MIN_TEXT_CHARS = 24;
+const TEACHING_GENERATION_CONCURRENCY = 6;
+const TEACHING_DOCUMENT_GENERATION_CONCURRENCY = 3;
+const TEACHING_QUALITY_MODEL = "gpt-5.5";
+const TEACHING_BALANCED_MODEL = "gpt-5.4";
+const TEACHING_FAST_MODEL = "gpt-5.4-mini";
+const TEACHING_TEXT_PAGE_BATCH_SIZE = 12;
+const TEACHING_TEXT_COMPACT_PAGE_BATCH_SIZE = 18;
+const TEACHING_TEXT_TINY_PAGE_BATCH_SIZE = 24;
+const TEACHING_TEXT_FIRST_BATCH_SIZE = 3;
+const TEACHING_BALANCED_PAGE_BATCH_SIZE = 2;
+const TEACHING_BALANCED_TEXT_PAGE_BATCH_SIZE = 4;
+const TEACHING_BATCH_FALLBACK_CONCURRENCY = 2;
+const TEACHING_PROJECT_MODEL_REQUEST_CONCURRENCY = 6;
+const TEACHING_PROJECT_WARMUP_PAGE_COUNT = 16;
+const TEACHING_CONTEXT_PAGE_CHARS = 600;
+const TEACHING_FAST_SOURCE_REQUEST_CHARS = 2_500;
+const TEACHING_BALANCED_SOURCE_REQUEST_CHARS = 8_000;
+const TEACHING_QUALITY_SOURCE_REQUEST_CHARS = 16_000;
+const TEACHING_FILE_INPUT_MIN_TEXT_CHARS = 32;
+const TEACHING_TEXT_HEAVY_MIN_CHARS = 260;
+const TEACHING_COMPLEX_TEXT_FAST_MIN_CHARS = 900;
+const TEACHING_COMPLEX_TEXT_BALANCED_SIGNAL_COUNT = 4;
+const TEACHING_VISUAL_TEXT_MAX_CHARS = 520;
+const TEACHING_LOW_QUALITY_CONFIDENCE = 0.58;
+const TEACHING_LOW_QUALITY_NOTE_CHARS = 180;
+const TEACHING_RETRY_CONFIDENCE = 0.42;
+const TEACHING_RETRY_NOTE_CHARS = 90;
+const PDF_TEXT_EXTRACTION_CONCURRENCY = 4;
+const PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY = 8;
+const TEACHING_TEXT_TINY_PAGE_MAX_CHARS = 700;
+const TEACHING_TEXT_COMPACT_PAGE_MAX_CHARS = 1_500;
+const TEACHING_TEXT_TINY_AVG_CHARS = 520;
+const TEACHING_TEXT_COMPACT_AVG_CHARS = 1_000;
+const TEACHING_CONTEXT_NEIGHBOR_PAGES = 2;
+const TEACHING_CONTEXT_EDGE_PAGES = 2;
+const PDF_DIRECT_FILE_CACHE_MAX_ENTRIES = 16;
+
+const cachedPdfDirectFilesByUrl = new Map<string, Promise<PdfDirectFileInput | null>>();
+const cachedPdfDirectFilesByKey = new Map<string, Promise<PdfDirectFileInput | null>>();
+const cachedPdfDirectFilesByBlob = new WeakMap<Blob, Promise<PdfDirectFileInput | null>>();
+
+type AsyncLimiterPriority = "now" | "next" | "later";
+
+type TeachingGenerationAttempt = "initial" | "retry";
+type TeachingGenerationQualityPlan = {
+  model: string;
+  fallbackModel?: string;
+  reasoningEffort: UiPreferences["modelReasoningEffort"];
+  attachPdf: boolean;
+  batchable: boolean;
+  retryOnWeakOutput: boolean;
+  attempt: TeachingGenerationAttempt;
+  reasons: string[];
+};
+type TeachingGenerationBatch = {
+  pages: PageData[];
+  plan: TeachingGenerationQualityPlan;
+};
 
 type PdfViewMode = "continuous" | "single-page";
 
@@ -700,8 +754,347 @@ function agentAnswerModeReasoningEffort(mode: UiPreferences["agentAnswerMode"]):
   return "medium";
 }
 
-function teachingGenerationReasoningEffort(_preference: UiPreferences["modelReasoningEffort"]): UiPreferences["modelReasoningEffort"] {
-  return "low";
+const teachingReasoningRank: Record<UiPreferences["modelReasoningEffort"], number> = {
+  none: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+  xhigh: 4,
+};
+
+function teachingGenerationReasoningEffort(
+  preference: UiPreferences["modelReasoningEffort"],
+  requested: UiPreferences["modelReasoningEffort"] = "low",
+): UiPreferences["modelReasoningEffort"] {
+  if (requested === "low") return preference === "none" ? "none" : "low";
+  if (preference === "xhigh") return "xhigh";
+  if (preference === "high") return "high";
+  return requested;
+}
+
+function maxTeachingReasoningEffort(
+  left: UiPreferences["modelReasoningEffort"],
+  right: UiPreferences["modelReasoningEffort"],
+): UiPreferences["modelReasoningEffort"] {
+  return teachingReasoningRank[right] > teachingReasoningRank[left] ? right : left;
+}
+
+function pageTextForSignals(page: PageData) {
+  return `${page.source.text_md || ""}\n${page.teaching.slide_title || ""}`.trim();
+}
+
+function pageHasFormulaSignals(text: string) {
+  return /\\(?:frac|sum|int|begin|end|cdots|rightarrow|operatorname|sqrt|leq|geq|alpha|beta|gamma|delta)|\$\$?[^$]+\$\$?|[∑∫√∞≈≤≥→↔]|(?:^|\s)[A-Za-z][\w]*\s*\([^)]*\)\s*=/m.test(text);
+}
+
+function pageHasTableSignals(text: string) {
+  return /\|.+\|/.test(text) || /\b(?:truth table|state table|table|row|column|matrix)\b/i.test(text) || /(?:真值表|状态表|表格|矩阵)/.test(text);
+}
+
+function pageHasCodeSignals(text: string) {
+  return /\b(?:module|endmodule|always|assign|wire|reg|logic|input|output|verilog|hdl|xor|nand|flip-flop)\b/i.test(text);
+}
+
+function countRegexMatches(text: string, pattern: RegExp) {
+  return Array.from(text.matchAll(pattern)).length;
+}
+
+function pageComplexitySignalCount(text: string) {
+  return (
+    countRegexMatches(text, /\\(?:frac|sum|int|begin|end|cdots|rightarrow|operatorname|sqrt|leq|geq|alpha|beta|gamma|delta)|[∑∫√∞≈≤≥→↔]/g) +
+    countRegexMatches(text, /\$\$?[^$]+\$\$?/g) +
+    countRegexMatches(text, /\|.+\|/g) +
+    countRegexMatches(text, /\b(?:module|endmodule|always|assign|wire|reg|logic|input|output|verilog|hdl|xor|nand|flip-flop)\b/gi)
+  );
+}
+
+function pageHasVisualSignals(page: PageData, text: string) {
+  const pageType = page.source.page_type || "";
+  return (
+    /^(figure|table|formula|exercise)$/i.test(pageType) ||
+    /\b(?:figure|diagram|chart|plot|graph|waveform|circuit|state diagram|block diagram|timing|layout)\b/i.test(text) ||
+    /(?:图|示意|电路图|波形|时序|框图|状态图|流程图)/.test(text)
+  );
+}
+
+function teachingGenerationQualityPlan(
+  page: PageData,
+  preference: UiPreferences["modelReasoningEffort"],
+  attempt: TeachingGenerationAttempt = "initial",
+): TeachingGenerationQualityPlan {
+  const text = pageTextForSignals(page);
+  const sourceText = page.source.text_md.trim();
+  const reasons: string[] = [];
+  const formulaLike = pageHasFormulaSignals(text);
+  const tableLike = pageHasTableSignals(text);
+  const codeLike = pageHasCodeSignals(text);
+  const visualLike = pageHasVisualSignals(page, text);
+  const complexitySignalCount = pageComplexitySignalCount(text);
+  const sparseText = sourceText.length < TEACHING_FILE_INPUT_MIN_TEXT_CHARS;
+  const shortText = sourceText.length < TEACHING_TEXT_HEAVY_MIN_CHARS;
+  const complexTextLike = formulaLike || tableLike || codeLike;
+  const denseComplexText =
+    complexTextLike &&
+    (sourceText.length < TEACHING_COMPLEX_TEXT_FAST_MIN_CHARS ||
+      complexitySignalCount >= TEACHING_COMPLEX_TEXT_BALANCED_SIGNAL_COUNT);
+  const previousWeak =
+    page.status === "failed" ||
+    Boolean(page.teaching.needs_review) ||
+    Boolean(page.teaching.needs_parser_fallback);
+
+  let requestedReasoning: UiPreferences["modelReasoningEffort"] =
+    sourceText.length <= TEACHING_TEXT_COMPACT_PAGE_MAX_CHARS ? "none" : "low";
+  let attachPdf = false;
+  let batchable = true;
+  let retryOnWeakOutput = false;
+
+  if (sparseText) {
+    reasons.push("sparse-source-text");
+    requestedReasoning = "high";
+    attachPdf = true;
+    batchable = true;
+    retryOnWeakOutput = true;
+  } else if (shortText) {
+    reasons.push("short-source-text");
+    if (visualLike || complexTextLike) {
+      requestedReasoning = "medium";
+    } else {
+      reasons.push("short-text-fast-path");
+    }
+    batchable = true;
+    retryOnWeakOutput = visualLike || complexTextLike;
+  }
+
+  if (complexTextLike) {
+    if (formulaLike) reasons.push("formula");
+    if (tableLike) reasons.push("table");
+    if (codeLike) reasons.push("code");
+    if (denseComplexText) {
+      requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, "medium");
+    } else {
+      reasons.push("light-complex-text-fast-path");
+    }
+  }
+
+  if (visualLike && sourceText.length <= TEACHING_VISUAL_TEXT_MAX_CHARS) {
+    reasons.push("visual-heavy");
+    requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, "medium");
+    attachPdf = true;
+    batchable = true;
+    retryOnWeakOutput = true;
+  }
+
+  if (previousWeak) {
+    reasons.push("previous-weak-output");
+    requestedReasoning = "high";
+    attachPdf = true;
+    batchable = false;
+    retryOnWeakOutput = true;
+  }
+
+  if (attempt === "retry") {
+    reasons.push("quality-retry");
+    requestedReasoning = "high";
+    attachPdf = true;
+    batchable = false;
+    retryOnWeakOutput = false;
+  }
+
+  if (!reasons.length) reasons.push("text-fast-path");
+  const model =
+    attachPdf || requestedReasoning === "high"
+      ? TEACHING_QUALITY_MODEL
+      : requestedReasoning === "medium"
+        ? TEACHING_BALANCED_MODEL
+        : TEACHING_FAST_MODEL;
+  return {
+    model,
+    fallbackModel: model === TEACHING_QUALITY_MODEL ? undefined : TEACHING_QUALITY_MODEL,
+    reasoningEffort: teachingGenerationReasoningEffort(preference, requestedReasoning),
+    attachPdf,
+    batchable,
+    retryOnWeakOutput,
+    attempt,
+    reasons,
+  };
+}
+
+function teachingQualityPlanPayload(plan: TeachingGenerationQualityPlan) {
+  return {
+    attempt: plan.attempt,
+    model: plan.model,
+    fallbackModel: plan.fallbackModel,
+    reasoningEffort: plan.reasoningEffort,
+    attachPdf: plan.attachPdf,
+    batchable: plan.batchable,
+    reasons: plan.reasons,
+  };
+}
+
+function teachingBatchSizeForPlan(plan: TeachingGenerationQualityPlan, pages: PageData[] = []) {
+  if (isFastTextTeachingPlan(plan)) {
+    if (!pages.length) return TEACHING_TEXT_PAGE_BATCH_SIZE;
+    const sourceLengths = pages.map((page) => page.source.text_md.trim().length);
+    const maxChars = Math.max(...sourceLengths);
+    const avgChars = sourceLengths.reduce((sum, length) => sum + length, 0) / sourceLengths.length;
+    if (maxChars <= TEACHING_TEXT_TINY_PAGE_MAX_CHARS && avgChars <= TEACHING_TEXT_TINY_AVG_CHARS) {
+      return TEACHING_TEXT_TINY_PAGE_BATCH_SIZE;
+    }
+    if (maxChars <= TEACHING_TEXT_COMPACT_PAGE_MAX_CHARS && avgChars <= TEACHING_TEXT_COMPACT_AVG_CHARS) {
+      return TEACHING_TEXT_COMPACT_PAGE_BATCH_SIZE;
+    }
+    return TEACHING_TEXT_PAGE_BATCH_SIZE;
+  }
+  if (!plan.attachPdf && plan.model === TEACHING_BALANCED_MODEL) return TEACHING_BALANCED_TEXT_PAGE_BATCH_SIZE;
+  return TEACHING_BALANCED_PAGE_BATCH_SIZE;
+}
+
+function isFastTextTeachingPlan(plan: TeachingGenerationQualityPlan) {
+  return plan.model === TEACHING_FAST_MODEL && (plan.reasoningEffort === "none" || plan.reasoningEffort === "low") && !plan.attachPdf;
+}
+
+function teachingSourceRequestLimitForPlan(plan: TeachingGenerationQualityPlan) {
+  if (plan.attachPdf || plan.reasoningEffort === "high" || plan.reasoningEffort === "xhigh") {
+    return TEACHING_QUALITY_SOURCE_REQUEST_CHARS;
+  }
+  if (plan.model === TEACHING_FAST_MODEL && (plan.reasoningEffort === "none" || plan.reasoningEffort === "low")) {
+    return TEACHING_FAST_SOURCE_REQUEST_CHARS;
+  }
+  return TEACHING_BALANCED_SOURCE_REQUEST_CHARS;
+}
+
+function truncateGenerationRequestText(value: string, maxChars: number) {
+  return value.length > maxChars ? `${value.slice(0, Math.max(0, maxChars - 1))}…` : value;
+}
+
+function teachingRequestPage(page: PageData, plan: TeachingGenerationQualityPlan) {
+  const sourceTextLimit = teachingSourceRequestLimitForPlan(plan);
+  const source = {
+    pdf_page_ref: page.source.pdf_page_ref,
+    text_md: truncateGenerationRequestText(page.source.text_md, sourceTextLimit),
+  };
+  if (isFastTextTeachingPlan(plan)) {
+    return {
+      page_no: page.page_no,
+      source,
+    };
+  }
+  return {
+    page_no: page.page_no,
+    source: {
+      ...source,
+      ocr_used: page.source.ocr_used,
+      parser: page.source.parser,
+      page_type: page.source.page_type,
+    },
+    teaching: {
+      output_language: page.teaching.output_language,
+      slide_title: page.teaching.slide_title,
+      speaker_notes_md: truncateGenerationRequestText(page.teaching.speaker_notes_md, 1200),
+      confidence: page.teaching.confidence,
+      needs_review: page.teaching.needs_review,
+      needs_parser_fallback: page.teaching.needs_parser_fallback,
+    },
+    status: page.status,
+  };
+}
+
+function teachingDocumentContextForPlan(plan: TeachingGenerationQualityPlan, context: PdfContextPayload): PdfContextPayload | null {
+  if (plan.model === TEACHING_FAST_MODEL && (plan.reasoningEffort === "none" || plan.reasoningEffort === "low") && !plan.attachPdf) return null;
+  return context;
+}
+
+function teachingPlansCanShareBatch(left: TeachingGenerationQualityPlan, right: TeachingGenerationQualityPlan) {
+  return (
+    left.model === right.model &&
+    left.reasoningEffort === right.reasoningEffort &&
+    left.attachPdf === right.attachPdf &&
+    left.batchable === right.batchable &&
+    left.attempt === right.attempt
+  );
+}
+
+function prioritizeTeachingPages(pages: PageData[], priorityPageNo: number) {
+  const safePriority = Number.isFinite(priorityPageNo) ? priorityPageNo : pages[0]?.page_no || 1;
+  return pages.slice().sort((left, right) => {
+    const distance = Math.abs(left.page_no - safePriority) - Math.abs(right.page_no - safePriority);
+    return distance || left.page_no - right.page_no;
+  });
+}
+
+function prioritizeTeachingPageNumbers(pageNumbers: number[], priorityPageNo: number) {
+  const safePriority = Number.isFinite(priorityPageNo) ? priorityPageNo : pageNumbers[0] || 1;
+  return [...new Set(pageNumbers)]
+    .filter((pageNo) => Number.isFinite(pageNo) && pageNo >= 1)
+    .sort((left, right) => {
+      const distance = Math.abs(left - safePriority) - Math.abs(right - safePriority);
+      return distance || left - right;
+    });
+}
+
+function teachingWarmupPageNumbers(pageCountHint: number, priorityPageNo: number, targetPageNumbers: number[] = []) {
+  if (targetPageNumbers.length) {
+    return prioritizeTeachingPageNumbers(targetPageNumbers, priorityPageNo).slice(0, TEACHING_PROJECT_WARMUP_PAGE_COUNT);
+  }
+  const pageNumbers: number[] = [];
+  const addPage = (pageNo: number) => {
+    if (Number.isFinite(pageNo) && pageNo >= 1) pageNumbers.push(Math.floor(pageNo));
+  };
+  addPage(priorityPageNo);
+  for (let offset = 1; offset < TEACHING_PROJECT_WARMUP_PAGE_COUNT; offset += 1) {
+    addPage(priorityPageNo + offset);
+    addPage(priorityPageNo - offset);
+  }
+  const fallbackTotal = Math.max(pageCountHint || 0, TEACHING_PROJECT_WARMUP_PAGE_COUNT);
+  for (let pageNo = 1; pageNo <= fallbackTotal && pageNumbers.length < TEACHING_PROJECT_WARMUP_PAGE_COUNT * 2; pageNo += 1) {
+    addPage(pageNo);
+  }
+  return prioritizeTeachingPageNumbers(pageNumbers, priorityPageNo).slice(0, TEACHING_PROJECT_WARMUP_PAGE_COUNT);
+}
+
+function teachingModelRequestPriority(
+  pages: PageData[],
+  priorityPageNo: number,
+  priority: AsyncLimiterPriority,
+  fallback: AsyncLimiterPriority,
+) {
+  return pages.some((page) => page.page_no === priorityPageNo) ? priority : fallback;
+}
+
+function generatedTeachingLooksWeak(page: PageData) {
+  const notes = page.teaching.speaker_notes_md.trim();
+  return (
+    page.status === "failed" ||
+    Boolean(page.teaching.needs_review) ||
+    Boolean(page.teaching.needs_parser_fallback) ||
+    page.teaching.confidence < TEACHING_LOW_QUALITY_CONFIDENCE ||
+    notes.length < TEACHING_LOW_QUALITY_NOTE_CHARS
+  );
+}
+
+function generatedTeachingNeedsRetry(page: PageData) {
+  const notes = page.teaching.speaker_notes_md.trim();
+  return (
+    page.status === "failed" ||
+    Boolean(page.teaching.needs_parser_fallback) ||
+    (Boolean(page.teaching.needs_review) && page.teaching.confidence < TEACHING_LOW_QUALITY_CONFIDENCE) ||
+    page.teaching.confidence < TEACHING_RETRY_CONFIDENCE ||
+    notes.length < TEACHING_RETRY_NOTE_CHARS
+  );
+}
+
+function teachingPageQualityScore(page: PageData) {
+  const notes = page.teaching.speaker_notes_md.trim();
+  let score = page.teaching.confidence * 1000 + Math.min(notes.length, 4000) / 10;
+  if (page.status === "failed") score -= 1000;
+  if (page.teaching.needs_review) score -= 250;
+  if (page.teaching.needs_parser_fallback) score -= 350;
+  return score;
+}
+
+function shouldPreferTeachingCandidate(candidate: PageData, current: PageData) {
+  if (generatedTeachingLooksWeak(current) && !generatedTeachingLooksWeak(candidate)) return true;
+  return teachingPageQualityScore(candidate) >= teachingPageQualityScore(current) + 25;
 }
 
 function clampPreferenceNumber(value: unknown, fallback: number, min: number, max: number) {
@@ -1113,7 +1506,104 @@ async function pdfDirectFileInputFromBlob(blob: Blob, filename: string): Promise
   };
 }
 
-async function extractPdfPagesFromBlob(blob: Blob, priorityPageNumbers: number[] = []) {
+function pdfDirectFileCacheKey(...parts: string[]) {
+  return parts.join("\u001f");
+}
+
+function rememberPdfDirectFileByKey(
+  cache: Map<string, Promise<PdfDirectFileInput | null>>,
+  key: string,
+  create: () => Promise<PdfDirectFileInput | null>,
+) {
+  const existing = cache.get(key);
+  if (existing) return existing;
+  const promise = create()
+    .then((file) => {
+      if (file?.fileData) cache.delete(key);
+      return file;
+    })
+    .catch(() => {
+      cache.delete(key);
+      return null;
+    });
+  cache.set(key, promise);
+  while (cache.size > PDF_DIRECT_FILE_CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (!oldest) break;
+    cache.delete(oldest);
+  }
+  return promise;
+}
+
+function rememberPdfDirectFileByBlob(
+  blob: Blob,
+  create: () => Promise<PdfDirectFileInput | null>,
+) {
+  const existing = cachedPdfDirectFilesByBlob.get(blob);
+  if (existing) return existing;
+  const promise = create()
+    .then((file) => {
+      if (file?.fileData) cachedPdfDirectFilesByBlob.delete(blob);
+      return file;
+    })
+    .catch(() => {
+      cachedPdfDirectFilesByBlob.delete(blob);
+      return null;
+    });
+  cachedPdfDirectFilesByBlob.set(blob, promise);
+  return promise;
+}
+
+async function cachedPdfDirectFileInput(file: PdfDirectFileInput | null): Promise<PdfDirectFileInput | null> {
+  if (!file?.fileData) return file;
+  const cached = await requestJson<PdfDirectFileInput>(
+    "/api/pdf/cache",
+    {
+      method: "POST",
+      body: JSON.stringify({ documentFile: file }),
+    },
+  ).catch(() => null);
+  if (!cached?.sha256) return file;
+  return {
+    filename: cached.filename || file.filename,
+    mimeType: cached.mimeType || file.mimeType,
+    size: cached.size || file.size,
+    sha256: cached.sha256,
+  };
+}
+
+function cachedPdfDirectFileInputFromUrl(url: string, filename: string): Promise<PdfDirectFileInput | null> {
+  if (!url) return Promise.resolve(null);
+  const key = pdfDirectFileCacheKey("url", filename || "document.pdf", url);
+  return rememberPdfDirectFileByKey(cachedPdfDirectFilesByUrl, key, () =>
+    pdfDirectFileInputFromUrl(url, filename).then(cachedPdfDirectFileInput),
+  );
+}
+
+function cachedPdfDirectFileInputFromBlob(
+  blob: Blob,
+  filename: string,
+  cacheKey?: string,
+): Promise<PdfDirectFileInput | null> {
+  if (!blob.size) return Promise.resolve(null);
+  const create = () => pdfDirectFileInputFromBlob(blob, filename).then(cachedPdfDirectFileInput);
+  if (!cacheKey) return rememberPdfDirectFileByBlob(blob, create);
+  const key = pdfDirectFileCacheKey("blob", cacheKey, filename || "document.pdf", String(blob.size), blob.type || "application/pdf");
+  return rememberPdfDirectFileByKey(cachedPdfDirectFilesByKey, key, create);
+}
+
+type PdfPageExtractionOptions = {
+  priorityPageNumbers?: number[];
+  pageNumbers?: number[];
+  shouldCancel?: () => boolean;
+  onProgress?: (pages: PdfContextPage[]) => void;
+  progressBatchSize?: number;
+  delayMs?: number;
+  concurrency?: number;
+};
+
+async function extractPdfPagesFromBlob(blob: Blob, options: number[] | PdfPageExtractionOptions = []) {
+  const extractionOptions = Array.isArray(options) ? { priorityPageNumbers: options } : options;
   const url = URL.createObjectURL(blob);
   let loadingTask: { promise: Promise<PDFDocumentProxy>; destroy: () => Promise<void> } | null = null;
   try {
@@ -1121,9 +1611,13 @@ async function extractPdfPagesFromBlob(blob: Blob, priorityPageNumbers: number[]
     loadingTask = pdfJs.getDocument({ url, worker: pdfJs.createPdfWorker() });
     const document = await loadingTask.promise;
     const pages = await extractPdfPagesFromDocument(document, {
-      priorityPageNumbers,
-      progressBatchSize: 12,
-      delayMs: 0,
+      priorityPageNumbers: extractionOptions.priorityPageNumbers,
+      pageNumbers: extractionOptions.pageNumbers,
+      shouldCancel: extractionOptions.shouldCancel,
+      onProgress: extractionOptions.onProgress,
+      progressBatchSize: extractionOptions.progressBatchSize || 12,
+      delayMs: extractionOptions.delayMs || 0,
+      concurrency: extractionOptions.concurrency,
     });
     return { pageCount: document.numPages, pages };
   } finally {
@@ -1175,40 +1669,46 @@ async function extractPdfPagesFromDocument(
   document: PDFDocumentProxy,
   options: {
     priorityPageNumbers?: number[];
+    pageNumbers?: number[];
     shouldCancel?: () => boolean;
     onProgress?: (pages: PdfContextPage[]) => void;
     progressBatchSize?: number;
     delayMs?: number;
+    concurrency?: number;
   } = {},
 ): Promise<PdfContextPage[]> {
   const pages: PdfContextPage[] = [];
   let pendingProgress = 0;
   const progressBatchSize = Math.max(1, options.progressBatchSize || 6);
-  for (const pageNo of pdfExtractionOrder(document.numPages, options.priorityPageNumbers)) {
-    if (options.shouldCancel?.()) break;
+  const pageNumbers = pdfExtractionOrder(document.numPages, options.priorityPageNumbers, options.pageNumbers);
+  const publishProgress = () => {
+    if (!options.onProgress || pendingProgress < progressBatchSize) return;
+    pendingProgress = 0;
+    options.onProgress(sortPdfContextPages(pages));
+  };
+
+  await runWithConcurrencyLimit(pageNumbers, options.concurrency || PDF_TEXT_EXTRACTION_CONCURRENCY, async (pageNo) => {
+    if (options.shouldCancel?.()) return;
     const page = await document.getPage(pageNo);
-    if (options.shouldCancel?.()) break;
+    if (options.shouldCancel?.()) return;
     const textContent = await page.getTextContent();
-    if (options.shouldCancel?.()) break;
+    if (options.shouldCancel?.()) return;
     pages.push({
       page_no: pageNo,
       title: `PDF p.${pageNo}`,
       text_md: textContentToPlainText(textContent),
     });
     pendingProgress += 1;
-    if (options.onProgress && pendingProgress >= progressBatchSize) {
-      pendingProgress = 0;
-      options.onProgress(sortPdfContextPages(pages));
-    }
+    publishProgress();
     await waitForPdfExtractionIdle(options.delayMs);
-  }
+  });
   if (options.onProgress && pendingProgress > 0) {
     options.onProgress(sortPdfContextPages(pages));
   }
   return sortPdfContextPages(pages);
 }
 
-function pdfExtractionOrder(pageCount: number, priorityPageNumbers: number[] = []) {
+function pdfExtractionOrder(pageCount: number, priorityPageNumbers: number[] = [], pageNumbers?: number[]) {
   const total = Math.max(0, pageCount);
   const seen = new Set<number>();
   const ordered: number[] = [];
@@ -1217,8 +1717,17 @@ function pdfExtractionOrder(pageCount: number, priorityPageNumbers: number[] = [
     seen.add(pageNo);
     ordered.push(pageNo);
   };
+  const targetPageNumbers = pageNumbers?.length
+    ? [...new Set(pageNumbers)]
+        .filter((pageNo) => Number.isFinite(pageNo) && pageNo >= 1 && pageNo <= total)
+        .sort((left, right) => left - right)
+    : Array.from({ length: total }, (_, index) => index + 1);
+  const targetSet = new Set(targetPageNumbers);
   priorityPageNumbers.forEach(add);
-  for (let pageNo = 1; pageNo <= total; pageNo += 1) add(pageNo);
+  for (const pageNo of targetPageNumbers) add(pageNo);
+  if (pageNumbers?.length) {
+    return ordered.filter((pageNo) => targetSet.has(pageNo));
+  }
   return ordered;
 }
 
@@ -1226,19 +1735,59 @@ function sortPdfContextPages(pages: PdfContextPage[]) {
   return [...pages].sort((left, right) => left.page_no - right.page_no);
 }
 
+function mergePdfContextPages(...pageGroups: PdfContextPage[][]) {
+  const pagesByNumber = new Map<number, PdfContextPage>();
+  for (const pages of pageGroups) {
+    for (const page of pages) {
+      pagesByNumber.set(page.page_no, page);
+    }
+  }
+  return sortPdfContextPages([...pagesByNumber.values()]);
+}
+
 function compactTeachingContextText(text: string) {
   return truncatePromptContext(text, TEACHING_CONTEXT_PAGE_CHARS);
+}
+
+function teachingContextPageNumbers(pageCount: number, targetPageNumbers: number[] = []) {
+  const includedPageNumbers = new Set<number>();
+  const addPage = (pageNo: number) => {
+    if (Number.isFinite(pageNo) && pageNo >= 1 && pageNo <= pageCount) includedPageNumbers.add(Math.floor(pageNo));
+  };
+  for (let pageNo = 1; pageNo <= Math.min(pageCount, TEACHING_CONTEXT_EDGE_PAGES); pageNo += 1) addPage(pageNo);
+  for (let pageNo = Math.max(1, pageCount - TEACHING_CONTEXT_EDGE_PAGES + 1); pageNo <= pageCount; pageNo += 1) addPage(pageNo);
+  for (const targetPageNo of targetPageNumbers) {
+    for (
+      let pageNo = targetPageNo - TEACHING_CONTEXT_NEIGHBOR_PAGES;
+      pageNo <= targetPageNo + TEACHING_CONTEXT_NEIGHBOR_PAGES;
+      pageNo += 1
+    ) {
+      addPage(pageNo);
+    }
+  }
+  if (!includedPageNumbers.size) {
+    for (let pageNo = 1; pageNo <= pageCount; pageNo += 1) addPage(pageNo);
+  }
+  return [...includedPageNumbers].sort((left, right) => left - right);
+}
+
+function teachingExtractionPageNumbers(pageCount: number, targetPageNumbers: number[]) {
+  return [...new Set([...targetPageNumbers, ...teachingContextPageNumbers(pageCount)])]
+    .filter((pageNo) => Number.isFinite(pageNo) && pageNo >= 1 && pageNo <= pageCount)
+    .sort((left, right) => left - right);
 }
 
 function fullPdfContextForTeachingGeneration(
   pack: PagePack,
   pageCount: number,
   extractedPages: PdfContextPage[],
+  targetPageNumbers: number[] = [],
 ): PdfContextPayload {
   const extractedTextByPage = new Map(extractedPages.map((page) => [page.page_no, page.text_md]));
   const packPagesByNumber = new Map(pack.pages.map((page) => [page.page_no, page]));
-  const pages = Array.from({ length: pageCount }, (_, index) => {
-    const pageNo = index + 1;
+
+  const sortedPageNumbers = teachingContextPageNumbers(pageCount, targetPageNumbers);
+  const pages = sortedPageNumbers.map((pageNo) => {
     const packPage = packPagesByNumber.get(pageNo);
     return {
       page_no: pageNo,
@@ -1246,21 +1795,66 @@ function fullPdfContextForTeachingGeneration(
       text_md: compactTeachingContextText(extractedTextByPage.get(pageNo) || packPage?.source.text_md || ""),
     };
   });
+  const truncated = pages.length < pageCount;
   return {
     documentId: pack.document.id,
     documentTitle: pack.document.title,
     pageCount,
-    truncated: false,
-    truncationPolicy: "all-pages",
-    fullPageLimit: pageCount,
-    edgePageCount: pageCount,
-    includedPageNumbers: pages.map((page) => page.page_no),
+    truncated,
+    truncationPolicy: truncated ? "target-neighbor-edge" : "all-pages",
+    fullPageLimit: pages.length,
+    edgePageCount: TEACHING_CONTEXT_EDGE_PAGES,
+    includedPageNumbers: sortedPageNumbers,
     pages,
   };
 }
 
-function shouldAttachPdfFileForTeachingPage(page: PageData) {
-  return page.source.text_md.trim().length < TEACHING_FILE_INPUT_MIN_TEXT_CHARS;
+function batchTeachingPages(pages: PageData[], preference: UiPreferences["modelReasoningEffort"]) {
+  const batches: TeachingGenerationBatch[] = [];
+  let currentBatch: PageData[] = [];
+  let currentPlan: TeachingGenerationQualityPlan | null = null;
+  let emittedFastWarmupBatch = false;
+
+  const flushCurrentBatch = () => {
+    if (!currentBatch.length) return;
+    const plan = currentPlan || teachingGenerationQualityPlan(currentBatch[0], preference);
+    if (!emittedFastWarmupBatch && isFastTextTeachingPlan(plan) && currentBatch.length > TEACHING_TEXT_FIRST_BATCH_SIZE) {
+      batches.push({ pages: currentBatch.slice(0, TEACHING_TEXT_FIRST_BATCH_SIZE), plan });
+      batches.push({ pages: currentBatch.slice(TEACHING_TEXT_FIRST_BATCH_SIZE), plan });
+      emittedFastWarmupBatch = true;
+    } else {
+      batches.push({ pages: currentBatch, plan });
+    }
+    currentBatch = [];
+    currentPlan = null;
+  };
+
+  for (const page of pages) {
+    const plan = teachingGenerationQualityPlan(page, preference);
+    if (!plan.batchable) {
+      flushCurrentBatch();
+      batches.push({ pages: [page], plan });
+      continue;
+    }
+
+    if (currentPlan && !teachingPlansCanShareBatch(currentPlan, plan)) {
+      flushCurrentBatch();
+    }
+    currentPlan ??= plan;
+    if (currentBatch.length) {
+      const candidateBatch = [...currentBatch, page];
+      if (candidateBatch.length > teachingBatchSizeForPlan(currentPlan, candidateBatch)) {
+        flushCurrentBatch();
+        currentPlan = plan;
+      }
+    }
+    currentPlan ??= plan;
+    currentBatch.push(page);
+    if (currentBatch.length >= teachingBatchSizeForPlan(currentPlan, currentBatch)) flushCurrentBatch();
+  }
+
+  flushCurrentBatch();
+  return batches;
 }
 
 function pdfContextFromExtractedPages(
@@ -1753,6 +2347,10 @@ type GeneratedTeachingPageResponse = {
   };
   model?: string;
 };
+type GeneratedTeachingPagesResponse = {
+  pages: GeneratedTeachingPageResponse["page"][];
+  model?: string;
+};
 
 function normalizeGeneratedPage(rawPage: GeneratedTeachingPageResponse["page"], fallback: PageData, copy: AppCopy): PageData {
   const normalized = normalizePack(
@@ -1771,7 +2369,7 @@ function normalizeGeneratedPage(rawPage: GeneratedTeachingPageResponse["page"], 
       ...fallback.source,
       ...normalized.source,
       pdf_page_ref: normalized.source.pdf_page_ref || fallback.source.pdf_page_ref || `#page=${fallback.page_no}`,
-      text_md: normalized.source.text_md || fallback.source.text_md,
+      text_md: fallback.source.text_md || normalized.source.text_md,
       ocr_used: Boolean(normalized.source.ocr_used || fallback.source.ocr_used),
       parser: normalized.source.parser || fallback.source.parser || "pdfjs",
     },
@@ -1814,6 +2412,10 @@ function pageWithSourceText(page: PageData, sourceText: string): PageData {
   };
 }
 
+function missingSourceTextPageNumbers(pageNumbers: number[], sourceTextByPage: Map<number, string>) {
+  return pageNumbers.filter((pageNo) => !(sourceTextByPage.get(pageNo) || "").trim());
+}
+
 function hasCompletedTeaching(page: PageData | undefined, outputLanguage?: TeachingOutputLanguage) {
   if (!page) return false;
   if (page.status === "failed" || page.status === "running" || !page.teaching.speaker_notes_md.trim()) return false;
@@ -1840,17 +2442,118 @@ async function runWithConcurrencyLimit<T>(
   items: T[],
   limit: number,
   worker: (item: T, index: number) => Promise<void>,
+  options: { continueOnError?: boolean } = {},
 ) {
-  if (!items.length) return;
+  if (!items.length) return [];
   const concurrency = Math.min(Math.max(1, Math.floor(limit)), items.length);
   let nextIndex = 0;
+  const errors: unknown[] = [];
   await Promise.all(Array.from({ length: concurrency }, async () => {
     while (nextIndex < items.length) {
       const index = nextIndex;
       nextIndex += 1;
-      await worker(items[index], index);
+      try {
+        await worker(items[index], index);
+      } catch (error) {
+        if (!options.continueOnError) throw error;
+        errors.push(error);
+      }
     }
   }));
+  return errors;
+}
+
+function abortError(message = "Generation canceled") {
+  return new DOMException(message, "AbortError");
+}
+
+function createAsyncLimiter(limit: number) {
+  const concurrency = Math.max(1, Math.floor(limit));
+  type QueuedTask = {
+    priority: AsyncLimiterPriority;
+    signal?: AbortSignal;
+    start: () => void;
+    reject: (error: unknown) => void;
+    abortHandler?: () => void;
+  };
+  const queues: Record<AsyncLimiterPriority, QueuedTask[]> = {
+    now: [],
+    next: [],
+    later: [],
+  };
+  const priorityOrder: AsyncLimiterPriority[] = ["now", "next", "later"];
+  let active = 0;
+
+  const dequeue = () => {
+    for (const priority of priorityOrder) {
+      const task = queues[priority].shift();
+      if (task) return task;
+    }
+    return undefined;
+  };
+
+  const removeQueuedTask = (task: QueuedTask) => {
+    const queue = queues[task.priority];
+    const index = queue.indexOf(task);
+    if (index === -1) return false;
+    queue.splice(index, 1);
+    return true;
+  };
+
+  const cleanupTask = (task: QueuedTask) => {
+    if (task.abortHandler) task.signal?.removeEventListener("abort", task.abortHandler);
+    task.abortHandler = undefined;
+  };
+
+  const drain = () => {
+    while (active < concurrency) {
+      const task = dequeue();
+      if (!task) return;
+      cleanupTask(task);
+      if (task.signal?.aborted) {
+        task.reject(abortError());
+        continue;
+      }
+      active += 1;
+      task.start();
+    }
+  };
+
+  const release = () => {
+    active = Math.max(0, active - 1);
+    drain();
+  };
+
+  return function runLimited<T>(
+    worker: () => Promise<T>,
+    options: { priority?: AsyncLimiterPriority; signal?: AbortSignal } = {},
+  ): Promise<T> {
+    if (options.signal?.aborted) return Promise.reject(abortError());
+
+    return new Promise<T>((resolve, reject) => {
+      const task: QueuedTask = {
+        priority: options.priority || "next",
+        signal: options.signal,
+        reject,
+        start: () => {
+          void worker()
+            .then(resolve, reject)
+            .finally(release);
+        },
+      };
+      if (task.signal) {
+        task.abortHandler = () => {
+          if (removeQueuedTask(task)) {
+            cleanupTask(task);
+            reject(abortError());
+          }
+        };
+        task.signal.addEventListener("abort", task.abortHandler, { once: true });
+      }
+      queues[task.priority].push(task);
+      drain();
+    });
+  };
 }
 
 export default function App() {
@@ -1900,7 +2603,7 @@ export default function App() {
   const [agentRuntimeKey, setAgentRuntimeKey] = useState("thread:initial");
   const lastSelectionRef = useRef<SelectedContext | null>(null);
   const currentPdfObjectUrlRef = useRef("");
-  const pdfDirectFileCacheRef = useRef<{ url: string; filename: string; file: PdfDirectFileInput | null } | null>(null);
+  const generationAbortControllerRef = useRef<AbortController | null>(null);
   const appShellRef = useRef<HTMLDivElement>(null);
   const commandMenuRef = useRef<HTMLDivElement>(null);
   const railActionMenuRef = useRef<HTMLDivElement>(null);
@@ -2113,11 +2816,7 @@ export default function App() {
   const getDocumentFile = useCallback(async () => {
     if (!pdfUrl) return null;
     const filename = pack.document.source_pdf_url || pack.document.title || "document.pdf";
-    const cached = pdfDirectFileCacheRef.current;
-    if (cached?.url === pdfUrl && cached.filename === filename) return cached.file;
-    const file = await pdfDirectFileInputFromUrl(pdfUrl, filename).catch(() => null);
-    pdfDirectFileCacheRef.current = { url: pdfUrl, filename, file };
-    return file;
+    return cachedPdfDirectFileInputFromUrl(pdfUrl, filename);
   }, [pack.document.source_pdf_url, pack.document.title, pdfUrl]);
   const getPack = useCallback(() => pack, [pack]);
   const getPage = useCallback(() => page, [page]);
@@ -2218,10 +2917,11 @@ export default function App() {
   }, [documentId, persistOperation, threadId, workspaceId]);
 
   const replacePdfObjectUrl = useCallback((nextUrl: string) => {
+    generationAbortControllerRef.current?.abort();
+    generationAbortControllerRef.current = null;
     if (currentPdfObjectUrlRef.current) {
       URL.revokeObjectURL(currentPdfObjectUrlRef.current);
     }
-    pdfDirectFileCacheRef.current = null;
     currentPdfObjectUrlRef.current = nextUrl;
     setPdfUrl(nextUrl);
   }, []);
@@ -3247,10 +3947,6 @@ export default function App() {
     const pageOutputLanguage = teachingOutputLanguage;
     const pageOutputLanguageLabel = teachingOutputLanguageName(pageOutputLanguage);
     const totalPages = Math.max(pdfPageCount || pack.document.page_count || pack.pages.length || pdfExtractedPages.length, 1);
-    if (pdfUrl && pdfExtractedPages.length < totalPages) {
-      setJobStatus(copy.status.pdfTextExtracting(pdfExtractedPages.length, totalPages));
-      return;
-    }
     const sourceTextByPage = new Map<number, string>();
     for (const page of pdfExtractedPages) {
       sourceTextByPage.set(page.page_no, page.text_md);
@@ -3260,6 +3956,12 @@ export default function App() {
         sourceTextByPage.set(page.page_no, page.source.text_md);
       }
     }
+    const targetPageNumbers = generateTargetPageNumbers(generatePageMode, generateRangeDraft, currentPdfPageNo, totalPages);
+    if (!targetPageNumbers?.length) {
+      setJobStatus(copy.status.generationInvalidPageRange(totalPages));
+      return;
+    }
+    const missingTargetSourceText = missingSourceTextPageNumbers(targetPageNumbers, sourceTextByPage);
     const draftPack = createDraftPagePack(pack.document.title, pack.document.source_pdf_url, totalPages, pack.document.id);
     const packPagesByNumber = new Map(pack.pages.map((item) => [item.page_no, item]));
 
@@ -3275,16 +3977,14 @@ export default function App() {
         return pageWithSourceText(existing, sourceTextByPage.get(pageNo) || "");
       }),
     };
-    const workingPagesByNumber = new Map(workingPack.pages.map((item) => [item.page_no, item]));
-    const targetPageNumbers = generateTargetPageNumbers(generatePageMode, generateRangeDraft, currentPdfPageNo, totalPages);
-    if (!targetPageNumbers?.length) {
-      setJobStatus(copy.status.generationInvalidPageRange(totalPages));
-      return;
-    }
+    let workingPagesByNumber = new Map(workingPack.pages.map((item) => [item.page_no, item]));
     const targetPageSet = new Set(targetPageNumbers);
-    const scopedPages = workingPack.pages.filter((item) => targetPageSet.has(item.page_no));
-    const pagesToGenerate = scopedPages.filter((item) => !hasCompletedTeaching(item, pageOutputLanguage));
-    const skippedPages = scopedPages.length - pagesToGenerate.length;
+    let scopedPages = workingPack.pages.filter((item) => targetPageSet.has(item.page_no));
+    let pagesToGenerate = prioritizeTeachingPages(
+      scopedPages.filter((item) => !hasCompletedTeaching(item, pageOutputLanguage)),
+      currentPdfPageNo,
+    );
+    let skippedPages = scopedPages.length - pagesToGenerate.length;
     if (!pagesToGenerate.length) {
       setPack(workingPack);
       setJobStatus(copy.status.generationScopeAlreadyComplete(formatPageRanges(targetPageNumbers)));
@@ -3297,145 +3997,355 @@ export default function App() {
     setJobStatus(copy.status.generationPreparingCache(pagesToGenerate.length));
     setPack(workingPack);
 
+    generationAbortControllerRef.current?.abort();
+    const generationAbortController = new AbortController();
+    generationAbortControllerRef.current = generationAbortController;
+    const generationSignal = generationAbortController.signal;
+
     void (async () => {
       let completed = 0;
+      const runTeachingModelRequest = createAsyncLimiter(TEACHING_GENERATION_CONCURRENCY);
       try {
-        const documentContext = fullPdfContextForTeachingGeneration(workingPack, totalPages, pdfExtractedPages);
+        let extractedPagesForGeneration = pdfExtractedPages;
         let documentFilePromise: Promise<PdfDirectFileInput | null> | null = null;
-        const getDocumentFileForPage = (page: PageData) => {
-          if (!pdfUrl || !shouldAttachPdfFileForTeachingPage(page)) return Promise.resolve(null);
-          documentFilePromise ??= pdfDirectFileInputFromUrl(
+        const getDocumentFileForPlan = (plan: TeachingGenerationQualityPlan) => {
+          if (!pdfUrl || !plan.attachPdf) return Promise.resolve(null);
+          documentFilePromise ??= cachedPdfDirectFileInputFromUrl(
             pdfUrl,
             workingPack.document.source_pdf_url || workingPack.document.title,
           ).catch(() => null);
           return documentFilePromise;
         };
-        setJobStatus(copy.status.generationStarted(pagesToGenerate.length));
-        const generationInputPagesByNumber = new Map(workingPagesByNumber);
-        let started = 0;
-        await runWithConcurrencyLimit(pagesToGenerate, TEACHING_GENERATION_CONCURRENCY, async (pageToGenerate) => {
-          const pageNo = pageToGenerate.page_no;
-          const basePage = generationInputPagesByNumber.get(pageNo) || draftPack.pages[pageNo - 1];
-          const runningPage: PageData = {
-            ...basePage,
-            status: "running",
-            teaching: {
-              ...basePage.teaching,
-              output_language: pageOutputLanguage,
-              speaker_notes_md:
-                basePage.status === "failed" || basePage.teaching.output_language !== pageOutputLanguage
-                  ? ""
-                  : basePage.teaching.speaker_notes_md,
-            },
-          };
-          workingPack = mergePageIntoPack(workingPack, runningPage);
-          workingPagesByNumber.set(pageNo, runningPage);
-          setPack(workingPack);
-          setCurrentPageNo((current) => current || pageNo);
-          started += 1;
-          setJobStatus(copy.status.generationPage(started, pagesToGenerate.length, pageNo));
+        const persistGeneratedPage = async (generatedPage: PageData) => {
+          if (!workspaceId || !documentId || workingPack.document.id !== documentId) return;
+          await saveGeneratedPage({
+            id: `${documentId}:page:${generatedPage.page_no}`,
+            workspaceId,
+            documentId,
+            generatedPageIndex: generatedPage.page_no - 1,
+            sourcePdfPageNumber: generatedPage.page_no,
+            title: generatedPage.teaching.slide_title,
+            markdown: generatedPage.teaching.speaker_notes_md,
+            json: asPersistedRecord(generatedPage),
+            confidence: generatedPage.teaching.confidence,
+            status: generatedPage.status === "failed" ? "failed" : "completed",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+        };
+        let persistGeneratedPagesQueue = Promise.resolve();
+        const queuePersistGeneratedPage = (generatedPage: PageData) => {
+          persistGeneratedPagesQueue = persistGeneratedPagesQueue
+            .then(() => persistGeneratedPage(generatedPage))
+            .catch(() => undefined);
+        };
 
-          try {
+        const commitGeneratedPage = (generatedPage: PageData) => {
+          workingPack = mergePageIntoPack(workingPack, generatedPage);
+          workingPagesByNumber.set(generatedPage.page_no, generatedPage);
+          setPack(workingPack);
+          completed += 1;
+          queuePersistGeneratedPage(generatedPage);
+        };
+
+        const mergeExtractedPages = (pages: PdfContextPage[]) => {
+          if (!pages.length) return;
+          extractedPagesForGeneration = mergePdfContextPages(extractedPagesForGeneration, pages);
+          setPdfExtractedPages(extractedPagesForGeneration);
+          for (const page of pages) {
+            sourceTextByPage.set(page.page_no, page.text_md);
+          }
+          workingPack = {
+            ...workingPack,
+            pages: workingPack.pages.map((page) => pageWithSourceText(page, sourceTextByPage.get(page.page_no) || "")),
+          };
+          workingPagesByNumber = new Map(workingPack.pages.map((item) => [item.page_no, item]));
+          scopedPages = workingPack.pages.filter((item) => targetPageSet.has(item.page_no));
+          pagesToGenerate = prioritizeTeachingPages(
+            scopedPages.filter((item) => !hasCompletedTeaching(item, pageOutputLanguage)),
+            currentPdfPageNo,
+          );
+          skippedPages = scopedPages.length - pagesToGenerate.length;
+          setPack(workingPack);
+        };
+
+        const runGenerationPass = async (passPagesToGenerate: PageData[], contextPages: PdfContextPage[]) => {
+          if (!passPagesToGenerate.length || generationSignal.aborted) return;
+          const documentContext = fullPdfContextForTeachingGeneration(
+            workingPack,
+            totalPages,
+            contextPages,
+            passPagesToGenerate.map((page) => page.page_no),
+          );
+          setJobStatus(copy.status.generationStarted(passPagesToGenerate.length));
+          const generationInputPagesByNumber = new Map(workingPagesByNumber);
+          let started = 0;
+          const markRunningPage = (pageToGenerate: PageData) => {
+            const pageNo = pageToGenerate.page_no;
+            const basePage = generationInputPagesByNumber.get(pageNo) || draftPack.pages[pageNo - 1];
+            const runningPage: PageData = {
+              ...basePage,
+              status: "running",
+              teaching: {
+                ...basePage.teaching,
+                output_language: pageOutputLanguage,
+                speaker_notes_md:
+                  basePage.status === "failed" || basePage.teaching.output_language !== pageOutputLanguage
+                    ? ""
+                    : basePage.teaching.speaker_notes_md,
+              },
+            };
+            workingPack = mergePageIntoPack(workingPack, runningPage);
+            workingPagesByNumber.set(pageNo, runningPage);
+            setPack(workingPack);
+            setCurrentPageNo((current) => current || pageNo);
+            started += 1;
+            setJobStatus(copy.status.generationPage(started, passPagesToGenerate.length, pageNo));
+            return runningPage;
+          };
+
+          const requestGeneratedPage = async (runningPage: PageData, plan: TeachingGenerationQualityPlan) => {
+            const pageNo = runningPage.page_no;
             const previousPage = generationInputPagesByNumber.get(pageNo - 1);
             const nextPage = generationInputPagesByNumber.get(pageNo + 1);
-            const documentFile = await getDocumentFileForPage(runningPage);
-            const response = await requestJson<GeneratedTeachingPageResponse>(
-              "/api/generate/page",
-              {
-                method: "POST",
-                body: JSON.stringify({
-                  model: "gpt-5.5",
-                  reasoningEffort: teachingGenerationReasoningEffort(uiPreferences.modelReasoningEffort),
-                  document: workingPack.document,
-                  documentContext,
-                  documentFile,
-                  outputLanguage: pageOutputLanguage,
-                  outputLanguageLabel: pageOutputLanguageLabel,
-                  uiLanguage: uiPreferences.language,
-                  page: runningPage,
-                  pageCount: totalPages,
-                  previousPage: previousPage
-                    ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
-                    : null,
-                  nextPage: nextPage
-                    ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
-                    : null,
-                }),
-              },
-              copy.errors.accountNotFound,
+            const documentFile = await getDocumentFileForPlan(plan);
+            const priority = teachingModelRequestPriority([runningPage], currentPdfPageNo, "now", "next");
+            const response = await runTeachingModelRequest(() =>
+              requestJson<GeneratedTeachingPageResponse>(
+                "/api/generate/page",
+                {
+                  method: "POST",
+                  signal: generationSignal,
+                  body: JSON.stringify({
+                    model: plan.model,
+                    fallbackModel: plan.fallbackModel,
+                    reasoningEffort: plan.reasoningEffort,
+                    qualityPlan: teachingQualityPlanPayload(plan),
+                    document: workingPack.document,
+                    documentContext: teachingDocumentContextForPlan(plan, documentContext),
+                    documentFile,
+                    outputLanguage: pageOutputLanguage,
+                    outputLanguageLabel: pageOutputLanguageLabel,
+                    uiLanguage: uiPreferences.language,
+                    page: teachingRequestPage(runningPage, plan),
+                    pageCount: totalPages,
+                    previousPage: previousPage
+                      ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
+                      : null,
+                    nextPage: nextPage
+                      ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
+                      : null,
+                  }),
+                },
+                copy.errors.accountNotFound,
+              ),
+              { priority, signal: generationSignal },
             );
             const normalizedGeneratedPage = normalizeGeneratedPage(response.page, runningPage, copy);
-            const generatedPage: PageData = {
+            return {
               ...normalizedGeneratedPage,
               teaching: {
                 ...normalizedGeneratedPage.teaching,
                 output_language: pageOutputLanguage,
               },
             };
-            workingPack = mergePageIntoPack(workingPack, generatedPage);
-            workingPagesByNumber.set(pageNo, generatedPage);
-            setPack(workingPack);
-            completed += 1;
-            if (workspaceId && documentId && workingPack.document.id === documentId) {
-              await saveGeneratedPage({
-                id: `${documentId}:page:${generatedPage.page_no}`,
-                workspaceId,
-                documentId,
-                generatedPageIndex: generatedPage.page_no - 1,
-                sourcePdfPageNumber: generatedPage.page_no,
-                title: generatedPage.teaching.slide_title,
-                markdown: generatedPage.teaching.speaker_notes_md,
-                json: asPersistedRecord(generatedPage),
-                confidence: generatedPage.teaching.confidence,
-                status: generatedPage.status === "failed" ? "failed" : "completed",
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-              });
-            }
-          } catch (error) {
-            const message = (error as Error).message || copy.agent.generationFailed;
-            const failedPage: PageData = {
-              ...runningPage,
-              status: "failed",
-              teaching: {
-                ...runningPage.teaching,
-                output_language: pageOutputLanguage,
-                slide_title: runningPage.teaching.slide_title || `PDF p.${pageNo}`,
-                speaker_notes_md: generationFailureMarkdown(message, pageOutputLanguage),
-                confidence: 0,
-                needs_review: true,
-              },
-            };
-            workingPack = mergePageIntoPack(workingPack, failedPage);
-            workingPagesByNumber.set(pageNo, failedPage);
-            setPack(workingPack);
-            setJobStatus(copy.status.generationPageFailed(pageNo, message));
-            if (workspaceId && documentId && workingPack.document.id === documentId) {
-              await saveGeneratedPage({
-                id: `${documentId}:page:${pageNo}`,
-                workspaceId,
-                documentId,
-                generatedPageIndex: pageNo - 1,
-                sourcePdfPageNumber: pageNo,
-                title: failedPage.teaching.slide_title,
-                markdown: failedPage.teaching.speaker_notes_md,
-                json: asPersistedRecord(failedPage),
-                confidence: 0,
+          };
+
+          const generateSinglePage = async (
+            runningPage: PageData,
+            plan = teachingGenerationQualityPlan(runningPage, uiPreferences.modelReasoningEffort),
+            fallbackOnFailure?: PageData,
+          ) => {
+            const pageNo = runningPage.page_no;
+            if (generationSignal.aborted) return;
+            try {
+              let generatedPage = await requestGeneratedPage(runningPage, plan);
+              if (plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
+                const retryPlan = teachingGenerationQualityPlan(runningPage, uiPreferences.modelReasoningEffort, "retry");
+                const retriedPage = await requestGeneratedPage(runningPage, retryPlan).catch(() => null);
+                if (retriedPage && shouldPreferTeachingCandidate(retriedPage, generatedPage)) {
+                  generatedPage = retriedPage;
+                }
+              }
+              await commitGeneratedPage(generatedPage);
+            } catch (error) {
+              if ((error as Error).name === "AbortError") return;
+              if (fallbackOnFailure) {
+                await commitGeneratedPage(fallbackOnFailure);
+                return;
+              }
+              const message = (error as Error).message || copy.agent.generationFailed;
+              const failedPage: PageData = {
+                ...runningPage,
                 status: "failed",
-                errorSummary: message,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
+                teaching: {
+                  ...runningPage.teaching,
+                  output_language: pageOutputLanguage,
+                  slide_title: runningPage.teaching.slide_title || `PDF p.${pageNo}`,
+                  speaker_notes_md: generationFailureMarkdown(message, pageOutputLanguage),
+                  confidence: 0,
+                  needs_review: true,
+                },
+              };
+              workingPack = mergePageIntoPack(workingPack, failedPage);
+              workingPagesByNumber.set(pageNo, failedPage);
+              setPack(workingPack);
+              setJobStatus(copy.status.generationPageFailed(pageNo, message));
+              queuePersistGeneratedPage(failedPage);
+            }
+          };
+
+          const pageBatches = batchTeachingPages(passPagesToGenerate, uiPreferences.modelReasoningEffort);
+          await runWithConcurrencyLimit(pageBatches, TEACHING_GENERATION_CONCURRENCY, async (pageBatch) => {
+            const runningPages = pageBatch.pages.map(markRunningPage);
+            if (runningPages.length === 1) {
+              await generateSinglePage(runningPages[0], pageBatch.plan);
+              return;
+            }
+
+            try {
+              const documentFile = await getDocumentFileForPlan(pageBatch.plan);
+              const priority = teachingModelRequestPriority(runningPages, currentPdfPageNo, "now", "next");
+              const response = await runTeachingModelRequest(() =>
+                requestJson<GeneratedTeachingPagesResponse>(
+                  "/api/generate/pages",
+                  {
+                    method: "POST",
+                    signal: generationSignal,
+                    body: JSON.stringify({
+                      model: pageBatch.plan.model,
+                      fallbackModel: pageBatch.plan.fallbackModel,
+                      reasoningEffort: pageBatch.plan.reasoningEffort,
+                      qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
+                      document: workingPack.document,
+                      documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext),
+                      documentFile,
+                      outputLanguage: pageOutputLanguage,
+                      outputLanguageLabel: pageOutputLanguageLabel,
+                      uiLanguage: uiPreferences.language,
+                      pages: runningPages.map((page) => teachingRequestPage(page, pageBatch.plan)),
+                      pageCount: totalPages,
+                    }),
+                  },
+                  copy.errors.accountNotFound,
+                ),
+                { priority, signal: generationSignal },
+              );
+              const generatedPagesByNumber = new Map(
+                response.pages.map((page) => [Number(page.page_no || 0), page]),
+              );
+              const retryPages: Array<{ runningPage: PageData; retryPlan: TeachingGenerationQualityPlan; fallback: PageData }> = [];
+              for (const runningPage of runningPages) {
+                const rawGeneratedPage = generatedPagesByNumber.get(runningPage.page_no);
+                if (!rawGeneratedPage) throw new Error(`Batch response missed page ${runningPage.page_no}`);
+                const normalizedGeneratedPage = normalizeGeneratedPage(rawGeneratedPage, runningPage, copy);
+                const generatedPage: PageData = {
+                  ...normalizedGeneratedPage,
+                  teaching: {
+                    ...normalizedGeneratedPage.teaching,
+                    output_language: pageOutputLanguage,
+                  },
+                };
+                if (pageBatch.plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
+                  const retryPlan = teachingGenerationQualityPlan(runningPage, uiPreferences.modelReasoningEffort, "retry");
+                  retryPages.push({ runningPage, retryPlan, fallback: generatedPage });
+                  continue;
+                }
+                workingPack = mergePageIntoPack(workingPack, generatedPage);
+                workingPagesByNumber.set(generatedPage.page_no, generatedPage);
+                completed += 1;
+                queuePersistGeneratedPage(generatedPage);
+              }
+              setPack(workingPack);
+              await runWithConcurrencyLimit(retryPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async ({ runningPage, retryPlan, fallback }) => {
+                await generateSinglePage(runningPage, retryPlan, fallback);
+              });
+            } catch {
+              if (generationSignal.aborted) return;
+              await runWithConcurrencyLimit(runningPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async (runningPage) => {
+                await generateSinglePage(runningPage);
               });
             }
+          });
+        };
+
+        if (pdfUrl && missingTargetSourceText.length) {
+          setJobStatus(copy.status.pdfTextExtracting(targetPageNumbers.length - missingTargetSourceText.length, targetPageNumbers.length));
+          const pdfBlob = await fetch(pdfUrl)
+            .then((response) => {
+              if (!response.ok) throw new Error(response.statusText || copy.agent.generationFailed);
+              return response.blob();
+            })
+            .catch(() => null);
+          if (pdfBlob && missingTargetSourceText.length > TEACHING_PROJECT_WARMUP_PAGE_COUNT) {
+            const warmupPageNumbers = teachingWarmupPageNumbers(totalPages, currentPdfPageNo, targetPageNumbers);
+            const warmupPageSet = new Set(warmupPageNumbers);
+            const warmupExtractionPageNumbers = teachingExtractionPageNumbers(totalPages, warmupPageNumbers)
+              .filter((pageNo) => !sourceTextByPage.has(pageNo));
+            const warmupExtracted = warmupExtractionPageNumbers.length
+              ? await extractPdfPagesFromBlob(pdfBlob, {
+                  priorityPageNumbers: warmupPageNumbers,
+                  pageNumbers: warmupExtractionPageNumbers,
+                  shouldCancel: () => generationSignal.aborted,
+                  concurrency: PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
+                }).catch(() => null)
+              : null;
+            if (warmupExtracted?.pages.length) mergeExtractedPages(warmupExtracted.pages);
+            if (generationSignal.aborted) return;
+
+            const remainingExtractionPageNumbers = teachingExtractionPageNumbers(totalPages, targetPageNumbers)
+              .filter((pageNo) => !sourceTextByPage.has(pageNo));
+            const remainingExtractionPromise = remainingExtractionPageNumbers.length
+              ? extractPdfPagesFromBlob(pdfBlob, {
+                  priorityPageNumbers: [currentPdfPageNo, ...targetPageNumbers],
+                  pageNumbers: remainingExtractionPageNumbers,
+                  shouldCancel: () => generationSignal.aborted,
+                  concurrency: PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
+                }).catch(() => null)
+              : Promise.resolve(null);
+            void remainingExtractionPromise.catch(() => undefined);
+
+            await runGenerationPass(
+              pagesToGenerate.filter((page) => warmupPageSet.has(page.page_no)),
+              extractedPagesForGeneration,
+            );
+            if (generationSignal.aborted) return;
+            const remainingExtracted = await remainingExtractionPromise;
+            if (remainingExtracted?.pages.length) mergeExtractedPages(remainingExtracted.pages);
+            if (generationSignal.aborted) return;
+            const remainingPagesToGenerate = prioritizeTeachingPages(
+              scopedPages.filter((page) => !hasCompletedTeaching(page, pageOutputLanguage)),
+              currentPdfPageNo,
+            );
+            await runGenerationPass(remainingPagesToGenerate, extractedPagesForGeneration);
+          } else if (pdfBlob) {
+            const extracted = await extractPdfPagesFromBlob(pdfBlob, {
+              priorityPageNumbers: targetPageNumbers,
+              pageNumbers: teachingExtractionPageNumbers(totalPages, targetPageNumbers),
+              shouldCancel: () => generationSignal.aborted,
+              concurrency: PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
+            }).catch(() => null);
+            if (extracted?.pages.length) mergeExtractedPages(extracted.pages);
+            if (generationSignal.aborted) return;
+            await runGenerationPass(pagesToGenerate, extractedPagesForGeneration);
+          } else {
+            await runGenerationPass(pagesToGenerate, extractedPagesForGeneration);
           }
-        });
+        } else {
+          if (generationSignal.aborted) return;
+          await runGenerationPass(pagesToGenerate, extractedPagesForGeneration);
+        }
         if (workspaceId && documentId && workingPack.document.id === documentId) {
+          await persistGeneratedPagesQueue;
           await saveGeneratedPagesFromPack({ workspaceId, documentId, pack: workingPack });
           await refreshDocumentItems(workspaceId, documentId, activeProjectId);
         }
         setJobStatus(copy.status.generationDone(completed, scopedPages.length, skippedPages));
       } finally {
-        setIsGeneratingNotes(false);
+        if (generationAbortControllerRef.current === generationAbortController) {
+          generationAbortControllerRef.current = null;
+          setIsGeneratingNotes(false);
+        }
       }
     })();
   }, [
@@ -3475,11 +4385,17 @@ export default function App() {
     const estimatedPages = projectDocumentItems.reduce((sum, item) => sum + Math.max(item.pageCount || 0, 1), 0);
     setJobStatus(copy.status.generationBatchStarted(projectDocumentItems.length, estimatedPages));
 
+    generationAbortControllerRef.current?.abort();
+    const generationAbortController = new AbortController();
+    generationAbortControllerRef.current = generationAbortController;
+    const generationSignal = generationAbortController.signal;
+
     void (async () => {
       let completedTotal = 0;
       let checkedTotal = 0;
       let skippedTotal = 0;
       let processedDocuments = 0;
+      const runTeachingModelRequest = createAsyncLimiter(TEACHING_PROJECT_MODEL_REQUEST_CONCURRENCY);
       try {
         await runWithConcurrencyLimit(projectDocumentItems, TEACHING_DOCUMENT_GENERATION_CONCURRENCY, async (item, index) => {
           processedDocuments += 1;
@@ -3491,182 +4407,411 @@ export default function App() {
           }
           const pdfBlob = bundle.pdfBlob.blob;
 
+          const sourcePack = pagePackFromPersistence(bundle.document, bundle.generatedPages, copy);
+          const persistedPageCount = Math.max(bundle.document.pageCount || 0, 0);
+          const knownPageCount = Math.max(persistedPageCount, sourcePack.document.page_count || 0, bundle.generatedPages.length, 1);
+          const sourcePagesByNumber = new Map(sourcePack.pages.map((page) => [page.page_no, page]));
+          let draftPack = createDraftPagePack(sourcePack.document.title, sourcePack.document.source_pdf_url, knownPageCount, sourcePack.document.id);
+          let workingPack: PagePack = {
+            ...sourcePack,
+            document: {
+              ...sourcePack.document,
+              page_count: knownPageCount,
+            },
+            pages: Array.from({ length: knownPageCount }, (_, pageIndex) => {
+              const pageNo = pageIndex + 1;
+              return sourcePagesByNumber.get(pageNo) || draftPack.pages[pageIndex];
+            }),
+          };
+          const documentPriorityPage = item.currentPdfPageNumber || 1;
+          let pagesToGenerate = prioritizeTeachingPages(
+            workingPack.pages.filter((page) => !hasCompletedTeaching(page, teachingOutputLanguage)),
+            documentPriorityPage,
+          );
+          if (persistedPageCount > 0 && !pagesToGenerate.length) {
+            checkedTotal += workingPack.pages.length;
+            skippedTotal += workingPack.pages.length;
+            if (item.documentId === documentId) setPack(workingPack);
+            return;
+          }
+
+          const targetPageNumbers = pagesToGenerate.map((page) => page.page_no);
           const activeDocumentExtractionReady =
             item.documentId === documentId &&
             pdfExtractedPages.length >= Math.max(pdfPageCount || pack.document.page_count || item.pageCount || 0, 1);
+          const useWarmupExtraction = !activeDocumentExtractionReady && persistedPageCount <= 0;
+          const warmupPageNumbers = useWarmupExtraction
+            ? teachingWarmupPageNumbers(
+                Math.max(bundle.document.pageCount || 0, item.pageCount || 0, knownPageCount),
+                documentPriorityPage,
+              )
+            : [];
+          const selectiveExtractionPageNumbers = useWarmupExtraction
+            ? warmupPageNumbers
+            : persistedPageCount > 0
+              ? teachingExtractionPageNumbers(knownPageCount, targetPageNumbers)
+              : undefined;
           const extracted = activeDocumentExtractionReady
             ? {
                 pageCount: Math.max(pdfPageCount || pack.document.page_count || item.pageCount || pdfExtractedPages.length, 1),
                 pages: pdfExtractedPages,
               }
-            : await extractPdfPagesFromBlob(pdfBlob, [item.currentPdfPageNumber || 1]);
-          const totalPages = Math.max(extracted.pageCount, bundle.document.pageCount || 0, bundle.generatedPages.length, 1);
+            : await extractPdfPagesFromBlob(pdfBlob, {
+                priorityPageNumbers: [item.currentPdfPageNumber || 1, ...targetPageNumbers, ...warmupPageNumbers],
+                pageNumbers: selectiveExtractionPageNumbers,
+                shouldCancel: () => generationSignal.aborted,
+                concurrency: PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
+              });
+          if (generationSignal.aborted) return;
+          let totalPages = Math.max(extracted.pageCount, bundle.document.pageCount || 0, bundle.generatedPages.length, 1);
+          let extractedPagesForGeneration = extracted.pages;
           const sourceTextByPage = new Map<number, string>();
-          for (const page of extracted.pages) {
-            sourceTextByPage.set(page.page_no, page.text_md);
-          }
-
-          const sourcePack = pagePackFromPersistence(bundle.document, bundle.generatedPages, copy);
-          const draftPack = createDraftPagePack(sourcePack.document.title, sourcePack.document.source_pdf_url, totalPages, sourcePack.document.id);
-          const sourcePagesByNumber = new Map(sourcePack.pages.map((page) => [page.page_no, page]));
-          let workingPack: PagePack = {
-            ...sourcePack,
-            document: {
-              ...sourcePack.document,
-              page_count: totalPages,
-            },
-            pages: Array.from({ length: totalPages }, (_, pageIndex) => {
-              const pageNo = pageIndex + 1;
-              const existing = sourcePagesByNumber.get(pageNo) || draftPack.pages[pageIndex];
-              return pageWithSourceText(existing, sourceTextByPage.get(pageNo) || "");
-            }),
+          const mergeExtractedPages = (pages: PdfContextPage[]) => {
+            extractedPagesForGeneration = mergePdfContextPages(extractedPagesForGeneration, pages);
+            for (const page of pages) {
+              sourceTextByPage.set(page.page_no, page.text_md);
+            }
           };
-          const workingPagesByNumber = new Map(workingPack.pages.map((page) => [page.page_no, page]));
-          const pagesToGenerate = workingPack.pages.filter((page) => !hasCompletedTeaching(page, teachingOutputLanguage));
-          const skippedPages = workingPack.pages.length - pagesToGenerate.length;
+          mergeExtractedPages(extracted.pages);
+
+          let workingPagesByNumber = new Map<number, PageData>();
+          const rebuildWorkingPack = () => {
+            draftPack = createDraftPagePack(sourcePack.document.title, sourcePack.document.source_pdf_url, totalPages, sourcePack.document.id);
+            workingPack = {
+              ...sourcePack,
+              document: {
+                ...sourcePack.document,
+                page_count: totalPages,
+              },
+              pages: Array.from({ length: totalPages }, (_, pageIndex) => {
+                const pageNo = pageIndex + 1;
+                const existing = workingPagesByNumber.get(pageNo) || sourcePagesByNumber.get(pageNo) || draftPack.pages[pageIndex];
+                return pageWithSourceText(existing, sourceTextByPage.get(pageNo) || "");
+              }),
+            };
+            workingPagesByNumber = new Map(workingPack.pages.map((page) => [page.page_no, page]));
+          };
+          rebuildWorkingPack();
+
+          const initialPagesToGenerate = prioritizeTeachingPages(
+            workingPack.pages.filter((page) => !hasCompletedTeaching(page, teachingOutputLanguage)),
+            documentPriorityPage,
+          );
+          const skippedPages = workingPack.pages.length - initialPagesToGenerate.length;
           checkedTotal += workingPack.pages.length;
           skippedTotal += skippedPages;
-          if (!pagesToGenerate.length) {
+          if (!initialPagesToGenerate.length) {
             if (item.documentId === documentId) setPack(workingPack);
             return;
           }
 
-          const documentContext = fullPdfContextForTeachingGeneration(workingPack, totalPages, extracted.pages);
           let documentFilePromise: Promise<PdfDirectFileInput | null> | null = null;
-          const getDocumentFileForPage = (page: PageData) => {
-            if (!shouldAttachPdfFileForTeachingPage(page)) return Promise.resolve(null);
-            documentFilePromise ??= pdfDirectFileInputFromBlob(pdfBlob, bundle.document.fileName).catch(() => null);
+          const getDocumentFileForPlan = (plan: TeachingGenerationQualityPlan) => {
+            if (!plan.attachPdf) return Promise.resolve(null);
+            documentFilePromise ??= cachedPdfDirectFileInputFromBlob(
+              pdfBlob,
+              bundle.document.fileName,
+              pdfDirectFileCacheKey(workspaceId, item.documentId),
+            )
+              .catch(() => null);
             return documentFilePromise;
           };
-          const generationInputPagesByNumber = new Map(workingPagesByNumber);
-          let started = 0;
-          await runWithConcurrencyLimit(pagesToGenerate, TEACHING_GENERATION_CONCURRENCY, async (pageToGenerate) => {
-            const pageNo = pageToGenerate.page_no;
-            const basePage = generationInputPagesByNumber.get(pageNo) || draftPack.pages[pageNo - 1];
-            const runningPage: PageData = {
-              ...basePage,
-              status: "running",
-              teaching: {
-                ...basePage.teaching,
-                output_language: teachingOutputLanguage,
-                speaker_notes_md:
-                  basePage.status === "failed" || basePage.teaching.output_language !== teachingOutputLanguage
-                    ? ""
-                    : basePage.teaching.speaker_notes_md,
-              },
-            };
-            workingPack = mergePageIntoPack(workingPack, runningPage);
-            workingPagesByNumber.set(pageNo, runningPage);
-            if (item.documentId === documentId) setPack(workingPack);
-            started += 1;
-            setJobStatus(`${copy.status.generationBatchDocument(index + 1, projectDocumentItems.length, item.title)} · ${copy.status.generationPage(started, pagesToGenerate.length, pageNo)}`);
+          const persistGeneratedPage = async (generatedPage: PageData) => {
+            await saveGeneratedPage({
+              id: `${item.documentId}:page:${generatedPage.page_no}`,
+              workspaceId,
+              documentId: item.documentId,
+              generatedPageIndex: generatedPage.page_no - 1,
+              sourcePdfPageNumber: generatedPage.page_no,
+              title: generatedPage.teaching.slide_title,
+              markdown: generatedPage.teaching.speaker_notes_md,
+              json: asPersistedRecord(generatedPage),
+              confidence: generatedPage.teaching.confidence,
+              status: generatedPage.status === "failed" ? "failed" : "completed",
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            });
+          };
+          let persistGeneratedPagesQueue = Promise.resolve();
+          const queuePersistGeneratedPage = (generatedPage: PageData) => {
+            persistGeneratedPagesQueue = persistGeneratedPagesQueue
+              .then(() => persistGeneratedPage(generatedPage))
+              .catch(() => undefined);
+          };
 
-            try {
+          const commitGeneratedPage = (generatedPage: PageData) => {
+            workingPack = mergePageIntoPack(workingPack, generatedPage);
+            workingPagesByNumber.set(generatedPage.page_no, generatedPage);
+            completedTotal += 1;
+            if (item.documentId === documentId) setPack(workingPack);
+            queuePersistGeneratedPage(generatedPage);
+          };
+
+          const runGenerationPass = async (passPagesToGenerate: PageData[], contextPages: PdfContextPage[]) => {
+            if (!passPagesToGenerate.length || generationSignal.aborted) return;
+            const documentContext = fullPdfContextForTeachingGeneration(
+              workingPack,
+              totalPages,
+              contextPages,
+              passPagesToGenerate.map((page) => page.page_no),
+            );
+            const generationInputPagesByNumber = new Map(workingPagesByNumber);
+            let started = 0;
+            const markRunningPage = (pageToGenerate: PageData) => {
+              const pageNo = pageToGenerate.page_no;
+              const basePage = generationInputPagesByNumber.get(pageNo) || draftPack.pages[pageNo - 1];
+              const runningPage: PageData = {
+                ...basePage,
+                status: "running",
+                teaching: {
+                  ...basePage.teaching,
+                  output_language: teachingOutputLanguage,
+                  speaker_notes_md:
+                    basePage.status === "failed" || basePage.teaching.output_language !== teachingOutputLanguage
+                      ? ""
+                      : basePage.teaching.speaker_notes_md,
+                },
+              };
+              workingPack = mergePageIntoPack(workingPack, runningPage);
+              workingPagesByNumber.set(pageNo, runningPage);
+              if (item.documentId === documentId) setPack(workingPack);
+              started += 1;
+              setJobStatus(`${copy.status.generationBatchDocument(index + 1, projectDocumentItems.length, item.title)} · ${copy.status.generationPage(started, passPagesToGenerate.length, pageNo)}`);
+              return runningPage;
+            };
+
+            const requestGeneratedPage = async (runningPage: PageData, plan: TeachingGenerationQualityPlan) => {
+              const pageNo = runningPage.page_no;
               const previousPage = generationInputPagesByNumber.get(pageNo - 1);
               const nextPage = generationInputPagesByNumber.get(pageNo + 1);
-              const documentFile = await getDocumentFileForPage(runningPage);
-              const response = await requestJson<GeneratedTeachingPageResponse>(
-                "/api/generate/page",
-                {
-                  method: "POST",
-                  body: JSON.stringify({
-                    model: "gpt-5.5",
-                    reasoningEffort: teachingGenerationReasoningEffort(uiPreferences.modelReasoningEffort),
-                    document: workingPack.document,
-                    documentContext,
-                    documentFile,
-                    outputLanguage: teachingOutputLanguage,
-                    outputLanguageLabel: teachingOutputLanguageName(teachingOutputLanguage),
-                    uiLanguage: uiPreferences.language,
-                    page: runningPage,
-                    pageCount: totalPages,
-                    previousPage: previousPage
-                      ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
-                      : null,
-                    nextPage: nextPage
-                      ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
-                      : null,
-                  }),
-                },
-                copy.errors.accountNotFound,
+              const documentFile = await getDocumentFileForPlan(plan);
+              const priority = item.documentId === documentId
+                ? teachingModelRequestPriority([runningPage], currentPdfPageNo, "next", "later")
+                : "later";
+              const response = await runTeachingModelRequest(() =>
+                requestJson<GeneratedTeachingPageResponse>(
+                  "/api/generate/page",
+                  {
+                    method: "POST",
+                    signal: generationSignal,
+                    body: JSON.stringify({
+                      model: plan.model,
+                      fallbackModel: plan.fallbackModel,
+                      reasoningEffort: plan.reasoningEffort,
+                      qualityPlan: teachingQualityPlanPayload(plan),
+                      document: workingPack.document,
+                      documentContext: teachingDocumentContextForPlan(plan, documentContext),
+                      documentFile,
+                      outputLanguage: teachingOutputLanguage,
+                      outputLanguageLabel: teachingOutputLanguageName(teachingOutputLanguage),
+                      uiLanguage: uiPreferences.language,
+                      page: teachingRequestPage(runningPage, plan),
+                      pageCount: totalPages,
+                      previousPage: previousPage
+                        ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
+                        : null,
+                      nextPage: nextPage
+                        ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
+                        : null,
+                    }),
+                  },
+                  copy.errors.accountNotFound,
+                ),
+                { priority, signal: generationSignal },
               );
               const normalizedGeneratedPage = normalizeGeneratedPage(response.page, runningPage, copy);
-              const generatedPage: PageData = {
+              return {
                 ...normalizedGeneratedPage,
                 teaching: {
                   ...normalizedGeneratedPage.teaching,
                   output_language: teachingOutputLanguage,
                 },
               };
-              workingPack = mergePageIntoPack(workingPack, generatedPage);
-              workingPagesByNumber.set(pageNo, generatedPage);
-              completedTotal += 1;
-              if (item.documentId === documentId) setPack(workingPack);
-              await saveGeneratedPage({
-                id: `${item.documentId}:page:${generatedPage.page_no}`,
-                workspaceId,
-                documentId: item.documentId,
-                generatedPageIndex: generatedPage.page_no - 1,
-                sourcePdfPageNumber: generatedPage.page_no,
-                title: generatedPage.teaching.slide_title,
-                markdown: generatedPage.teaching.speaker_notes_md,
-                json: asPersistedRecord(generatedPage),
-                confidence: generatedPage.teaching.confidence,
-                status: generatedPage.status === "failed" ? "failed" : "completed",
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-              });
-            } catch (error) {
-              const message = (error as Error).message || copy.agent.generationFailed;
-              const failedPage: PageData = {
-                ...runningPage,
-                status: "failed",
-                teaching: {
-                  ...runningPage.teaching,
-                  output_language: teachingOutputLanguage,
-                  slide_title: runningPage.teaching.slide_title || `PDF p.${pageNo}`,
-                  speaker_notes_md: generationFailureMarkdown(message, teachingOutputLanguage),
-                  confidence: 0,
-                  needs_review: true,
-                },
-              };
-              workingPack = mergePageIntoPack(workingPack, failedPage);
-              workingPagesByNumber.set(pageNo, failedPage);
-              if (item.documentId === documentId) setPack(workingPack);
-              setJobStatus(copy.status.generationPageFailed(pageNo, message));
-              await saveGeneratedPage({
-                id: `${item.documentId}:page:${pageNo}`,
-                workspaceId,
-                documentId: item.documentId,
-                generatedPageIndex: pageNo - 1,
-                sourcePdfPageNumber: pageNo,
-                title: failedPage.teaching.slide_title,
-                markdown: failedPage.teaching.speaker_notes_md,
-                json: asPersistedRecord(failedPage),
-                confidence: 0,
-                status: "failed",
-                errorSummary: message,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-              });
-            }
-          });
+            };
 
+            const generateSinglePage = async (
+              runningPage: PageData,
+              plan = teachingGenerationQualityPlan(runningPage, uiPreferences.modelReasoningEffort),
+              fallbackOnFailure?: PageData,
+            ) => {
+              const pageNo = runningPage.page_no;
+              if (generationSignal.aborted) return;
+              try {
+                let generatedPage = await requestGeneratedPage(runningPage, plan);
+                if (plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
+                  const retryPlan = teachingGenerationQualityPlan(runningPage, uiPreferences.modelReasoningEffort, "retry");
+                  const retriedPage = await requestGeneratedPage(runningPage, retryPlan).catch(() => null);
+                  if (retriedPage && shouldPreferTeachingCandidate(retriedPage, generatedPage)) {
+                    generatedPage = retriedPage;
+                  }
+                }
+                await commitGeneratedPage(generatedPage);
+              } catch (error) {
+                if ((error as Error).name === "AbortError") return;
+                if (fallbackOnFailure) {
+                  await commitGeneratedPage(fallbackOnFailure);
+                  return;
+                }
+                const message = (error as Error).message || copy.agent.generationFailed;
+                const failedPage: PageData = {
+                  ...runningPage,
+                  status: "failed",
+                  teaching: {
+                    ...runningPage.teaching,
+                    output_language: teachingOutputLanguage,
+                    slide_title: runningPage.teaching.slide_title || `PDF p.${pageNo}`,
+                    speaker_notes_md: generationFailureMarkdown(message, teachingOutputLanguage),
+                    confidence: 0,
+                    needs_review: true,
+                  },
+                };
+                workingPack = mergePageIntoPack(workingPack, failedPage);
+                workingPagesByNumber.set(pageNo, failedPage);
+                if (item.documentId === documentId) setPack(workingPack);
+                setJobStatus(copy.status.generationPageFailed(pageNo, message));
+                queuePersistGeneratedPage(failedPage);
+              }
+            };
+
+            const pageBatches = batchTeachingPages(passPagesToGenerate, uiPreferences.modelReasoningEffort);
+            await runWithConcurrencyLimit(pageBatches, TEACHING_GENERATION_CONCURRENCY, async (pageBatch) => {
+              const runningPages = pageBatch.pages.map(markRunningPage);
+              if (runningPages.length === 1) {
+                await generateSinglePage(runningPages[0], pageBatch.plan);
+                return;
+              }
+
+              try {
+                const documentFile = await getDocumentFileForPlan(pageBatch.plan);
+                const priority = item.documentId === documentId
+                  ? teachingModelRequestPriority(runningPages, currentPdfPageNo, "next", "later")
+                  : "later";
+                const response = await runTeachingModelRequest(() =>
+                  requestJson<GeneratedTeachingPagesResponse>(
+                    "/api/generate/pages",
+                    {
+                      method: "POST",
+                      signal: generationSignal,
+                      body: JSON.stringify({
+                        model: pageBatch.plan.model,
+                        fallbackModel: pageBatch.plan.fallbackModel,
+                        reasoningEffort: pageBatch.plan.reasoningEffort,
+                        qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
+                        document: workingPack.document,
+                        documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext),
+                        documentFile,
+                        outputLanguage: teachingOutputLanguage,
+                        outputLanguageLabel: teachingOutputLanguageName(teachingOutputLanguage),
+                        uiLanguage: uiPreferences.language,
+                        pages: runningPages.map((page) => teachingRequestPage(page, pageBatch.plan)),
+                        pageCount: totalPages,
+                      }),
+                    },
+                    copy.errors.accountNotFound,
+                  ),
+                  { priority, signal: generationSignal },
+                );
+                const generatedPagesByNumber = new Map(
+                  response.pages.map((page) => [Number(page.page_no || 0), page]),
+                );
+                const retryPages: Array<{ runningPage: PageData; retryPlan: TeachingGenerationQualityPlan; fallback: PageData }> = [];
+                for (const runningPage of runningPages) {
+                  const rawGeneratedPage = generatedPagesByNumber.get(runningPage.page_no);
+                  if (!rawGeneratedPage) throw new Error(`Batch response missed page ${runningPage.page_no}`);
+                  const normalizedGeneratedPage = normalizeGeneratedPage(rawGeneratedPage, runningPage, copy);
+                  const generatedPage: PageData = {
+                    ...normalizedGeneratedPage,
+                    teaching: {
+                      ...normalizedGeneratedPage.teaching,
+                      output_language: teachingOutputLanguage,
+                    },
+                  };
+                  if (pageBatch.plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
+                    const retryPlan = teachingGenerationQualityPlan(runningPage, uiPreferences.modelReasoningEffort, "retry");
+                    retryPages.push({ runningPage, retryPlan, fallback: generatedPage });
+                    continue;
+                  }
+                  workingPack = mergePageIntoPack(workingPack, generatedPage);
+                  workingPagesByNumber.set(generatedPage.page_no, generatedPage);
+                  completedTotal += 1;
+                  queuePersistGeneratedPage(generatedPage);
+                }
+                if (item.documentId === documentId) setPack(workingPack);
+                await runWithConcurrencyLimit(retryPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async ({ runningPage, retryPlan, fallback }) => {
+                  await generateSinglePage(runningPage, retryPlan, fallback);
+                });
+              } catch {
+                if (generationSignal.aborted) return;
+                await runWithConcurrencyLimit(runningPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async (runningPage) => {
+                  await generateSinglePage(runningPage);
+                });
+              }
+            });
+          };
+
+          if (useWarmupExtraction) {
+            const warmupPageSet = new Set(warmupPageNumbers);
+            const remainingInitialTargetPageNumbers = initialPagesToGenerate
+              .filter((page) => !warmupPageSet.has(page.page_no))
+              .map((page) => page.page_no);
+            const remainingExtractionPageNumbers = teachingExtractionPageNumbers(totalPages, remainingInitialTargetPageNumbers)
+              .filter((pageNo) => !sourceTextByPage.has(pageNo));
+            const remainingExtractionPromise = remainingExtractionPageNumbers.length
+              ? extractPdfPagesFromBlob(pdfBlob, {
+                  priorityPageNumbers: [item.currentPdfPageNumber || 1, ...remainingInitialTargetPageNumbers],
+                  pageNumbers: remainingExtractionPageNumbers,
+                  shouldCancel: () => generationSignal.aborted,
+                  concurrency: PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
+                })
+              : Promise.resolve({ pageCount: totalPages, pages: [] as PdfContextPage[] });
+            void remainingExtractionPromise.catch(() => undefined);
+            await runGenerationPass(
+              initialPagesToGenerate.filter((page) => warmupPageSet.has(page.page_no)),
+              extractedPagesForGeneration,
+            );
+            if (generationSignal.aborted) return;
+            const remainingTargetPageNumbers = prioritizeTeachingPages(
+              workingPack.pages.filter((page) => !hasCompletedTeaching(page, teachingOutputLanguage)),
+              documentPriorityPage,
+            ).map((page) => page.page_no);
+            if (remainingTargetPageNumbers.length) {
+              const remainingExtracted = await remainingExtractionPromise;
+              if (generationSignal.aborted) return;
+              mergeExtractedPages(remainingExtracted.pages);
+              rebuildWorkingPack();
+              const remainingPagesToGenerate = prioritizeTeachingPages(
+                workingPack.pages.filter((page) => !hasCompletedTeaching(page, teachingOutputLanguage)),
+                documentPriorityPage,
+              );
+              await runGenerationPass(remainingPagesToGenerate, extractedPagesForGeneration);
+            } else {
+              await remainingExtractionPromise.catch(() => null);
+            }
+          } else {
+            await runGenerationPass(initialPagesToGenerate, extractedPagesForGeneration);
+          }
+
+          await persistGeneratedPagesQueue;
           await saveGeneratedPagesFromPack({ workspaceId, documentId: item.documentId, pack: workingPack });
           if (item.documentId === documentId) setPack(workingPack);
-        });
+        }, { continueOnError: true });
 
         await refreshDocumentItems(workspaceId, documentId, activeProjectId);
         setJobStatus(copy.status.generationBatchDone(completedTotal, checkedTotal || estimatedPages, processedDocuments, skippedTotal));
       } catch (error) {
+        if (generationSignal.aborted || (error as Error).name === "AbortError") return;
         setJobStatus((error as Error).message || copy.agent.generationFailed);
       } finally {
-        setIsGeneratingNotes(false);
+        if (generationAbortControllerRef.current === generationAbortController) {
+          generationAbortControllerRef.current = null;
+          setIsGeneratingNotes(false);
+        }
       }
     })();
   }, [
     activeProjectId,
     copy,
+    currentPdfPageNo,
     documentId,
     documentItems,
     isGeneratingNotes,
