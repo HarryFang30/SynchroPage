@@ -1005,8 +1005,13 @@ svg {
 .rail-icon-button.active,
 .rail-header-actions .mini-button:hover {
   background: color-mix(in oklch, var(--secondary) 56%, transparent);
-  color: var(--text);
+  color: var(--text-strong);
   transform: none;
+}
+
+.rail-icon-button.active {
+  background: color-mix(in oklch, var(--brand) 10%, var(--secondary));
+  color: var(--brand-strong);
 }
 
 .rail-icon-button:disabled {
@@ -1053,16 +1058,27 @@ svg {
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: var(--text);
+  color: var(--text-strong);
   padding: 0 9px;
   text-align: left;
   font-size: 13px;
+  font-weight: 560;
   box-shadow: none;
 }
 
 .rail-action-menu button:hover,
 .rail-action-menu .mini-button:hover {
   background: color-mix(in oklch, var(--secondary) 52%, transparent);
+}
+
+.rail-action-menu .mini-button {
+  background: color-mix(in oklch, var(--brand) 8%, transparent);
+  color: var(--brand-strong);
+}
+
+.rail-action-menu .mini-button:hover {
+  background: color-mix(in oklch, var(--brand) 13%, var(--secondary));
+  color: var(--brand-strong);
 }
 
 .rail-action-menu button:disabled {
@@ -1073,6 +1089,7 @@ svg {
 .rail-action-menu svg {
   width: 17px;
   height: 17px;
+  color: currentColor;
 }
 
 .search-box input {
