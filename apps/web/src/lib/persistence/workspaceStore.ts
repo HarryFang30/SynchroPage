@@ -66,6 +66,11 @@ export type ThreadMessageLike = {
 };
 
 const defaultCourseProjectName = "默认课程";
+const sidebarNameCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+  ignorePunctuation: true,
+});
 
 function defaultCourseProjectId(workspaceId: string) {
   return `course_${workspaceId}_default`;
@@ -80,6 +85,20 @@ export function createRecordId(prefix: string) {
 
 function documentTitleFromFileName(fileName: string, fallback: string) {
   return fileName.replace(/\.pdf$/i, "").trim() || fallback || fileName || "Untitled PDF";
+}
+
+function documentDisplayTitle(document: DocumentRecord) {
+  return document.mimeType === "application/pdf"
+    ? documentTitleFromFileName(document.fileName, document.title)
+    : document.title || document.fileName || "Untitled";
+}
+
+function compareDocumentsByDisplayTitle(left: DocumentRecord, right: DocumentRecord) {
+  const titleCompare = sidebarNameCollator.compare(documentDisplayTitle(left), documentDisplayTitle(right));
+  if (titleCompare !== 0) return titleCompare;
+  const timeCompare = (left.uploadedAt || left.updatedAt || 0) - (right.uploadedAt || right.updatedAt || 0);
+  if (timeCompare !== 0) return timeCompare;
+  return left.id.localeCompare(right.id);
 }
 
 export function getLastWorkspaceId() {
@@ -226,7 +245,8 @@ export async function loadWorkspaceDocuments(
         .filter((document) => document.workspaceId === workspaceId)
     : await synchroPageDb.documents.where("workspaceId").equals(workspaceId).toArray();
   const visibleDocuments = documents
-    .sort((left, right) => (left.uploadedAt || left.updatedAt || 0) - (right.uploadedAt || right.updatedAt || 0));
+    .slice()
+    .sort(compareDocumentsByDisplayTitle);
   const generatedCounts = await loadGeneratedPageCounts(visibleDocuments.map((document) => document.id));
 
   return visibleDocuments.map((document) => ({
