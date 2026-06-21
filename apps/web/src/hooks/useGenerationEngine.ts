@@ -41,18 +41,11 @@ import {
 } from "../lib/generation/generationRuntime";
 import { requestJson } from "../lib/http/requestJson";
 import {
-  cachedPdfDirectFileInputFromBlob,
-  cachedPdfDirectFileInputFromUrl,
-  pdfDirectFileCacheKey,
-  type PdfDirectFileInput,
-} from "../lib/pdf/directFile";
-import {
   extractPdfPagesFromBlob,
   mergePdfContextPages,
   type PdfContextPage,
 } from "../lib/pdf/textExtraction";
 import {
-  asPersistedRecord,
   createDraftPagePack,
   formatPageRanges,
   generateTargetPageNumbers,
@@ -61,13 +54,25 @@ import {
 } from "../lib/workspace/pagePairState";
 import {
   loadDocumentGenerationBundle,
-  saveGeneratedPage,
   saveGeneratedPagesFromPack,
   type DocumentSidebarItem,
 } from "../lib/persistence";
 import { hasCompletedTeaching } from "../lib/generation/generationRuntime";
 import type { UiPreferences } from "../settings";
 import type { PanelVisibility } from "../lib/workspace/pagePairState";
+import {
+  buildRunningPageData,
+  buildFailedPageData,
+  normalizeGeneratedWithLanguage,
+  buildSinglePageRequestBody,
+  buildBatchPagesRequestBody,
+} from "./generationPageUtils";
+import {
+  createPersistGeneratedPage,
+  createPersistenceQueue,
+  createDocumentFileLoaderFromUrl,
+  createDocumentFileLoaderFromBlob,
+} from "./generationPersistence";
 
 export interface GenerationEngineParams {
   isGeneratingNotes: boolean;
@@ -162,45 +167,22 @@ export function useGenerationEngine(p: GenerationEngineParams) {
       const runTeachingModelRequest = createAsyncLimiter(TEACHING_GENERATION_CONCURRENCY);
       try {
         let extractedPagesForGeneration = p.pdfExtractedPages;
-        let documentFilePromise: Promise<PdfDirectFileInput | null> | null = null;
-        const getDocumentFileForPlan = (plan: TeachingGenerationQualityPlan) => {
-          if (!p.pdfUrl || !plan.attachPdf) return Promise.resolve(null);
-          documentFilePromise ??= cachedPdfDirectFileInputFromUrl(
-            p.pdfUrl,
-            workingPack.document.source_pdf_url || workingPack.document.title,
-          ).catch(() => null);
-          return documentFilePromise;
-        };
-        const persistGeneratedPage = async (generatedPage: PageData) => {
-          if (!p.workspaceId || !p.documentId || workingPack.document.id !== p.documentId) return;
-          await saveGeneratedPage({
-            id: `${p.documentId}:page:${generatedPage.page_no}`,
-            workspaceId: p.workspaceId,
-            documentId: p.documentId,
-            generatedPageIndex: generatedPage.page_no - 1,
-            sourcePdfPageNumber: generatedPage.page_no,
-            title: generatedPage.teaching.slide_title,
-            markdown: generatedPage.teaching.speaker_notes_md,
-            json: asPersistedRecord(generatedPage),
-            confidence: generatedPage.teaching.confidence,
-            status: generatedPage.status === "failed" ? "failed" : "completed",
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          });
-        };
-        let persistGeneratedPagesQueue = Promise.resolve();
-        const queuePersistGeneratedPage = (generatedPage: PageData) => {
-          persistGeneratedPagesQueue = persistGeneratedPagesQueue
-            .then(() => persistGeneratedPage(generatedPage))
-            .catch(() => undefined);
-        };
-
+        const getDocumentFileForPlan = createDocumentFileLoaderFromUrl({
+          pdfUrl: p.pdfUrl,
+          documentTitle: workingPack.document.source_pdf_url || workingPack.document.title,
+        });
+        const persistPage = createPersistGeneratedPage({
+          workspaceId: p.workspaceId || "",
+          documentId: p.documentId || "",
+          currentDocumentId: workingPack.document.id,
+        });
+        const persistQueue = createPersistenceQueue(persistPage);
         const commitGeneratedPage = (generatedPage: PageData) => {
           workingPack = mergePageIntoPack(workingPack, generatedPage);
           workingPagesByNumber.set(generatedPage.page_no, generatedPage);
           p.setPack(workingPack);
           completed += 1;
-          queuePersistGeneratedPage(generatedPage);
+          persistQueue.enqueue(generatedPage);
         };
 
         const mergeExtractedPages = (pages: PdfContextPage[]) => {
@@ -243,18 +225,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           const markRunningPage = (pageToGenerate: PageData) => {
             const pageNo = pageToGenerate.page_no;
             const basePage = generationInputPagesByNumber.get(pageNo) || draftPack.pages[pageNo - 1];
-            const runningPage: PageData = {
-              ...basePage,
-              status: "running",
-              teaching: {
-                ...basePage.teaching,
-                output_language: pageOutputLanguage,
-                speaker_notes_md:
-                  basePage.status === "failed" || basePage.teaching.output_language !== pageOutputLanguage
-                    ? ""
-                    : basePage.teaching.speaker_notes_md,
-              },
-            };
+            const runningPage = buildRunningPageData(basePage, pageOutputLanguage);
             workingPack = mergePageIntoPack(workingPack, runningPage);
             workingPagesByNumber.set(pageNo, runningPage);
             p.setPack(workingPack);
@@ -301,14 +272,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               ),
               { priority, signal: generationSignal },
             );
-            const normalizedGeneratedPage = normalizeGeneratedPage(response.page, runningPage);
-            return {
-              ...normalizedGeneratedPage,
-              teaching: {
-                ...normalizedGeneratedPage.teaching,
-                output_language: pageOutputLanguage,
-              },
-            };
+            return normalizeGeneratedWithLanguage(response, runningPage, pageOutputLanguage);
           };
 
           const generateSinglePage = async (
@@ -335,23 +299,12 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 return;
               }
               const message = (error as Error).message || p.copy.agent.generationFailed;
-              const failedPage: PageData = {
-                ...runningPage,
-                status: "failed",
-                teaching: {
-                  ...runningPage.teaching,
-                  output_language: pageOutputLanguage,
-                  slide_title: runningPage.teaching.slide_title || `PDF p.${pageNo}`,
-                  speaker_notes_md: generationFailureMarkdown(message, pageOutputLanguage),
-                  confidence: 0,
-                  needs_review: true,
-                },
-              };
+              const failedPage = buildFailedPageData(runningPage, message, pageOutputLanguage, p.copy);
               workingPack = mergePageIntoPack(workingPack, failedPage);
               workingPagesByNumber.set(pageNo, failedPage);
               p.setPack(workingPack);
               p.setJobStatus(p.copy.status.generationPageFailed(pageNo, message));
-              queuePersistGeneratedPage(failedPage);
+              persistQueue.enqueue(failedPage);
             }
           };
 
@@ -414,7 +367,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 workingPack = mergePageIntoPack(workingPack, generatedPage);
                 workingPagesByNumber.set(generatedPage.page_no, generatedPage);
                 completed += 1;
-                queuePersistGeneratedPage(generatedPage);
+                persistQueue.enqueue(generatedPage);
               }
               p.setPack(workingPack);
               await runWithConcurrencyLimit(retryPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async ({ runningPage, retryPlan, fallback }) => {
@@ -496,7 +449,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           await runGenerationPass(pagesToGenerate, extractedPagesForGeneration);
         }
         if (p.workspaceId && p.documentId && workingPack.document.id === p.documentId) {
-          await persistGeneratedPagesQueue;
+          await persistQueue.flush();
           await saveGeneratedPagesFromPack({ workspaceId: p.workspaceId, documentId: p.documentId, pack: workingPack });
           await p.refreshDocumentItems(p.workspaceId, p.documentId, p.activeProjectId);
         }
@@ -671,46 +624,25 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             return;
           }
 
-          let documentFilePromise: Promise<PdfDirectFileInput | null> | null = null;
-          const getDocumentFileForPlan = (plan: TeachingGenerationQualityPlan) => {
-            if (!plan.attachPdf) return Promise.resolve(null);
-            documentFilePromise ??= cachedPdfDirectFileInputFromBlob(
-              pdfBlob,
-              bundle.document.fileName,
-              pdfDirectFileCacheKey(_workspaceId, item.documentId),
-            )
-              .catch(() => null);
-            return documentFilePromise;
-          };
-          const persistGeneratedPage = async (generatedPage: PageData) => {
-            await saveGeneratedPage({
-              id: `${item.documentId}:page:${generatedPage.page_no}`,
-              workspaceId: _workspaceId,
-              documentId: item.documentId,
-              generatedPageIndex: generatedPage.page_no - 1,
-              sourcePdfPageNumber: generatedPage.page_no,
-              title: generatedPage.teaching.slide_title,
-              markdown: generatedPage.teaching.speaker_notes_md,
-              json: asPersistedRecord(generatedPage),
-              confidence: generatedPage.teaching.confidence,
-              status: generatedPage.status === "failed" ? "failed" : "completed",
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-            });
-          };
-          let persistGeneratedPagesQueue = Promise.resolve();
-          const queuePersistGeneratedPage = (generatedPage: PageData) => {
-            persistGeneratedPagesQueue = persistGeneratedPagesQueue
-              .then(() => persistGeneratedPage(generatedPage))
-              .catch(() => undefined);
-          };
+          const getDocumentFileForPlan = createDocumentFileLoaderFromBlob({
+            pdfBlob,
+            fileName: bundle.document.fileName,
+            workspaceId: _workspaceId,
+            documentId: item.documentId,
+          });
+          const persistPage = createPersistGeneratedPage({
+            workspaceId: _workspaceId,
+            documentId: item.documentId,
+            currentDocumentId: item.documentId,
+          });
+          const persistQueue = createPersistenceQueue(persistPage);
 
           const commitGeneratedPage = (generatedPage: PageData) => {
             workingPack = mergePageIntoPack(workingPack, generatedPage);
             workingPagesByNumber.set(generatedPage.page_no, generatedPage);
             completedTotal += 1;
             if (item.documentId === _documentId) p.setPack(workingPack);
-            queuePersistGeneratedPage(generatedPage);
+            persistQueue.enqueue(generatedPage);
           };
 
           const runGenerationPass = async (passPagesToGenerate: PageData[], contextPages: PdfContextPage[]) => {
@@ -840,7 +772,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 workingPagesByNumber.set(pageNo, failedPage);
                 if (item.documentId === _documentId) p.setPack(workingPack);
                 p.setJobStatus(p.copy.status.generationPageFailed(pageNo, message));
-                queuePersistGeneratedPage(failedPage);
+                persistQueue.enqueue(failedPage);
               }
             };
 
@@ -905,7 +837,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                   workingPack = mergePageIntoPack(workingPack, generatedPage);
                   workingPagesByNumber.set(generatedPage.page_no, generatedPage);
                   completedTotal += 1;
-                  queuePersistGeneratedPage(generatedPage);
+                  persistQueue.enqueue(generatedPage);
                 }
                 if (item.documentId === _documentId) p.setPack(workingPack);
                 await runWithConcurrencyLimit(retryPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async ({ runningPage, retryPlan, fallback }) => {
@@ -962,7 +894,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             await runGenerationPass(initialPagesToGenerate, extractedPagesForGeneration);
           }
 
-          await persistGeneratedPagesQueue;
+          await persistQueue.flush();
           await saveGeneratedPagesFromPack({ workspaceId: _workspaceId, documentId: item.documentId, pack: workingPack });
           if (item.documentId === _documentId) p.setPack(workingPack);
         }, { continueOnError: true });
