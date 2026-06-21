@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="SynchroPage.app"
 DESKTOP_DIR="$ROOT_DIR/apps/desktop"
 BUILT_APP="$DESKTOP_DIR/release/mac-arm64/$APP_NAME"
+PYTHON_BIN="${PYTHON:-python3}"
 INSTALL_DIR="/Applications"
 RUN_INSTALL=0
 RUN_USER_INSTALL=0
@@ -79,8 +80,8 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required. Install Python 3.11+ first." >&2
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "$PYTHON_BIN is required. Install Python 3.11+ first or set PYTHON=/path/to/python3." >&2
   exit 1
 fi
 
@@ -95,9 +96,9 @@ if [[ "$SKIP_DEPS" -eq 0 ]]; then
     npm --prefix apps/desktop install
   fi
 
-  if ! python3 -c "import PyInstaller" >/dev/null 2>&1; then
+  if ! "$PYTHON_BIN" -c "import PyInstaller" >/dev/null 2>&1; then
     log "Installing PyInstaller"
-    python3 -m pip install pyinstaller
+    "$PYTHON_BIN" -m pip install pyinstaller
   fi
 fi
 
