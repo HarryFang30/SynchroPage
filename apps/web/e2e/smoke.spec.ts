@@ -16,16 +16,36 @@ test.describe("Smoke", () => {
   });
 
   test("settings button opens settings dialog", async ({ page }) => {
-    // Click the settings icon button
-    const settingsBtn = page.locator(".topbar button[aria-label*=ettings], .topbar .mini-button").last();
-    await settingsBtn.click();
-    await page.waitForTimeout(500);
+    // Click the sidebar "设置" (Settings) button
+    const settingsBtn = page.locator("button:has-text('设置')").first();
+    const btnCount = await settingsBtn.count();
+    if (btnCount > 0) {
+      await settingsBtn.click();
+      await page.waitForTimeout(500);
 
-    // Check that settings overlay or dialog appears
-    const settingsDialog = page.locator(".settings-overlay, .settings-dialog");
-    const isVisible = await settingsDialog.isVisible().catch(() => false);
-    // Settings may open in a modal
-    expect(isVisible || true).toBeTruthy();
+      // Settings modal or overlay should appear — either is fine
+      const settingsOverlay = page.locator(".settings-overlay");
+      const settingsDialog = page.locator(".settings-dialog");
+      const overlayVisible = await settingsOverlay.isVisible().catch(() => false);
+      const dialogVisible = await settingsDialog.isVisible().catch(() => false);
+
+      // At least one settings container should appear after clicking
+      expect(overlayVisible || dialogVisible).toBeTruthy();
+    } else {
+      // If no sidebar settings button, try the "更多操作" → "高级设置" path
+      const moreBtn = page.locator("button:has-text('更多操作')").first();
+      if ((await moreBtn.count()) > 0) {
+        await moreBtn.click();
+        await page.waitForTimeout(300);
+        const advancedBtn = page.locator("button:has-text('高级设置')").first();
+        if ((await advancedBtn.count()) > 0) {
+          await advancedBtn.click();
+          await page.waitForTimeout(500);
+        }
+      }
+      // App should still be functional
+      await expect(page.locator(".app-shell")).toBeVisible();
+    }
   });
 
   test("command menu can be triggered", async ({ page }) => {
@@ -38,7 +58,7 @@ test.describe("Smoke", () => {
   });
 
   test("dark mode toggle via settings does not crash", async ({ page }) => {
-    // The app starts in light mode by default
+    // The app starts with a theme defined
     const html = page.locator("html");
     const initialTheme = await html.getAttribute("data-pagepair-resolved-theme");
     // Theme should be defined

@@ -1,0 +1,308 @@
+/* Agent — thread, messages, welcome, thinking */
+
+.aui-thread-root {
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  background: color-mix(in oklch, var(--background) 93%, white);
+}
+
+.aui-thread-viewport {
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  overflow-x: hidden;
+}
+
+.aui-thread-inner {
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 13px 10px;
+}
+
+.aui-welcome {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  place-items: start;
+  align-content: center;
+  gap: 10px;
+  padding: 20px 7px 14px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.aui-welcome-kicker {
+  color: var(--muted);
+  font-family: var(--agent-font-reading, var(--font-ui));
+  font-size: var(--agent-text-sm, 13px);
+  line-height: var(--agent-leading-compact, 1.42);
+}
+
+.aui-welcome h2,
+.aui-welcome p {
+  margin: 0;
+}
+
+.aui-welcome h2 {
+  color: var(--text-strong);
+  font-size: var(--agent-text-lg);
+  line-height: var(--agent-leading-title);
+  letter-spacing: 0;
+  font-weight: 620;
+}
+
+.prompt-suggestions {
+  width: 100%;
+  display: grid;
+  gap: 0;
+  margin-top: 8px;
+  border-top: 1px solid color-mix(in oklch, var(--line) 58%, transparent);
+}
+
+.prompt-suggestions button {
+  display: block;
+  width: 100%;
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--line) 58%, transparent);
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in oklch, var(--text) 82%, var(--muted));
+  font-family: var(--agent-font-ui);
+  font-size: var(--agent-text-sm);
+  line-height: var(--agent-leading-compact);
+  text-align: left;
+  cursor: pointer;
+}
+
+.prompt-suggestions button:hover {
+  color: var(--text-strong);
+}
+
+.prompt-suggestions button:focus-visible {
+  outline: 2px solid color-mix(in oklch, var(--brand) 32%, transparent);
+  outline-offset: 2px;
+}
+
+.aui-message-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 1px 4px 0;
+}
+
+.aui-message {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.user-message {
+  justify-items: end;
+}
+
+.assistant-message {
+  justify-items: start;
+}
+
+.assistant-label {
+  color: color-mix(in oklch, var(--muted) 86%, var(--text));
+  font-size: var(--agent-text-xs, 12px);
+  font-weight: 620;
+  letter-spacing: 0;
+  line-height: var(--agent-leading-compact, 1.42);
+}
+
+.message-bubble {
+  min-width: 0;
+  width: fit-content;
+  max-width: min(100%, 68ch);
+  border: 1px solid color-mix(in oklch, var(--line) 38%, transparent);
+  border-radius: 7px;
+  font-size: var(--agent-text-md);
+  line-height: var(--agent-leading-body);
+  box-shadow: none;
+}
+
+.user-bubble {
+  max-width: min(88%, 58ch);
+  border-color: color-mix(in oklch, var(--primary) 10%, var(--line));
+  background: color-mix(in oklch, var(--primary) 4%, var(--background));
+  color: color-mix(in oklch, var(--text) 92%, var(--text-strong));
+  padding: 8px 10px;
+  font-size: var(--agent-text-sm);
+  line-height: 1.5;
+}
+
+.message-quote {
+  margin: 0 0 7px;
+  border-left: 2px solid color-mix(in oklch, var(--brand) 30%, var(--line));
+  color: color-mix(in oklch, var(--text) 74%, var(--muted));
+  padding: 1px 0 1px 9px;
+}
+
+.message-quote span {
+  display: block;
+  margin-bottom: 3px;
+  color: color-mix(in oklch, var(--brand) 54%, var(--text));
+  font-size: var(--agent-text-xs);
+  font-weight: 620;
+}
+
+.message-quote p {
+  margin: 0;
+  font-size: var(--agent-text-sm);
+  line-height: 1.45;
+}
+
+.assistant-bubble {
+  width: min(100%, 68ch);
+  max-width: 100%;
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
+}
+
+.message-actions,
+.assistant-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.assistant-footer {
+  margin-left: -2px;
+  color: var(--muted);
+  opacity: 0.56;
+  transition: opacity 140ms ease;
+}
+
+.assistant-message:hover .assistant-footer,
+.assistant-message:focus-within .assistant-footer {
+  opacity: 1;
+}
+
+.message-actions button,
+.branch-picker button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.message-actions button:hover,
+.branch-picker button:hover {
+  border-color: var(--line);
+  background: color-mix(in oklch, var(--secondary) 70%, white);
+  color: var(--text);
+}
+
+.message-actions svg,
+.branch-picker svg {
+  width: 14px;
+  height: 14px;
+}
+
+.branch-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--agent-text-xs);
+}
+
+.message-error {
+  margin-top: 8px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid color-mix(in oklch, var(--coral) 48%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--coral-soft) 58%, var(--panel-strong));
+  color: var(--coral);
+  padding: 8px 9px;
+  font-size: var(--agent-text-sm);
+  line-height: var(--agent-leading-compact);
+  overflow-wrap: anywhere;
+}
+
+.message-error strong {
+  color: inherit;
+}
+
+.assistant-thinking {
+  min-height: 54px;
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 12px;
+  color: var(--muted);
+  font-size: var(--agent-text-sm);
+}
+
+.thinking-skeleton-stack {
+  width: min(190px, 54vw);
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.thinking-skeleton-line {
+  height: 8px;
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in oklch, var(--pp-bg-panel-2) 72%, transparent),
+      color-mix(in oklch, var(--pp-accent) 20%, var(--pp-bg-elevated)),
+      color-mix(in oklch, var(--pp-bg-panel-2) 72%, transparent)
+    );
+  background-size: 220% 100%;
+  opacity: 0.78;
+  animation: thinking-skeleton 1.6s ease-in-out infinite;
+}
+
+.thinking-skeleton-line.medium {
+  width: 76%;
+}
+
+.thinking-skeleton-line.short {
+  width: 54%;
+}
+
+@keyframes thinking-skeleton {
+  0% {
+    background-position: 120% 0;
+    opacity: 0.52;
+  }
+
+  50% {
+    opacity: 0.86;
+  }
+
+  100% {
+    background-position: -120% 0;
+    opacity: 0.52;
+  }
+}
+
+.message-status-note {
+  color: var(--muted);
+  font-size: var(--agent-text-sm);
+}

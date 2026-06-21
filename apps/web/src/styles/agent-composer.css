@@ -1,0 +1,187 @@
+/* Agent — composer, attachments, send */
+
+.aui-thread-footer {
+  flex: 0 0 auto;
+  position: relative;
+  bottom: 0;
+  display: grid;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 8px;
+  background: linear-gradient(180deg, transparent, color-mix(in oklch, var(--background) 94%, white) 28%);
+}
+
+.scroll-bottom {
+  width: 30px;
+  height: 30px;
+  justify-self: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  box-shadow: var(--shadow-soft);
+}
+
+.scroll-bottom:disabled {
+  visibility: hidden;
+}
+
+.composer-shell {
+  display: grid;
+  gap: 6px;
+}
+
+.composer-attachment-preview {
+  min-width: 0;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 1px 1px 2px;
+}
+
+.composer-image-preview {
+  position: relative;
+  width: 106px;
+  flex: 0 0 106px;
+  display: grid;
+  gap: 4px;
+  align-items: start;
+  margin: 0;
+  border: 1px solid color-mix(in oklch, var(--brand) 12%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--popover) 92%, var(--background));
+  padding: 5px;
+}
+
+.composer-image-preview img {
+  width: 100%;
+  height: 58px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--secondary) 54%, transparent);
+}
+
+.composer-image-preview figcaption {
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in oklch, var(--text) 74%, var(--muted));
+  font-size: var(--agent-text-xs);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-image-preview button {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--background) 84%, transparent);
+  color: var(--text);
+  box-shadow: 0 3px 12px oklch(0.25 0.01 85 / 0.12);
+}
+
+.composer-image-preview button:hover {
+  background: color-mix(in oklch, var(--brand-soft) 30%, var(--background));
+}
+
+.composer-image-preview svg {
+  width: 13px;
+  height: 13px;
+}
+
+.composer-context-preview {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--agent-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-context-preview span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--brand) 62%, var(--muted));
+}
+
+.aui-composer-root {
+  display: grid;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid color-mix(in oklch, var(--line) 66%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--popover) 94%, var(--background));
+  box-shadow: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.aui-composer-root:focus-within {
+  border-color: color-mix(in oklch, var(--brand) 36%, var(--line));
+  box-shadow: 0 8px 22px oklch(0.34 0.03 95 / 0.06), 0 0 0 3px color-mix(in oklch, var(--brand) 7%, transparent);
+}
+
+.aui-composer-input {
+  width: 100%;
+  min-height: 34px;
+  max-height: 118px;
+  resize: vertical;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 4px 6px 2px;
+  font-family: var(--agent-font-ui);
+  font-size: var(--agent-text-md);
+  line-height: 1.45;
+}
+
+.aui-composer-input::placeholder {
+  color: color-mix(in oklch, var(--muted) 86%, var(--text));
+}
+
+.aui-composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.composer-send {
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--panel) 82%, white);
+  color: var(--muted);
+  transition: transform 140ms ease, filter 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.composer-send {
+  border-color: var(--brand-deep);
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--brand) 96%, white), var(--brand-deep));
+  color: var(--primary-foreground);
+  box-shadow: 0 5px 13px color-mix(in oklch, var(--primary) 18%, transparent);
+}
+
+.composer-send svg {
+  width: 16px;
+  height: 16px;
+}
+
+.composer-send:hover {
+  filter: brightness(0.98);
+  transform: translateY(-1px);
+}

@@ -1,0 +1,197 @@
+/* Agent — markdown body (message content) */
+
+.markdown-body {
+  min-width: 0;
+  max-width: 100%;
+  color: color-mix(in oklch, var(--text) 94%, var(--text-strong));
+  font-family: var(--agent-font-reading, var(--font-ui));
+  font-size: var(--agent-text-body, 15.5px);
+  line-height: var(--agent-leading-body, 1.66);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-body > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin: 1.05em 0 0.45em;
+  color: var(--text-strong);
+  font-family: var(--agent-font-ui, var(--font-ui));
+  font-weight: 620;
+  line-height: var(--agent-leading-title, 1.26);
+}
+
+.markdown-body h1 {
+  font-size: var(--agent-text-xl, 21px);
+}
+
+.markdown-body h2 {
+  font-size: var(--agent-text-xl, 21px);
+}
+
+.markdown-body h3 {
+  font-size: var(--agent-text-lg, 18px);
+}
+
+.markdown-body h1:first-child,
+.markdown-body h2:first-child,
+.markdown-body h3:first-child {
+  margin-top: 0;
+}
+
+.markdown-body p {
+  margin: 0 0 0.85em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-body p:last-child,
+.markdown-body ul:last-child,
+.markdown-body ol:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.45em 0 0.85em;
+  padding-left: clamp(1em, 4cqi, 1.35em);
+}
+
+.markdown-body li {
+  margin: 0.22em 0;
+  padding-left: 0.12em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-body strong,
+.markdown-body b {
+  color: color-mix(in oklch, var(--text-strong) 88%, var(--text));
+  font-weight: 600;
+}
+
+.markdown-body blockquote {
+  margin: 0.85em 0;
+  border-left: 2px solid color-mix(in oklch, var(--brand) 26%, var(--line));
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in oklch, var(--secondary) 24%, transparent);
+  color: color-mix(in oklch, var(--text) 82%, var(--muted));
+  padding: 0.1em 0.75em;
+}
+
+.markdown-body table {
+  width: max-content;
+  min-width: 100%;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-soft) 58%, transparent) transparent;
+  border-collapse: collapse;
+  font-family: var(--agent-font-ui, var(--font-ui));
+  font-size: var(--agent-text-sm, 13px);
+  line-height: 1.45;
+  -webkit-overflow-scrolling: touch;
+}
+
+.markdown-body table::-webkit-scrollbar,
+.markdown-body pre::-webkit-scrollbar,
+.markdown-body .katex-display::-webkit-scrollbar {
+  height: 9px;
+}
+
+.markdown-body table::-webkit-scrollbar-thumb,
+.markdown-body pre::-webkit-scrollbar-thumb,
+.markdown-body .katex-display::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted-soft) 58%, transparent);
+  background-clip: padding-box;
+}
+
+.markdown-body table::-webkit-scrollbar-track,
+.markdown-body pre::-webkit-scrollbar-track,
+.markdown-body .katex-display::-webkit-scrollbar-track {
+  background: color-mix(in oklch, var(--line) 28%, transparent);
+  border-radius: 999px;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.markdown-body th {
+  background: color-mix(in oklch, var(--secondary) 58%, transparent);
+  color: var(--text-strong);
+}
+
+.markdown-body code {
+  border-radius: 5px;
+  background: color-mix(in oklch, var(--secondary) 50%, white);
+  color: color-mix(in oklch, var(--text-strong) 90%, var(--brand-deep));
+  padding: 0.08em 0.32em;
+  font-family: var(--agent-font-mono, var(--font-mono));
+  font-size: 0.86em;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-soft) 58%, transparent) transparent;
+  border: 1px solid color-mix(in oklch, var(--line) 62%, transparent);
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--secondary) 36%, var(--background));
+  color: var(--text-strong);
+  padding: 10px 12px;
+  font-family: var(--agent-font-mono, var(--font-mono));
+  font-size: var(--agent-text-sm, 13px);
+  line-height: 1.55;
+  white-space: pre;
+  -webkit-overflow-scrolling: touch;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.markdown-body .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-soft) 58%, transparent) transparent;
+  padding: 0.35em 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.markdown-body .katex {
+  font-size: 1em;
+}
+
+.markdown-body .katex-error {
+  color: inherit !important;
+}

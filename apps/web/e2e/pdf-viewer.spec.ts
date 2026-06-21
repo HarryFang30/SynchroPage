@@ -6,20 +6,19 @@ test.describe("PDF Viewer", () => {
     await resetStorage(page);
   });
 
-  test("page navigator is visible", async ({ page }) => {
+  test("page navigator exists in DOM", async ({ page }) => {
     // Page navigator shows in topbar even without a loaded PDF
     const pageNav = page.locator(".page-navigator, .page-nav");
-    const navExists = await pageNav.first().isVisible().catch(() => false);
-    // May or may not be visible depending on state
-    expect(navExists || true).toBeTruthy();
+    const navCount = await pageNav.count();
+    // Navigator should exist in the layout
+    expect(navCount).toBeGreaterThan(0);
   });
 
   test("pdf pane is present in layout", async ({ page }) => {
     const pdfPane = page.locator(".pdf-pane");
     // PDF pane should exist in the DOM
-    await expect(pdfPane.first()).toBeAttached({ timeout: 5_000 }).catch(() => {
-      // May use a different class structure
-    });
+    const paneCount = await pdfPane.count();
+    expect(paneCount).toBeGreaterThan(0);
   });
 
   test("uploading a PDF renders pages", async ({ page }) => {
@@ -37,18 +36,18 @@ test.describe("PDF Viewer", () => {
       }
     }
 
+    // App must not crash
     await expect(page.locator(".app-shell")).toBeVisible();
   });
 
   test("prev/next page buttons exist in topbar", async ({ page }) => {
-    // Page navigation buttons
-    const prevBtn = page.locator("button[aria-label*='previous' i], button[aria-label*='prev' i], button[title*='Previous' i], button[title*='prev' i]").first();
-    const nextBtn = page.locator("button[aria-label*='next' i], button[title*='Next' i]").first();
+    // Page navigation buttons — accessible names come from icon alt text
+    const prevBtn = page.getByRole("button", { name: /上一页|prev/i });
+    const nextBtn = page.getByRole("button", { name: /下一页|next/i });
 
-    // At least one should exist
-    const prevExists = await prevBtn.isVisible().catch(() => false);
-    const nextExists = await nextBtn.isVisible().catch(() => false);
-    const hasNav = prevExists || nextExists;
-    expect(hasNav || true).toBeTruthy();
+    const prevCount = await prevBtn.count();
+    const nextCount = await nextBtn.count();
+    const hasNav = prevCount > 0 || nextCount > 0;
+    expect(hasNav).toBeTruthy();
   });
 });

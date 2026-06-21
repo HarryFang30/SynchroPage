@@ -1,0 +1,259 @@
+/* Agent — panel, toolbar, context, statusbar */
+
+.agent-panel {
+  --agent-font-ui: var(--font-ui);
+  --agent-font-reading: var(--font-ui);
+  --agent-font-mono: var(--font-mono);
+  --agent-text-xs: 12px;
+  --agent-text-sm: 13px;
+  --agent-text-md: 15px;
+  --agent-text-body: 15.5px;
+  --agent-text-lg: 18px;
+  --agent-text-xl: 21px;
+  --agent-leading-body: 1.66;
+  --agent-leading-title: 1.26;
+  --agent-leading-compact: 1.42;
+  grid-template-rows: 52px auto minmax(0, 1fr);
+  min-width: 0;
+  background: color-mix(in oklch, var(--background) 94%, white);
+  container-type: inline-size;
+  font-family: var(--agent-font-ui);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.agent-model {
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 1px solid color-mix(in oklch, var(--primary) 16%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--brand-soft) 56%, white);
+  color: color-mix(in oklch, var(--primary) 88%, var(--text));
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.agent-toolbar .toolbar-title {
+  flex: 0 0 auto;
+}
+
+.agent-toolbar .toolbar-title span:last-child {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.agent-toolbar .toolbar-actions {
+  gap: 6px;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
+.agent-toolbar .agent-model {
+  display: none;
+}
+
+.agent-action-button {
+  position: relative;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in oklch, var(--line) 64%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--panel) 82%, transparent);
+  color: color-mix(in oklch, var(--text) 88%, var(--muted));
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.agent-action-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.agent-action-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.agent-action-button:hover {
+  border-color: color-mix(in oklch, var(--line-strong) 56%, transparent);
+  background: color-mix(in oklch, var(--primary) 7%, var(--background));
+  color: var(--text-strong);
+}
+
+@container (max-width: 430px) {
+  .agent-toolbar .toolbar-actions {
+    gap: 5px;
+  }
+
+  .agent-action-button {
+    width: 32px;
+    min-height: 32px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .agent-action-button span {
+    display: none;
+  }
+}
+
+.agent-context-strip {
+  max-height: 122px;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  overflow: auto;
+  padding: 7px 12px;
+  border-bottom: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  background: color-mix(in oklch, var(--background) 80%, white);
+}
+
+.agent-context-strip:empty {
+  display: none;
+}
+
+.agent-context-strip:empty + .aui-thread-root {
+  grid-row: 2 / -1;
+}
+
+.context-pill {
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px 4px 9px;
+  border: 1px solid color-mix(in oklch, var(--primary) 10%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--secondary) 42%, white);
+  color: var(--text);
+  font-family: var(--agent-font-ui);
+  font-size: var(--agent-text-xs);
+  box-shadow: none;
+}
+
+.context-pill strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--agent-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+}
+
+.context-pill span {
+  color: color-mix(in oklch, var(--text) 78%, var(--muted));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-pill button {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.context-pill button:hover {
+  background: color-mix(in oklch, var(--primary) 8%, white);
+  color: var(--text);
+}
+
+.context-pill svg {
+  width: 14px;
+  height: 14px;
+}
+
+.image-pill {
+  position: relative;
+  width: 112px;
+  flex: 0 0 112px;
+  display: grid;
+  gap: 5px;
+  align-items: start;
+  margin: 0;
+  padding: 5px;
+  border-radius: 9px;
+}
+
+.image-pill img {
+  width: 100%;
+  height: 66px;
+  object-fit: cover;
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--secondary) 54%, transparent);
+}
+
+.image-pill figcaption {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: color-mix(in oklch, var(--text) 76%, var(--muted));
+  font-size: 10.5px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-pill button {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 22px;
+  height: 22px;
+  background: color-mix(in oklch, var(--background) 82%, transparent);
+  color: var(--text);
+  box-shadow: 0 4px 14px oklch(0.25 0.01 85 / 0.14);
+}
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 14px;
+  border-top: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  background: color-mix(in oklch, var(--background) 78%, white);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.connection-indicator {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.connection-indicator span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted) 72%, var(--line));
+}
+
+.connection-indicator.connected span {
+  background: color-mix(in oklch, var(--brand) 58%, var(--muted));
+}
+
+.connection-indicator.offline span,
+.connection-indicator.mock span {
+  background: color-mix(in oklch, var(--gold) 54%, var(--muted));
+}

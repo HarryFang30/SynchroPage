@@ -1,0 +1,104 @@
+/* Agent — selection toolbar, source preview */
+
+.selection-toolbar {
+  position: fixed;
+  z-index: 95;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--popover) 96%, var(--background));
+  box-shadow: var(--shadow-pop);
+  transform: translate(-50%, calc(-100% - 8px));
+}
+
+.selection-toolbar button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  padding: 0 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.selection-toolbar button:hover {
+  background: color-mix(in oklch, var(--secondary) 62%, transparent);
+}
+
+.selected-source-preview {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: start;
+  gap: 5px;
+  border: 1px solid color-mix(in oklch, var(--brand) 10%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--brand-soft) 16%, var(--background));
+  padding: 6px 5px 6px 8px;
+}
+
+.selected-source-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.selected-source-label {
+  overflow: hidden;
+  color: color-mix(in oklch, var(--brand) 54%, var(--text));
+  font-size: var(--agent-text-xs);
+  font-weight: 620;
+  line-height: var(--agent-leading-compact);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-source-text {
+  overflow: hidden;
+  color: color-mix(in oklch, var(--text) 82%, var(--muted));
+  display: -webkit-box;
+  font-size: var(--agent-text-sm);
+  line-height: 1.45;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.selected-source-preview.expanded .selected-source-text {
+  max-height: 128px;
+  overflow: auto;
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.selected-source-remove {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.72;
+}
+
+.selected-source-remove:hover {
+  background: color-mix(in oklch, var(--secondary) 62%, transparent);
+  color: var(--text);
+  opacity: 1;
+}
+
+.selected-source-remove svg {
+  width: 13px;
+  height: 13px;
+}
