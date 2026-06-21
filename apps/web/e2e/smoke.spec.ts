@@ -32,7 +32,7 @@ test.describe("Smoke", () => {
 
   test("theme data attributes are initialized", async ({ page }) => {
     const html = page.locator("html");
-    const initialTheme = await html.getAttribute("data-pagepair-resolved-theme");
+    const initialTheme = await html.getAttribute("data-synchropage-resolved-theme");
     expect(["light", "dark"]).toContain(initialTheme);
   });
 });

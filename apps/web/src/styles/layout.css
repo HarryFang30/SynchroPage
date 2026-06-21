@@ -72,14 +72,14 @@
   --brand: var(--primary);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .app-shell[data-accent="graphite"] {
+:root[data-synchropage-resolved-theme="dark"] .app-shell[data-accent="graphite"] {
   --primary: oklch(0.69 0.018 86);
   --brand-deep: oklch(0.62 0.016 86);
   --brand-soft: oklch(0.28 0.008 86);
   --shadow-pop: 0 18px 52px oklch(0 0 0 / 0.34);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .app-shell[data-accent="sage"] {
+:root[data-synchropage-resolved-theme="dark"] .app-shell[data-accent="sage"] {
   --primary: oklch(0.70 0.070 132);
   --brand-deep: oklch(0.58 0.060 132);
   --brand-soft: oklch(0.28 0.036 132);

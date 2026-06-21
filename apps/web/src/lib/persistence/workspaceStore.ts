@@ -1,5 +1,5 @@
 import { PersistenceError } from "./autosave";
-import { pagePairDb } from "./db";
+import { synchroPageDb } from "./db";
 import {
   lastWorkspaceStorageKey,
   persistenceSchemaVersion,
@@ -101,7 +101,7 @@ export async function createWorkspace(input: {
   const now = Date.now();
   const workspace: WorkspaceRecord = {
     id: createRecordId("ws"),
-    title: input.title || "PagePair Workspace",
+    title: input.title || "SynchroPage Workspace",
     createdAt: now,
     updatedAt: now,
     lastOpenedAt: now,
@@ -111,7 +111,7 @@ export async function createWorkspace(input: {
     settingsSnapshot: input.settingsSnapshot,
     version: persistenceSchemaVersion,
   };
-  await pagePairDb.workspaces.put(workspace);
+  await synchroPageDb.workspaces.put(workspace);
   if (input.settingsSnapshot) {
     await saveSettings(input.settingsSnapshot, workspace.id);
   }
@@ -128,8 +128,8 @@ export async function loadLastWorkspace() {
 async function ensureDefaultCourseProject(workspace: WorkspaceRecord) {
   const projectId = workspace.activeProjectId || defaultCourseProjectId(workspace.id);
   const now = Date.now();
-  const existing = await pagePairDb.courseProjects.get(projectId);
-  const documents = await pagePairDb.documents.where("workspaceId").equals(workspace.id).toArray();
+  const existing = await synchroPageDb.courseProjects.get(projectId);
+  const documents = await synchroPageDb.documents.where("workspaceId").equals(workspace.id).toArray();
   if (!existing) {
     const activeDocument = documents.find((document) => document.id === workspace.activeDocumentId) || documents[0];
     const project: CourseProjectRecord = {
@@ -145,16 +145,16 @@ async function ensureDefaultCourseProject(workspace: WorkspaceRecord) {
       documentCount: documents.length,
       activeDocumentId: activeDocument?.id,
     };
-    await pagePairDb.courseProjects.put(project);
+    await synchroPageDb.courseProjects.put(project);
   }
   for (const document of documents.filter((item) => !item.projectId)) {
-    await pagePairDb.documents.update(document.id, {
+    await synchroPageDb.documents.update(document.id, {
       projectId,
       lastOpenedAt: document.lastOpenedAt || document.updatedAt || now,
     });
   }
   if (!workspace.activeProjectId) {
-    await pagePairDb.workspaces.update(workspace.id, {
+    await synchroPageDb.workspaces.update(workspace.id, {
       activeProjectId: projectId,
       updatedAt: now,
       version: persistenceSchemaVersion,
@@ -164,12 +164,12 @@ async function ensureDefaultCourseProject(workspace: WorkspaceRecord) {
 }
 
 export async function loadCourseProjects(workspaceId: string, activeProjectId?: string | null) {
-  const workspace = await pagePairDb.workspaces.get(workspaceId);
+  const workspace = await synchroPageDb.workspaces.get(workspaceId);
   if (!workspace) return [];
   const ensuredActiveProjectId = activeProjectId || workspace.activeProjectId || await ensureDefaultCourseProject(workspace);
   const [projects, documents] = await Promise.all([
-    pagePairDb.courseProjects.where("workspaceId").equals(workspaceId).toArray(),
-    pagePairDb.documents.where("workspaceId").equals(workspaceId).toArray(),
+    synchroPageDb.courseProjects.where("workspaceId").equals(workspaceId).toArray(),
+    synchroPageDb.documents.where("workspaceId").equals(workspaceId).toArray(),
   ]);
   const documentCounts = documents.reduce((counts, document) => {
     const projectId = document.projectId || ensuredActiveProjectId;
@@ -205,9 +205,9 @@ export async function createCourseProject(input: {
     lastOpenedAt: now,
     documentCount: 0,
   };
-  await pagePairDb.transaction("rw", pagePairDb.courseProjects, pagePairDb.workspaces, async () => {
-    await pagePairDb.courseProjects.put(project);
-    await pagePairDb.workspaces.update(input.workspaceId, {
+  await synchroPageDb.transaction("rw", synchroPageDb.courseProjects, synchroPageDb.workspaces, async () => {
+    await synchroPageDb.courseProjects.put(project);
+    await synchroPageDb.workspaces.update(input.workspaceId, {
       activeProjectId: project.id,
       updatedAt: now,
       lastOpenedAt: now,
@@ -222,9 +222,9 @@ export async function loadWorkspaceDocuments(
   projectId?: string | null,
 ): Promise<DocumentSidebarItem[]> {
   const documents = projectId
-    ? (await pagePairDb.documents.where("projectId").equals(projectId).toArray())
+    ? (await synchroPageDb.documents.where("projectId").equals(projectId).toArray())
         .filter((document) => document.workspaceId === workspaceId)
-    : await pagePairDb.documents.where("workspaceId").equals(workspaceId).toArray();
+    : await synchroPageDb.documents.where("workspaceId").equals(workspaceId).toArray();
   const visibleDocuments = documents
     .sort((left, right) => (left.uploadedAt || left.updatedAt || 0) - (right.uploadedAt || right.updatedAt || 0));
   const generatedCounts = await loadGeneratedPageCounts(visibleDocuments.map((document) => document.id));
@@ -255,8 +255,8 @@ async function loadGeneratedPageCounts(documentIds: string[]) {
   const counts = new Map<string, number>();
   if (!documentIds.length) return counts;
   const collection = documentIds.length === 1
-    ? pagePairDb.generatedPages.where("documentId").equals(documentIds[0])
-    : pagePairDb.generatedPages.where("documentId").anyOf(documentIds);
+    ? synchroPageDb.generatedPages.where("documentId").equals(documentIds[0])
+    : synchroPageDb.generatedPages.where("documentId").anyOf(documentIds);
   await collection.each((page) => {
     if (page.status === "completed" && page.markdown.trim()) {
       counts.set(page.documentId, (counts.get(page.documentId) || 0) + 1);
@@ -266,7 +266,7 @@ async function loadGeneratedPageCounts(documentIds: string[]) {
 }
 
 export async function loadWorkspace(workspaceId: string): Promise<LoadedWorkspace | null> {
-  const workspace = await pagePairDb.workspaces.get(workspaceId);
+  const workspace = await synchroPageDb.workspaces.get(workspaceId);
   if (!workspace) {
     setLastWorkspaceId(null);
     return null;
@@ -276,51 +276,51 @@ export async function loadWorkspace(workspaceId: string): Promise<LoadedWorkspac
   const courseProjects = await loadCourseProjects(workspace.id, activeProjectId);
   const activeProject = courseProjects.find((project) => project.id === activeProjectId) || courseProjects[0] || null;
   let document = activeProject?.activeDocumentId
-    ? (await pagePairDb.documents.get(activeProject.activeDocumentId)) || null
+    ? (await synchroPageDb.documents.get(activeProject.activeDocumentId)) || null
     : null;
   if (document && activeProject && document.projectId !== activeProject.id) document = null;
   if (!document && workspace.activeDocumentId) {
-    const candidate = await pagePairDb.documents.get(workspace.activeDocumentId);
+    const candidate = await synchroPageDb.documents.get(workspace.activeDocumentId);
     document = candidate && (!activeProject || candidate.projectId === activeProject.id) ? candidate : null;
   }
   if (!document) {
-    const documents = await pagePairDb.documents.where("workspaceId").equals(workspace.id).sortBy("updatedAt");
+    const documents = await synchroPageDb.documents.where("workspaceId").equals(workspace.id).sortBy("updatedAt");
     const projectDocuments = activeProject ? documents.filter((item) => item.projectId === activeProject.id) : documents;
     document = projectDocuments.at(-1) || documents.at(-1) || null;
   }
   if (document && !document.projectId) {
     const projectId = activeProject?.id || activeProjectId;
-    await pagePairDb.documents.update(document.id, { projectId });
+    await synchroPageDb.documents.update(document.id, { projectId });
     document = { ...document, projectId };
   }
   const pdfBlob = document?.pdfBlobId
-    ? (await pagePairDb.fileBlobs.get(document.pdfBlobId)) || null
+    ? (await synchroPageDb.fileBlobs.get(document.pdfBlobId)) || null
     : null;
   const generatedPages = document
-    ? await pagePairDb.generatedPages
+    ? await synchroPageDb.generatedPages
         .where("documentId")
         .equals(document.id)
         .sortBy("generatedPageIndex")
     : [];
   let thread = workspace.activeThreadId
-    ? (await pagePairDb.chatThreads.get(workspace.activeThreadId)) || null
+    ? (await synchroPageDb.chatThreads.get(workspace.activeThreadId)) || null
     : document
-      ? (await pagePairDb.chatThreads.where("documentId").equals(document.id).last()) || null
+      ? (await synchroPageDb.chatThreads.where("documentId").equals(document.id).last()) || null
       : null;
   if (document && thread?.documentId !== document.id) {
-    const threads = await pagePairDb.chatThreads.where("documentId").equals(document.id).sortBy("updatedAt");
+    const threads = await synchroPageDb.chatThreads.where("documentId").equals(document.id).sortBy("updatedAt");
     thread = threads.at(-1) || null;
   }
   const messages = thread
-    ? await pagePairDb.chatMessages.where("threadId").equals(thread.id).sortBy("createdAt")
+    ? await synchroPageDb.chatMessages.where("threadId").equals(thread.id).sortBy("createdAt")
     : [];
   const selectedContext = document
-    ? (await pagePairDb.selectedContexts.where("documentId").equals(document.id).last()) || null
+    ? (await synchroPageDb.selectedContexts.where("documentId").equals(document.id).last()) || null
     : null;
   const settings = (await loadSettings(workspaceId)) || null;
   const documentItems = await loadWorkspaceDocuments(workspace.id, document?.id || workspace.activeDocumentId);
 
-  await pagePairDb.workspaces.update(workspace.id, {
+  await synchroPageDb.workspaces.update(workspace.id, {
     activeProjectId: activeProject?.id || activeProjectId,
     activeDocumentId: document?.id || workspace.activeDocumentId,
     activeThreadId: thread?.id || workspace.activeThreadId,
@@ -353,30 +353,30 @@ export async function loadWorkspaceDocument(
   documentId: string,
 ): Promise<LoadedWorkspace> {
   const [workspace, document] = await Promise.all([
-    pagePairDb.workspaces.get(workspaceId),
-    pagePairDb.documents.get(documentId),
+    synchroPageDb.workspaces.get(workspaceId),
+    synchroPageDb.documents.get(documentId),
   ]);
   if (!workspace) throw new PersistenceError("not_found", "Workspace not found");
   if (!document || document.workspaceId !== workspaceId) {
     throw new PersistenceError("not_found", "Document not found");
   }
   const projectId = document.projectId || workspace.activeProjectId || await ensureDefaultCourseProject(workspace);
-  if (!document.projectId) await pagePairDb.documents.update(document.id, { projectId });
-  const project = (await pagePairDb.courseProjects.get(projectId)) || null;
+  if (!document.projectId) await synchroPageDb.documents.update(document.id, { projectId });
+  const project = (await synchroPageDb.courseProjects.get(projectId)) || null;
 
   const pdfBlob = document.pdfBlobId
-    ? (await pagePairDb.fileBlobs.get(document.pdfBlobId)) || null
+    ? (await synchroPageDb.fileBlobs.get(document.pdfBlobId)) || null
     : null;
-  const generatedPages = await pagePairDb.generatedPages
+  const generatedPages = await synchroPageDb.generatedPages
     .where("documentId")
     .equals(document.id)
     .sortBy("generatedPageIndex");
   let thread = workspace.activeThreadId
-    ? (await pagePairDb.chatThreads.get(workspace.activeThreadId)) || null
+    ? (await synchroPageDb.chatThreads.get(workspace.activeThreadId)) || null
     : null;
   if (thread?.documentId !== document.id) thread = null;
   if (!thread) {
-    const threads = await pagePairDb.chatThreads.where("documentId").equals(document.id).sortBy("updatedAt");
+    const threads = await synchroPageDb.chatThreads.where("documentId").equals(document.id).sortBy("updatedAt");
     thread = threads.at(-1) || null;
   }
   if (!thread) {
@@ -386,8 +386,8 @@ export async function loadWorkspaceDocument(
       title: "Main chat",
     });
   }
-  const messages = await pagePairDb.chatMessages.where("threadId").equals(thread.id).sortBy("createdAt");
-  const selectedContext = (await pagePairDb.selectedContexts.where("documentId").equals(document.id).last()) || null;
+  const messages = await synchroPageDb.chatMessages.where("threadId").equals(thread.id).sortBy("createdAt");
+  const selectedContext = (await synchroPageDb.selectedContexts.where("documentId").equals(document.id).last()) || null;
   const settings = (await loadSettings(workspaceId)) || null;
   const now = Date.now();
   const nextWorkspace: WorkspaceRecord = {
@@ -399,18 +399,18 @@ export async function loadWorkspaceDocument(
     updatedAt: now,
     lastOpenedAt: now,
   };
-  await pagePairDb.transaction("rw", pagePairDb.workspaces, pagePairDb.documents, pagePairDb.courseProjects, async () => {
-    await pagePairDb.documents.update(document.id, {
+  await synchroPageDb.transaction("rw", synchroPageDb.workspaces, synchroPageDb.documents, synchroPageDb.courseProjects, async () => {
+    await synchroPageDb.documents.update(document.id, {
       projectId,
       lastOpenedAt: now,
       updatedAt: now,
     });
-    await pagePairDb.courseProjects.update(projectId, {
+    await synchroPageDb.courseProjects.update(projectId, {
       activeDocumentId: document.id,
       lastOpenedAt: now,
       updatedAt: now,
     });
-    await pagePairDb.workspaces.update(workspace.id, {
+    await synchroPageDb.workspaces.update(workspace.id, {
       activeProjectId: projectId,
       activeDocumentId: document.id,
       activeThreadId: thread.id,
@@ -441,13 +441,13 @@ export async function loadDocumentGenerationBundle(
   workspaceId: string,
   documentId: string,
 ) {
-  const document = await pagePairDb.documents.get(documentId);
+  const document = await synchroPageDb.documents.get(documentId);
   if (!document || document.workspaceId !== workspaceId) {
     throw new PersistenceError("not_found", "Document not found");
   }
   const [pdfBlob, generatedPages] = await Promise.all([
-    document.pdfBlobId ? pagePairDb.fileBlobs.get(document.pdfBlobId) : Promise.resolve(null),
-    pagePairDb.generatedPages
+    document.pdfBlobId ? synchroPageDb.fileBlobs.get(document.pdfBlobId) : Promise.resolve(null),
+    synchroPageDb.generatedPages
       .where("documentId")
       .equals(document.id)
       .sortBy("generatedPageIndex"),
@@ -464,26 +464,26 @@ export async function loadWorkspaceProject(
   projectId: string,
 ): Promise<LoadedWorkspace> {
   const [workspace, project] = await Promise.all([
-    pagePairDb.workspaces.get(workspaceId),
-    pagePairDb.courseProjects.get(projectId),
+    synchroPageDb.workspaces.get(workspaceId),
+    synchroPageDb.courseProjects.get(projectId),
   ]);
   if (!workspace) throw new PersistenceError("not_found", "Workspace not found");
   if (!project || project.workspaceId !== workspaceId) {
     throw new PersistenceError("not_found", "Course project not found");
   }
-  const documents = await pagePairDb.documents.where("projectId").equals(projectId).sortBy("updatedAt");
+  const documents = await synchroPageDb.documents.where("projectId").equals(projectId).sortBy("updatedAt");
   const activeDocument =
     (project.activeDocumentId ? documents.find((document) => document.id === project.activeDocumentId) : undefined) ||
     documents.slice().sort((left, right) => (right.lastOpenedAt || right.updatedAt) - (left.lastOpenedAt || left.updatedAt))[0];
   if (activeDocument) return loadWorkspaceDocument(workspaceId, activeDocument.id);
 
   const now = Date.now();
-  await pagePairDb.transaction("rw", pagePairDb.workspaces, pagePairDb.courseProjects, async () => {
-    await pagePairDb.courseProjects.update(projectId, {
+  await synchroPageDb.transaction("rw", synchroPageDb.workspaces, synchroPageDb.courseProjects, async () => {
+    await synchroPageDb.courseProjects.update(projectId, {
       lastOpenedAt: now,
       updatedAt: now,
     });
-    await pagePairDb.workspaces.update(workspaceId, {
+    await synchroPageDb.workspaces.update(workspaceId, {
       activeProjectId: projectId,
       activeDocumentId: undefined,
       activeThreadId: undefined,
@@ -520,7 +520,7 @@ export async function loadWorkspaceProject(
 }
 
 export async function saveWorkspacePatch(workspaceId: string, patch: Partial<WorkspaceRecord>) {
-  await pagePairDb.workspaces.update(workspaceId, {
+  await synchroPageDb.workspaces.update(workspaceId, {
     ...patch,
     updatedAt: Date.now(),
   });
@@ -533,7 +533,7 @@ export async function ensureWorkspace(input: {
   layoutState?: LayoutPatch;
 }) {
   if (input.workspaceId) {
-    const existing = await pagePairDb.workspaces.get(input.workspaceId);
+    const existing = await synchroPageDb.workspaces.get(input.workspaceId);
     if (existing) return existing;
   }
   return createWorkspace(input);
@@ -595,26 +595,26 @@ export async function savePdfBlob(input: {
     updatedAt: now,
   };
 
-  const project = await pagePairDb.courseProjects.get(projectId);
-  await pagePairDb.transaction("rw", [
-    pagePairDb.workspaces,
-    pagePairDb.courseProjects,
-    pagePairDb.documents,
-    pagePairDb.fileBlobs,
-    pagePairDb.chatThreads,
-    pagePairDb.selectedContexts,
+  const project = await synchroPageDb.courseProjects.get(projectId);
+  await synchroPageDb.transaction("rw", [
+    synchroPageDb.workspaces,
+    synchroPageDb.courseProjects,
+    synchroPageDb.documents,
+    synchroPageDb.fileBlobs,
+    synchroPageDb.chatThreads,
+    synchroPageDb.selectedContexts,
   ], async () => {
-    await pagePairDb.documents.put(document);
-    await pagePairDb.fileBlobs.put(fileBlob);
-    await pagePairDb.chatThreads.put(thread);
-    await pagePairDb.selectedContexts.where("workspaceId").equals(workspace.id).delete();
-    await pagePairDb.courseProjects.update(projectId, {
+    await synchroPageDb.documents.put(document);
+    await synchroPageDb.fileBlobs.put(fileBlob);
+    await synchroPageDb.chatThreads.put(thread);
+    await synchroPageDb.selectedContexts.where("workspaceId").equals(workspace.id).delete();
+    await synchroPageDb.courseProjects.update(projectId, {
       activeDocumentId: document.id,
       documentCount: (project?.documentCount || 0) + 1,
       updatedAt: now,
       lastOpenedAt: now,
     });
-    await pagePairDb.workspaces.update(workspace.id, {
+    await synchroPageDb.workspaces.update(workspace.id, {
       title,
       activeProjectId: projectId,
       activeDocumentId: document.id,
@@ -632,11 +632,11 @@ export async function savePdfBlob(input: {
 }
 
 export async function loadPdfBlob(blobId: string) {
-  return (await pagePairDb.fileBlobs.get(blobId)) || null;
+  return (await synchroPageDb.fileBlobs.get(blobId)) || null;
 }
 
 export async function saveDocumentPatch(documentId: string, patch: Partial<DocumentRecord>) {
-  await pagePairDb.documents.update(documentId, {
+  await synchroPageDb.documents.update(documentId, {
     ...patch,
     updatedAt: Date.now(),
   });
@@ -644,30 +644,30 @@ export async function saveDocumentPatch(documentId: string, patch: Partial<Docum
 
 async function deleteDocumentCascade(documentIds: string[]) {
   if (!documentIds.length) return;
-  const threads = await pagePairDb.chatThreads.where("documentId").anyOf(documentIds).toArray();
+  const threads = await synchroPageDb.chatThreads.where("documentId").anyOf(documentIds).toArray();
   const threadIds = threads.map((thread) => thread.id);
   await Promise.all([
-    pagePairDb.documents.bulkDelete(documentIds),
-    pagePairDb.fileBlobs.where("documentId").anyOf(documentIds).delete(),
-    pagePairDb.generatedPages.where("documentId").anyOf(documentIds).delete(),
-    pagePairDb.chatThreads.where("documentId").anyOf(documentIds).delete(),
-    threadIds.length ? pagePairDb.chatMessages.where("threadId").anyOf(threadIds).delete() : Promise.resolve(),
-    pagePairDb.selectedContexts.where("documentId").anyOf(documentIds).delete(),
+    synchroPageDb.documents.bulkDelete(documentIds),
+    synchroPageDb.fileBlobs.where("documentId").anyOf(documentIds).delete(),
+    synchroPageDb.generatedPages.where("documentId").anyOf(documentIds).delete(),
+    synchroPageDb.chatThreads.where("documentId").anyOf(documentIds).delete(),
+    threadIds.length ? synchroPageDb.chatMessages.where("threadId").anyOf(threadIds).delete() : Promise.resolve(),
+    synchroPageDb.selectedContexts.where("documentId").anyOf(documentIds).delete(),
   ]);
 }
 
 async function loadWorkspaceAfterNavigationChange(workspaceId: string, preferredProjectId?: string | null) {
-  const workspace = await pagePairDb.workspaces.get(workspaceId);
+  const workspace = await synchroPageDb.workspaces.get(workspaceId);
   if (!workspace) return null;
   if (workspace.activeDocumentId) {
-    const activeDocument = await pagePairDb.documents.get(workspace.activeDocumentId);
+    const activeDocument = await synchroPageDb.documents.get(workspace.activeDocumentId);
     if (activeDocument?.workspaceId === workspaceId) return loadWorkspaceDocument(workspaceId, activeDocument.id);
   }
 
-  const preferredProject = preferredProjectId ? await pagePairDb.courseProjects.get(preferredProjectId) : null;
+  const preferredProject = preferredProjectId ? await synchroPageDb.courseProjects.get(preferredProjectId) : null;
   if (preferredProject?.workspaceId === workspaceId) return loadWorkspaceProject(workspaceId, preferredProject.id);
   if (workspace.activeProjectId) {
-    const activeProject = await pagePairDb.courseProjects.get(workspace.activeProjectId);
+    const activeProject = await synchroPageDb.courseProjects.get(workspace.activeProjectId);
     if (activeProject?.workspaceId === workspaceId) return loadWorkspaceProject(workspaceId, activeProject.id);
   }
   const projects = await loadCourseProjects(workspaceId);
@@ -678,8 +678,8 @@ async function loadWorkspaceAfterNavigationChange(workspaceId: string, preferred
 
 export async function deleteWorkspaceDocument(workspaceId: string, documentId: string): Promise<LoadedWorkspace | null> {
   const [workspace, document] = await Promise.all([
-    pagePairDb.workspaces.get(workspaceId),
-    pagePairDb.documents.get(documentId),
+    synchroPageDb.workspaces.get(workspaceId),
+    synchroPageDb.documents.get(documentId),
   ]);
   if (!workspace) throw new PersistenceError("not_found", "Workspace not found");
   if (!document || document.workspaceId !== workspaceId) {
@@ -687,19 +687,19 @@ export async function deleteWorkspaceDocument(workspaceId: string, documentId: s
   }
   const now = Date.now();
   const projectId = document.projectId || workspace.activeProjectId || await ensureDefaultCourseProject(workspace);
-  const project = await pagePairDb.courseProjects.get(projectId);
+  const project = await synchroPageDb.courseProjects.get(projectId);
 
-  await pagePairDb.transaction(
+  await synchroPageDb.transaction(
     "rw",
     [
-      pagePairDb.workspaces,
-      pagePairDb.courseProjects,
-      pagePairDb.documents,
-      pagePairDb.fileBlobs,
-      pagePairDb.generatedPages,
-      pagePairDb.chatThreads,
-      pagePairDb.chatMessages,
-      pagePairDb.selectedContexts,
+      synchroPageDb.workspaces,
+      synchroPageDb.courseProjects,
+      synchroPageDb.documents,
+      synchroPageDb.fileBlobs,
+      synchroPageDb.generatedPages,
+      synchroPageDb.chatThreads,
+      synchroPageDb.chatMessages,
+      synchroPageDb.selectedContexts,
     ],
     async () => {
       await deleteDocumentCascade([documentId]);
@@ -713,8 +713,8 @@ export async function deleteWorkspaceDocument(workspaceId: string, documentId: s
         workspacePatch.currentGeneratedPageIndex = 0;
         workspacePatch.currentPdfPageNumber = 1;
       }
-      await pagePairDb.workspaces.update(workspaceId, workspacePatch);
-      await pagePairDb.courseProjects.update(projectId, {
+      await synchroPageDb.workspaces.update(workspaceId, workspacePatch);
+      await synchroPageDb.courseProjects.update(projectId, {
         activeDocumentId: project?.activeDocumentId === documentId ? undefined : project?.activeDocumentId,
         updatedAt: now,
         lastOpenedAt: now,
@@ -727,8 +727,8 @@ export async function deleteWorkspaceDocument(workspaceId: string, documentId: s
 
 export async function deleteCourseProject(workspaceId: string, projectId: string): Promise<LoadedWorkspace | null> {
   const [workspace, project] = await Promise.all([
-    pagePairDb.workspaces.get(workspaceId),
-    pagePairDb.courseProjects.get(projectId),
+    synchroPageDb.workspaces.get(workspaceId),
+    synchroPageDb.courseProjects.get(projectId),
   ]);
   if (!workspace) throw new PersistenceError("not_found", "Workspace not found");
   if (!project || project.workspaceId !== workspaceId) {
@@ -736,8 +736,8 @@ export async function deleteCourseProject(workspaceId: string, projectId: string
   }
   const now = Date.now();
   const [documents, projects] = await Promise.all([
-    pagePairDb.documents.where("projectId").equals(projectId).toArray(),
-    pagePairDb.courseProjects.where("workspaceId").equals(workspaceId).toArray(),
+    synchroPageDb.documents.where("projectId").equals(projectId).toArray(),
+    synchroPageDb.courseProjects.where("workspaceId").equals(workspaceId).toArray(),
   ]);
   const documentIds = documents.map((document) => document.id);
   const deletesActiveProject = workspace.activeProjectId === projectId;
@@ -746,22 +746,22 @@ export async function deleteCourseProject(workspaceId: string, projectId: string
     .filter((item) => item.id !== projectId)
     .sort((left, right) => (right.lastOpenedAt || right.updatedAt) - (left.lastOpenedAt || left.updatedAt))[0];
 
-  await pagePairDb.transaction(
+  await synchroPageDb.transaction(
     "rw",
     [
-      pagePairDb.workspaces,
-      pagePairDb.courseProjects,
-      pagePairDb.documents,
-      pagePairDb.fileBlobs,
-      pagePairDb.generatedPages,
-      pagePairDb.chatThreads,
-      pagePairDb.chatMessages,
-      pagePairDb.selectedContexts,
+      synchroPageDb.workspaces,
+      synchroPageDb.courseProjects,
+      synchroPageDb.documents,
+      synchroPageDb.fileBlobs,
+      synchroPageDb.generatedPages,
+      synchroPageDb.chatThreads,
+      synchroPageDb.chatMessages,
+      synchroPageDb.selectedContexts,
     ],
     async () => {
       await deleteDocumentCascade(documentIds);
-      await pagePairDb.courseProjects.delete(projectId);
-      await pagePairDb.workspaces.update(workspaceId, {
+      await synchroPageDb.courseProjects.delete(projectId);
+      await synchroPageDb.workspaces.update(workspaceId, {
         activeProjectId: deletesActiveProject ? nextProject?.id : workspace.activeProjectId,
         activeDocumentId: deletesActiveDocument ? undefined : workspace.activeDocumentId,
         activeThreadId: deletesActiveDocument ? undefined : workspace.activeThreadId,
@@ -771,7 +771,7 @@ export async function deleteCourseProject(workspaceId: string, projectId: string
         lastOpenedAt: now,
       });
       if (deletesActiveProject && nextProject) {
-        await pagePairDb.courseProjects.update(nextProject.id, {
+        await synchroPageDb.courseProjects.update(nextProject.id, {
           activeDocumentId: undefined,
           updatedAt: now,
           lastOpenedAt: now,
@@ -780,7 +780,7 @@ export async function deleteCourseProject(workspaceId: string, projectId: string
     },
   );
 
-  const nextWorkspace = await pagePairDb.workspaces.get(workspaceId);
+  const nextWorkspace = await synchroPageDb.workspaces.get(workspaceId);
   if (!nextWorkspace) return null;
   if (!deletesActiveProject) return loadWorkspaceAfterNavigationChange(workspaceId, workspace.activeProjectId);
   const nextProjectId = nextProject?.id || await ensureDefaultCourseProject(nextWorkspace);
@@ -793,7 +793,7 @@ export async function saveGeneratedPagesFromPack(input: {
   pack: PagePackLike;
 }) {
   const now = Date.now();
-  const document = await pagePairDb.documents.get(input.documentId);
+  const document = await synchroPageDb.documents.get(input.documentId);
   const records: GeneratedPageRecord[] = input.pack.pages.map((page, index) => {
     const teaching = page.teaching || {};
     const pageNo = Number(page.page_no || index + 1);
@@ -812,17 +812,17 @@ export async function saveGeneratedPagesFromPack(input: {
       updatedAt: now,
     };
   });
-  await pagePairDb.transaction("rw", pagePairDb.documents, pagePairDb.generatedPages, pagePairDb.workspaces, async () => {
-    await pagePairDb.generatedPages.where("documentId").equals(input.documentId).delete();
-    if (records.length) await pagePairDb.generatedPages.bulkPut(records);
-    await pagePairDb.documents.update(input.documentId, {
+  await synchroPageDb.transaction("rw", synchroPageDb.documents, synchroPageDb.generatedPages, synchroPageDb.workspaces, async () => {
+    await synchroPageDb.generatedPages.where("documentId").equals(input.documentId).delete();
+    if (records.length) await synchroPageDb.generatedPages.bulkPut(records);
+    await synchroPageDb.documents.update(input.documentId, {
       title: document?.mimeType === "application/pdf"
         ? documentTitleFromFileName(document.fileName, document.title)
         : input.pack.document.title,
       pageCount: Math.max(input.pack.document.page_count || 0, records.length),
       updatedAt: now,
     });
-    await pagePairDb.workspaces.update(input.workspaceId, {
+    await synchroPageDb.workspaces.update(input.workspaceId, {
       title: input.pack.document.title,
       updatedAt: now,
     });
@@ -837,7 +837,7 @@ export async function saveImportedPagePack(input: {
   layoutState?: LayoutPatch;
 }) {
   const now = Date.now();
-  const title = input.pack.document.title || "Imported PagePair";
+  const title = input.pack.document.title || "Imported SynchroPage";
   const workspace = await ensureWorkspace({
     workspaceId: input.workspaceId,
     title,
@@ -871,25 +871,25 @@ export async function saveImportedPagePack(input: {
     updatedAt: now,
   };
 
-  const project = await pagePairDb.courseProjects.get(projectId);
-  await pagePairDb.transaction("rw", [
-    pagePairDb.workspaces,
-    pagePairDb.courseProjects,
-    pagePairDb.documents,
-    pagePairDb.generatedPages,
-    pagePairDb.chatThreads,
-    pagePairDb.selectedContexts,
+  const project = await synchroPageDb.courseProjects.get(projectId);
+  await synchroPageDb.transaction("rw", [
+    synchroPageDb.workspaces,
+    synchroPageDb.courseProjects,
+    synchroPageDb.documents,
+    synchroPageDb.generatedPages,
+    synchroPageDb.chatThreads,
+    synchroPageDb.selectedContexts,
   ], async () => {
-    await pagePairDb.documents.put(document);
-    await pagePairDb.chatThreads.put(thread);
-    await pagePairDb.selectedContexts.where("workspaceId").equals(workspace.id).delete();
-    await pagePairDb.courseProjects.update(projectId, {
+    await synchroPageDb.documents.put(document);
+    await synchroPageDb.chatThreads.put(thread);
+    await synchroPageDb.selectedContexts.where("workspaceId").equals(workspace.id).delete();
+    await synchroPageDb.courseProjects.update(projectId, {
       activeDocumentId: document.id,
       documentCount: (project?.documentCount || 0) + 1,
       updatedAt: now,
       lastOpenedAt: now,
     });
-    await pagePairDb.workspaces.update(workspace.id, {
+    await synchroPageDb.workspaces.update(workspace.id, {
       title,
       activeProjectId: projectId,
       activeDocumentId: document.id,
@@ -908,7 +908,7 @@ export async function saveImportedPagePack(input: {
 }
 
 export async function saveGeneratedPage(record: GeneratedPageRecord) {
-  await pagePairDb.generatedPages.put({
+  await synchroPageDb.generatedPages.put({
     ...record,
     updatedAt: Date.now(),
   });
@@ -928,9 +928,9 @@ export async function createChatThread(input: {
     createdAt: now,
     updatedAt: now,
   };
-  await pagePairDb.transaction("rw", pagePairDb.chatThreads, pagePairDb.workspaces, async () => {
-    await pagePairDb.chatThreads.put(thread);
-    await pagePairDb.workspaces.update(input.workspaceId, {
+  await synchroPageDb.transaction("rw", synchroPageDb.chatThreads, synchroPageDb.workspaces, async () => {
+    await synchroPageDb.chatThreads.put(thread);
+    await synchroPageDb.workspaces.update(input.workspaceId, {
       activeThreadId: thread.id,
       updatedAt: now,
     });
@@ -940,13 +940,13 @@ export async function createChatThread(input: {
 
 export async function saveChatMessage(message: ChatMessageRecord) {
   const now = Date.now();
-  await pagePairDb.transaction("rw", pagePairDb.chatMessages, pagePairDb.chatThreads, pagePairDb.workspaces, async () => {
-    await pagePairDb.chatMessages.put({
+  await synchroPageDb.transaction("rw", synchroPageDb.chatMessages, synchroPageDb.chatThreads, synchroPageDb.workspaces, async () => {
+    await synchroPageDb.chatMessages.put({
       ...message,
       updatedAt: now,
     });
-    await pagePairDb.chatThreads.update(message.threadId, { updatedAt: now });
-    await pagePairDb.workspaces.update(message.workspaceId, { updatedAt: now });
+    await synchroPageDb.chatThreads.update(message.threadId, { updatedAt: now });
+    await synchroPageDb.workspaces.update(message.workspaceId, { updatedAt: now });
   });
 }
 
@@ -960,7 +960,7 @@ export async function updateStreamingMessage(input: {
   selectedContext?: PersistedJson | null;
   sourceRefs?: PersistedJson[];
 }) {
-  const existing = await pagePairDb.chatMessages.get(input.id);
+  const existing = await synchroPageDb.chatMessages.get(input.id);
   await saveChatMessage({
     id: input.id,
     threadId: input.threadId,
@@ -1004,16 +1004,16 @@ export async function saveSelectedContext(input: {
     payload: input.context,
     createdAt: now,
   };
-  await pagePairDb.selectedContexts.put(record);
+  await synchroPageDb.selectedContexts.put(record);
   return record;
 }
 
 export async function clearSelectedContext(workspaceId: string, documentId?: string) {
   if (documentId) {
-    await pagePairDb.selectedContexts.where("documentId").equals(documentId).delete();
+    await synchroPageDb.selectedContexts.where("documentId").equals(documentId).delete();
     return;
   }
-  await pagePairDb.selectedContexts.where("workspaceId").equals(workspaceId).delete();
+  await synchroPageDb.selectedContexts.where("workspaceId").equals(workspaceId).delete();
 }
 
 export async function saveSettings(settings: UiPreferences, workspaceId = "global") {
@@ -1022,9 +1022,9 @@ export async function saveSettings(settings: UiPreferences, workspaceId = "globa
     id: workspaceId,
     updatedAt: Date.now(),
   };
-  await pagePairDb.settings.put(record);
+  await synchroPageDb.settings.put(record);
   if (workspaceId !== "global") {
-    await pagePairDb.workspaces.update(workspaceId, {
+    await synchroPageDb.workspaces.update(workspaceId, {
       settingsSnapshot: settings,
       updatedAt: record.updatedAt,
     });
@@ -1033,15 +1033,15 @@ export async function saveSettings(settings: UiPreferences, workspaceId = "globa
 }
 
 export async function loadSettings(workspaceId = "global") {
-  return (await pagePairDb.settings.get(workspaceId)) || (workspaceId !== "global" ? await pagePairDb.settings.get("global") : null);
+  return (await synchroPageDb.settings.get(workspaceId)) || (workspaceId !== "global" ? await synchroPageDb.settings.get("global") : null);
 }
 
 export async function estimateStorage(): Promise<StorageEstimate> {
   const [estimate, persisted, workspaceCount, documentCount] = await Promise.all([
     navigator.storage?.estimate?.().catch(() => null),
     navigator.storage?.persisted?.().catch(() => null),
-    pagePairDb.workspaces.count(),
-    pagePairDb.documents.count(),
+    synchroPageDb.workspaces.count(),
+    synchroPageDb.documents.count(),
   ]);
   return {
     usage: Number(estimate?.usage || 0),
@@ -1068,13 +1068,13 @@ export async function repairWorkspaceStorage(workspaceId?: string | null): Promi
     documentsMarkedMissing: 0,
   };
   const [workspaces, documents, fileBlobs, generatedPages, chatThreads, chatMessages, selectedContexts] = await Promise.all([
-    workspaceId ? pagePairDb.workspaces.where("id").equals(workspaceId).toArray() : pagePairDb.workspaces.toArray(),
-    workspaceId ? pagePairDb.documents.where("workspaceId").equals(workspaceId).toArray() : pagePairDb.documents.toArray(),
-    workspaceId ? pagePairDb.fileBlobs.where("workspaceId").equals(workspaceId).toArray() : pagePairDb.fileBlobs.toArray(),
-    workspaceId ? pagePairDb.generatedPages.where("workspaceId").equals(workspaceId).toArray() : pagePairDb.generatedPages.toArray(),
-    workspaceId ? pagePairDb.chatThreads.where("workspaceId").equals(workspaceId).toArray() : pagePairDb.chatThreads.toArray(),
-    workspaceId ? pagePairDb.chatMessages.where("workspaceId").equals(workspaceId).toArray() : pagePairDb.chatMessages.toArray(),
-    workspaceId ? pagePairDb.selectedContexts.where("workspaceId").equals(workspaceId).toArray() : pagePairDb.selectedContexts.toArray(),
+    workspaceId ? synchroPageDb.workspaces.where("id").equals(workspaceId).toArray() : synchroPageDb.workspaces.toArray(),
+    workspaceId ? synchroPageDb.documents.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.documents.toArray(),
+    workspaceId ? synchroPageDb.fileBlobs.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.fileBlobs.toArray(),
+    workspaceId ? synchroPageDb.generatedPages.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.generatedPages.toArray(),
+    workspaceId ? synchroPageDb.chatThreads.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.chatThreads.toArray(),
+    workspaceId ? synchroPageDb.chatMessages.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.chatMessages.toArray(),
+    workspaceId ? synchroPageDb.selectedContexts.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.selectedContexts.toArray(),
   ]);
 
   const workspaceIds = new Set(workspaces.map((record) => record.id));
@@ -1101,26 +1101,26 @@ export async function repairWorkspaceStorage(workspaceId?: string | null): Promi
     .filter((record) => record.pdfBlobId && !blobIds.has(record.pdfBlobId))
     .map((record) => record.id);
 
-  await pagePairDb.transaction(
+  await synchroPageDb.transaction(
     "rw",
     [
-      pagePairDb.workspaces,
-      pagePairDb.courseProjects,
-      pagePairDb.documents,
-      pagePairDb.fileBlobs,
-      pagePairDb.generatedPages,
-      pagePairDb.chatThreads,
-      pagePairDb.chatMessages,
-      pagePairDb.selectedContexts,
+      synchroPageDb.workspaces,
+      synchroPageDb.courseProjects,
+      synchroPageDb.documents,
+      synchroPageDb.fileBlobs,
+      synchroPageDb.generatedPages,
+      synchroPageDb.chatThreads,
+      synchroPageDb.chatMessages,
+      synchroPageDb.selectedContexts,
     ],
     async () => {
-      if (orphanFileBlobIds.length) await pagePairDb.fileBlobs.bulkDelete(orphanFileBlobIds);
-      if (orphanGeneratedPageIds.length) await pagePairDb.generatedPages.bulkDelete(orphanGeneratedPageIds);
-      if (orphanThreadIds.length) await pagePairDb.chatThreads.bulkDelete(orphanThreadIds);
-      if (orphanMessageIds.length) await pagePairDb.chatMessages.bulkDelete(orphanMessageIds);
-      if (orphanContextIds.length) await pagePairDb.selectedContexts.bulkDelete(orphanContextIds);
+      if (orphanFileBlobIds.length) await synchroPageDb.fileBlobs.bulkDelete(orphanFileBlobIds);
+      if (orphanGeneratedPageIds.length) await synchroPageDb.generatedPages.bulkDelete(orphanGeneratedPageIds);
+      if (orphanThreadIds.length) await synchroPageDb.chatThreads.bulkDelete(orphanThreadIds);
+      if (orphanMessageIds.length) await synchroPageDb.chatMessages.bulkDelete(orphanMessageIds);
+      if (orphanContextIds.length) await synchroPageDb.selectedContexts.bulkDelete(orphanContextIds);
       for (const documentId of missingBlobDocuments) {
-        await pagePairDb.documents.update(documentId, { status: "missing-file", updatedAt: Date.now() });
+        await synchroPageDb.documents.update(documentId, { status: "missing-file", updatedAt: Date.now() });
       }
       for (const workspace of workspaces) {
         const patch: Partial<WorkspaceRecord> = {};
@@ -1128,7 +1128,7 @@ export async function repairWorkspaceStorage(workspaceId?: string | null): Promi
         if (workspace.activeThreadId && !threadIds.has(workspace.activeThreadId)) patch.activeThreadId = undefined;
         if (Object.keys(patch).length) {
           patch.updatedAt = Date.now();
-          await pagePairDb.workspaces.update(workspace.id, patch);
+          await synchroPageDb.workspaces.update(workspace.id, patch);
           result.workspacesRepaired += 1;
         }
       }
@@ -1145,30 +1145,30 @@ export async function repairWorkspaceStorage(workspaceId?: string | null): Promi
 }
 
 export async function clearWorkspace(workspaceId: string) {
-  await pagePairDb.transaction(
+  await synchroPageDb.transaction(
     "rw",
     [
-      pagePairDb.workspaces,
-      pagePairDb.courseProjects,
-      pagePairDb.documents,
-      pagePairDb.fileBlobs,
-      pagePairDb.generatedPages,
-      pagePairDb.chatThreads,
-      pagePairDb.chatMessages,
-      pagePairDb.selectedContexts,
-      pagePairDb.settings,
+      synchroPageDb.workspaces,
+      synchroPageDb.courseProjects,
+      synchroPageDb.documents,
+      synchroPageDb.fileBlobs,
+      synchroPageDb.generatedPages,
+      synchroPageDb.chatThreads,
+      synchroPageDb.chatMessages,
+      synchroPageDb.selectedContexts,
+      synchroPageDb.settings,
     ],
     async () => {
       await Promise.all([
-        pagePairDb.documents.where("workspaceId").equals(workspaceId).delete(),
-        pagePairDb.courseProjects.where("workspaceId").equals(workspaceId).delete(),
-        pagePairDb.fileBlobs.where("workspaceId").equals(workspaceId).delete(),
-        pagePairDb.generatedPages.where("workspaceId").equals(workspaceId).delete(),
-        pagePairDb.chatThreads.where("workspaceId").equals(workspaceId).delete(),
-        pagePairDb.chatMessages.where("workspaceId").equals(workspaceId).delete(),
-        pagePairDb.selectedContexts.where("workspaceId").equals(workspaceId).delete(),
-        pagePairDb.settings.delete(workspaceId),
-        pagePairDb.workspaces.delete(workspaceId),
+        synchroPageDb.documents.where("workspaceId").equals(workspaceId).delete(),
+        synchroPageDb.courseProjects.where("workspaceId").equals(workspaceId).delete(),
+        synchroPageDb.fileBlobs.where("workspaceId").equals(workspaceId).delete(),
+        synchroPageDb.generatedPages.where("workspaceId").equals(workspaceId).delete(),
+        synchroPageDb.chatThreads.where("workspaceId").equals(workspaceId).delete(),
+        synchroPageDb.chatMessages.where("workspaceId").equals(workspaceId).delete(),
+        synchroPageDb.selectedContexts.where("workspaceId").equals(workspaceId).delete(),
+        synchroPageDb.settings.delete(workspaceId),
+        synchroPageDb.workspaces.delete(workspaceId),
       ]);
     },
   );
@@ -1176,16 +1176,16 @@ export async function clearWorkspace(workspaceId: string) {
 }
 
 export async function exportWorkspace(workspaceId: string): Promise<ExportedWorkspace> {
-  const workspace = await pagePairDb.workspaces.get(workspaceId);
+  const workspace = await synchroPageDb.workspaces.get(workspaceId);
   if (!workspace) throw new PersistenceError("not_found", "Workspace not found");
   const [courseProjects, documents, fileBlobRecords, generatedPages, chatThreads, chatMessages, selectedContexts, settings] = await Promise.all([
-    pagePairDb.courseProjects.where("workspaceId").equals(workspaceId).toArray(),
-    pagePairDb.documents.where("workspaceId").equals(workspaceId).toArray(),
-    pagePairDb.fileBlobs.where("workspaceId").equals(workspaceId).toArray(),
-    pagePairDb.generatedPages.where("workspaceId").equals(workspaceId).toArray(),
-    pagePairDb.chatThreads.where("workspaceId").equals(workspaceId).toArray(),
-    pagePairDb.chatMessages.where("workspaceId").equals(workspaceId).toArray(),
-    pagePairDb.selectedContexts.where("workspaceId").equals(workspaceId).toArray(),
+    synchroPageDb.courseProjects.where("workspaceId").equals(workspaceId).toArray(),
+    synchroPageDb.documents.where("workspaceId").equals(workspaceId).toArray(),
+    synchroPageDb.fileBlobs.where("workspaceId").equals(workspaceId).toArray(),
+    synchroPageDb.generatedPages.where("workspaceId").equals(workspaceId).toArray(),
+    synchroPageDb.chatThreads.where("workspaceId").equals(workspaceId).toArray(),
+    synchroPageDb.chatMessages.where("workspaceId").equals(workspaceId).toArray(),
+    synchroPageDb.selectedContexts.where("workspaceId").equals(workspaceId).toArray(),
     loadSettings(workspaceId),
   ]);
   const fileBlobs = await Promise.all(
@@ -1256,33 +1256,33 @@ export async function importWorkspace(payload: ExportedWorkspace) {
     }),
   );
   validateWorkspaceExportRelations(payload);
-  await pagePairDb.transaction(
+  await synchroPageDb.transaction(
     "rw",
     [
-      pagePairDb.workspaces,
-      pagePairDb.documents,
-      pagePairDb.fileBlobs,
-      pagePairDb.generatedPages,
-      pagePairDb.chatThreads,
-      pagePairDb.chatMessages,
-      pagePairDb.selectedContexts,
-      pagePairDb.settings,
+      synchroPageDb.workspaces,
+      synchroPageDb.documents,
+      synchroPageDb.fileBlobs,
+      synchroPageDb.generatedPages,
+      synchroPageDb.chatThreads,
+      synchroPageDb.chatMessages,
+      synchroPageDb.selectedContexts,
+      synchroPageDb.settings,
     ],
     async () => {
-      await pagePairDb.workspaces.put({
+      await synchroPageDb.workspaces.put({
         ...payload.workspace,
         version: payload.workspace.version || persistenceSchemaVersion,
         updatedAt: Date.now(),
         lastOpenedAt: Date.now(),
       });
-      if (payload.courseProjects?.length) await pagePairDb.courseProjects.bulkPut(payload.courseProjects);
-      await pagePairDb.documents.bulkPut(payload.documents);
-      if (fileBlobs.length) await pagePairDb.fileBlobs.bulkPut(fileBlobs);
-      if (payload.generatedPages.length) await pagePairDb.generatedPages.bulkPut(payload.generatedPages);
-      if (payload.chatThreads.length) await pagePairDb.chatThreads.bulkPut(payload.chatThreads);
-      if (payload.chatMessages.length) await pagePairDb.chatMessages.bulkPut(payload.chatMessages);
-      if (payload.selectedContexts.length) await pagePairDb.selectedContexts.bulkPut(payload.selectedContexts);
-      if (payload.settings) await pagePairDb.settings.put(payload.settings);
+      if (payload.courseProjects?.length) await synchroPageDb.courseProjects.bulkPut(payload.courseProjects);
+      await synchroPageDb.documents.bulkPut(payload.documents);
+      if (fileBlobs.length) await synchroPageDb.fileBlobs.bulkPut(fileBlobs);
+      if (payload.generatedPages.length) await synchroPageDb.generatedPages.bulkPut(payload.generatedPages);
+      if (payload.chatThreads.length) await synchroPageDb.chatThreads.bulkPut(payload.chatThreads);
+      if (payload.chatMessages.length) await synchroPageDb.chatMessages.bulkPut(payload.chatMessages);
+      if (payload.selectedContexts.length) await synchroPageDb.selectedContexts.bulkPut(payload.selectedContexts);
+      if (payload.settings) await synchroPageDb.settings.put(payload.settings);
     },
   );
   setLastWorkspaceId(payload.workspace.id);

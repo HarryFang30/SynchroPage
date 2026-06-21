@@ -27,12 +27,12 @@ subagent 已只读检查 `/Users/harry/cc-switch`。它的 Codex OAuth 不是本
 
 本项目保留最小、可审计的后端能力，不搬 cc-switch 的完整代理系统：
 
-- [src/pdf_agent/auth/openai_oauth.py](/Users/harry/PDF_Agent/src/pdf_agent/auth/openai_oauth.py)：Device Code login、poll、refresh、多账号、原子落盘、YAML/映射配置加载、OAuth 错误脱敏。
-- [src/pdf_agent/auth/api.py](/Users/harry/PDF_Agent/src/pdf_agent/auth/api.py)：框架无关的路由 adapter，返回普通 `dict`。
-- [src/pdf_agent/gateway/openai_gateway.py](/Users/harry/PDF_Agent/src/pdf_agent/gateway/openai_gateway.py)：Codex backend URL、header 注入、session header、Responses payload normalizer、models parser、占位 token guard。
-- [config/auth/openai_oauth.yaml](/Users/harry/PDF_Agent/config/auth/openai_oauth.yaml)：端点、存储、originator、Responses 兼容策略、安全策略和前端 API 约定。
-- [examples/auth/openai_oauth_device_login.py](/Users/harry/PDF_Agent/examples/auth/openai_oauth_device_login.py)：手动 device login 示例。
-- [tests/test_openai_oauth.py](/Users/harry/PDF_Agent/tests/test_openai_oauth.py)：无网络单元测试，覆盖 refresh-only 持久化、refresh token 轮换、配置加载、错误脱敏、Codex header/payload 规则。
+- [src/pdf_agent/auth/openai_oauth.py](/Users/harry/SynchroPage/src/pdf_agent/auth/openai_oauth.py)：Device Code login、poll、refresh、多账号、原子落盘、YAML/映射配置加载、OAuth 错误脱敏。
+- [src/pdf_agent/auth/api.py](/Users/harry/SynchroPage/src/pdf_agent/auth/api.py)：框架无关的路由 adapter，返回普通 `dict`。
+- [src/pdf_agent/gateway/openai_gateway.py](/Users/harry/SynchroPage/src/pdf_agent/gateway/openai_gateway.py)：Codex backend URL、header 注入、session header、Responses payload normalizer、models parser、占位 token guard。
+- [config/auth/openai_oauth.yaml](/Users/harry/SynchroPage/config/auth/openai_oauth.yaml)：端点、存储、originator、Responses 兼容策略、安全策略和前端 API 约定。
+- [examples/auth/openai_oauth_device_login.py](/Users/harry/SynchroPage/examples/auth/openai_oauth_device_login.py)：手动 device login 示例。
+- [tests/test_openai_oauth.py](/Users/harry/SynchroPage/tests/test_openai_oauth.py)：无网络单元测试，覆盖 refresh-only 持久化、refresh token 轮换、配置加载、错误脱敏、Codex header/payload 规则。
 
 ## 后端 API 形态
 
@@ -69,7 +69,7 @@ POST   /auth/openai/logout
 
 ```mermaid
 flowchart LR
-    A["Browser PagePair Reader"] --> B["Backend Session"]
+    A["Browser SynchroPage"] --> B["Backend Session"]
     B --> C["OpenAI OAuth Manager"]
     B --> D["CoursePdfHarness"]
     D --> E["ModelPort"]
@@ -100,4 +100,4 @@ flowchart LR
 - `originator: cc-switch` header。
 - usage/quota 的完整网络查询服务。本项目只保留配置和 gateway 边界；真实 quota UI 应作为单独 service 接入。
 
-这让当前实现适合 PDF_Agent：它提供可配置的大模型入口，但保持 agent harness 的核心仍是可恢复、可观测、页级稳定。
+这让当前实现适合 SynchroPage：它提供可配置的大模型入口，但保持 agent harness 的核心仍是可恢复、可观测、页级稳定。

@@ -12,7 +12,7 @@ import {
 } from "./schema";
 import { upgradeToV2, upgradeToV3 } from "./migrations";
 
-class PagePairPersistenceDb extends Dexie {
+class SynchroPagePersistenceDb extends Dexie {
   workspaces!: Table<WorkspaceRecord, string>;
   courseProjects!: Table<CourseProjectRecord, string>;
   documents!: Table<DocumentRecord, string>;
@@ -68,4 +68,4 @@ class PagePairPersistenceDb extends Dexie {
   }
 }
 
-export const pagePairDb = new PagePairPersistenceDb();
+export const synchroPageDb = new SynchroPagePersistenceDb();

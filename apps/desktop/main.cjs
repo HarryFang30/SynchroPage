@@ -39,7 +39,7 @@ app.on("ready", async () => {
     mainWindow = createMainWindow(backend.url);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    dialog.showErrorBox("PagePair Reader failed to start", message);
+    dialog.showErrorBox("SynchroPage failed to start", message);
     app.quit();
   }
 });
@@ -60,7 +60,7 @@ function createMainWindow(url) {
   const bounds = getDefaultWindowBounds();
   const win = new BrowserWindow({
     ...bounds,
-    title: "PagePair Reader",
+    title: "SynchroPage",
     autoHideMenuBar: true,
     backgroundColor: "#f7f4ec",
     webPreferences: {
@@ -122,7 +122,7 @@ async function ensureBackend(webRoot) {
     return { port, url: `http://${HOST}:${port}/`, external: false };
   }
 
-  throw new Error(`No available PagePair backend port found from ${DEFAULT_PORT} to ${DEFAULT_PORT + PORT_SCAN_LIMIT - 1}.`);
+  throw new Error(`No available SynchroPage backend port found from ${DEFAULT_PORT} to ${DEFAULT_PORT + PORT_SCAN_LIMIT - 1}.`);
 }
 
 function startBackend(port, webRoot) {
@@ -142,7 +142,7 @@ function startBackend(port, webRoot) {
     cwd = path.dirname(backendBinary);
   } else {
     if (app.isPackaged) {
-      throw new Error("Packaged app is missing the bundled PagePair backend. Rebuild with `npm --prefix apps/desktop run dist`.");
+      throw new Error("Packaged app is missing the bundled SynchroPage backend. Rebuild with `npm --prefix apps/desktop run dist`.");
     }
     const repoRoot = resolveRepoRoot();
     const python = process.env.PAGEPAIR_PYTHON || "python3";
@@ -188,8 +188,8 @@ function resolveWebRoot() {
 function resolveBackendBinary() {
   const candidates = [];
   if (process.env.PAGEPAIR_BACKEND_BINARY) candidates.push(process.env.PAGEPAIR_BACKEND_BINARY);
-  if (app.isPackaged) candidates.push(path.join(process.resourcesPath, "backend", "pagepair-backend"));
-  candidates.push(path.resolve(__dirname, "bin", "pagepair-backend"));
+  if (app.isPackaged) candidates.push(path.join(process.resourcesPath, "backend", "synchropage-backend"));
+  candidates.push(path.resolve(__dirname, "bin", "synchropage-backend"));
   for (const candidate of candidates) {
     if (candidate && fs.existsSync(candidate)) return candidate;
   }
@@ -209,7 +209,7 @@ async function waitForBackend(port) {
     if (health.ok) return;
     await delay(300);
   }
-  throw new Error(`PagePair backend did not become healthy on ${HOST}:${port}. See ${getBackendLogPath()} for details.`);
+  throw new Error(`SynchroPage backend did not become healthy on ${HOST}:${port}. See ${getBackendLogPath()} for details.`);
 }
 
 function getBackendHealth(port) {

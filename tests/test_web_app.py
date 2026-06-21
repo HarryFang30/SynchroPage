@@ -324,7 +324,7 @@ class WebAppTest(unittest.TestCase):
 
         self.assertEqual(payload["model"], "gpt-5.4-mini")
         self.assertEqual(payload["reasoning"]["effort"], "none")
-        self.assertIn("Generate PagePair teaching notes", payload["instructions"])
+        self.assertIn("Generate SynchroPage teaching notes", payload["instructions"])
         content = payload["input"][0]["content"]
         self.assertEqual(content[0]["type"], "input_text")
         self.assertIn("PAGEPAIR CACHEABLE DOCUMENT CONTEXT", content[0]["text"])
@@ -703,8 +703,8 @@ class WebAppTest(unittest.TestCase):
         )
         self.assertEqual(agent_payload["prompt_cache_key"], teaching_payload["prompt_cache_key"])
         self.assertEqual(agent_payload["instructions"], teaching_payload["instructions"])
-        self.assertIn("You are the AI agent panel inside PagePair Reader.", agent_payload["input"][0]["content"][1]["text"])
-        self.assertIn("You are the PagePair per-page teaching generator.", teaching_payload["input"][0]["content"][1]["text"])
+        self.assertIn("You are the AI agent panel inside SynchroPage.", agent_payload["input"][0]["content"][1]["text"])
+        self.assertIn("You are the SynchroPage per-page teaching generator.", teaching_payload["input"][0]["content"][1]["text"])
 
     def test_document_cache_prefix_is_stable_for_page_order(self) -> None:
         base = {

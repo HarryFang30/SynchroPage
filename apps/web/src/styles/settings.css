@@ -8,7 +8,7 @@
   backdrop-filter: blur(2px);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .settings-overlay {
+:root[data-synchropage-resolved-theme="dark"] .settings-overlay {
   background: oklch(0.06 0.006 86 / 0.58);
   backdrop-filter: blur(2px);
 }
@@ -347,11 +347,11 @@
   transform: translate(-50%, -50%);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .settings-confirm-overlay {
+:root[data-synchropage-resolved-theme="dark"] .settings-confirm-overlay {
   background: oklch(0.04 0.004 86 / 0.68);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .settings-confirm-dialog {
+:root[data-synchropage-resolved-theme="dark"] .settings-confirm-dialog {
   background: color-mix(in oklch, var(--popover) 92%, var(--background));
   box-shadow: 0 24px 64px oklch(0 0 0 / 0.48);
 }

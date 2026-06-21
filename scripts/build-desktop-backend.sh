@@ -29,12 +29,12 @@ PYTHONPATH="$ROOT_DIR/src" "$PYTHON_BIN" -m PyInstaller \
   --clean \
   --noconfirm \
   --onefile \
-  --name pagepair-backend \
+  --name synchropage-backend \
   --paths "$ROOT_DIR/src" \
   --distpath "$DIST_DIR" \
   --workpath "$BUILD_DIR/work" \
   --specpath "$BUILD_DIR/spec" \
   "$ENTRYPOINT"
 
-chmod +x "$DIST_DIR/pagepair-backend"
-echo "Built backend sidecar: $DIST_DIR/pagepair-backend"
+chmod +x "$DIST_DIR/synchropage-backend"
+echo "Built backend sidecar: $DIST_DIR/synchropage-backend"

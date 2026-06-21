@@ -1,10 +1,10 @@
-# 最优方案：OpenAI Gateway + 双栏 PagePair Reader
+# 最优方案：OpenAI Gateway + 双栏 SynchroPage
 
 ## 结论
 
 基于调研报告和你的新约束，最优方案应从“生成讲解 PDF/PPT”调整为：
 
-**GPT-5.5 direct PDF understanding + OpenAI Gateway + deterministic PagePair Agent workflow + Web 双栏阅读器**
+**GPT-5.5 direct PDF understanding + OpenAI Gateway + deterministic SynchroPage Agent workflow + Web 双栏阅读器**
 
 这个方案保留报告里最关键的页级可控性，同时升级模型入口：GPT-5.5 作为主模型直接读取 PDF，Docling/PyMuPDF/MinerU 作为稳定性、缓存和疑难页面兜底。输出从静态文件改成可交互页面：左侧显示原 PDF 当前页，右侧显示该页讲解、概念、图表解释、置信度和结构化 JSON。讲解不再二次生成 PDF，主产物改为可版本化、可编辑、可回放的 `lecture_pairpack.v1.json`。
 
@@ -31,7 +31,7 @@ flowchart LR
     I --> D
 ```
 
-详细框架见 [docs/architecture/course-pdf-agent-framework.md](/Users/harry/PDF_Agent/docs/architecture/course-pdf-agent-framework.md)，可配置 prompt 见 [config/prompts/course_agent.prompt.yaml](/Users/harry/PDF_Agent/config/prompts/course_agent.prompt.yaml)，输出 schema 见 [contracts/schemas/lecture_pairpack/v1.schema.json](/Users/harry/PDF_Agent/contracts/schemas/lecture_pairpack/v1.schema.json)。
+详细框架见 [docs/architecture/course-pdf-agent-framework.md](/Users/harry/SynchroPage/docs/architecture/course-pdf-agent-framework.md)，可配置 prompt 见 [config/prompts/course_agent.prompt.yaml](/Users/harry/SynchroPage/config/prompts/course_agent.prompt.yaml)，输出 schema 见 [contracts/schemas/lecture_pairpack/v1.schema.json](/Users/harry/SynchroPage/contracts/schemas/lecture_pairpack/v1.schema.json)。
 
 ## OpenAI OAuth 的落点
 
@@ -47,7 +47,7 @@ flowchart LR
     D --> E["OpenAI Gateway"]
     E --> F["ChatGPT Codex Backend / Responses-compatible adapter"]
     E --> G["Docling / PyMuPDF Parser"]
-    G --> H["PagePair JSON Store"]
+    G --> H["SynchroPage JSON Store"]
     F --> H
     H --> A
 ```
@@ -56,11 +56,11 @@ flowchart LR
 
 已落地文件：
 
-- [docs/architecture/openai-oauth-gateway.md](/Users/harry/PDF_Agent/docs/architecture/openai-oauth-gateway.md)
-- [src/pdf_agent/auth/openai_oauth.py](/Users/harry/PDF_Agent/src/pdf_agent/auth/openai_oauth.py)
-- [src/pdf_agent/auth/api.py](/Users/harry/PDF_Agent/src/pdf_agent/auth/api.py)
-- [src/pdf_agent/gateway/openai_gateway.py](/Users/harry/PDF_Agent/src/pdf_agent/gateway/openai_gateway.py)
-- [config/auth/openai_oauth.yaml](/Users/harry/PDF_Agent/config/auth/openai_oauth.yaml)
+- [docs/architecture/openai-oauth-gateway.md](/Users/harry/SynchroPage/docs/architecture/openai-oauth-gateway.md)
+- [src/pdf_agent/auth/openai_oauth.py](/Users/harry/SynchroPage/src/pdf_agent/auth/openai_oauth.py)
+- [src/pdf_agent/auth/api.py](/Users/harry/SynchroPage/src/pdf_agent/auth/api.py)
+- [src/pdf_agent/gateway/openai_gateway.py](/Users/harry/SynchroPage/src/pdf_agent/gateway/openai_gateway.py)
+- [config/auth/openai_oauth.yaml](/Users/harry/SynchroPage/config/auth/openai_oauth.yaml)
 
 相关官方资料入口：
 
@@ -146,7 +146,7 @@ GET  /api/documents/:document_id/export?format=json|markdown
 - 右侧：讲解 Markdown、概念、图表说明、JSON tab。
 - 顶部：OpenAI OAuth 入口、上传 PDF、导入/导出 JSON、生成按钮。
 
-当前仓库中的 `apps/web/` 是自包含的 React/TypeScript PagePair Reader，右侧 Agent Panel 基于 `@assistant-ui/react`。前端自己的 `package.json`、`tsconfig*.json` 和 `vite.config.ts` 都放在 `apps/web/`，运行时先构建到 `apps/web/dist`，再由 `pdf_agent.server.web_app` 提供静态资源、OAuth 路由和 `/api/agent/chat` 后端代理：
+当前仓库中的 `apps/web/` 是自包含的 React/TypeScript SynchroPage，右侧 Agent Panel 基于 `@assistant-ui/react`。前端自己的 `package.json`、`tsconfig*.json` 和 `vite.config.ts` 都放在 `apps/web/`，运行时先构建到 `apps/web/dist`，再由 `pdf_agent.server.web_app` 提供静态资源、OAuth 路由和 `/api/agent/chat` 后端代理：
 
 ```bash
 ./scripts/run-web.sh --port 8765

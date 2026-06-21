@@ -10,7 +10,7 @@
 }
 
 .aui-composer-root:focus-within,
-:root[data-pagepair-resolved-theme="dark"] .aui-composer-root:focus-within {
+:root[data-synchropage-resolved-theme="dark"] .aui-composer-root:focus-within {
   border-color: var(--pp-accent-border);
   box-shadow: var(--pp-ring), var(--pp-shadow-inset);
 }

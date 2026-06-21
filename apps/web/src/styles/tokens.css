@@ -73,7 +73,7 @@
   --pp-icon-button: var(--icon-button-size);
 }
 
-:root[data-pagepair-resolved-theme="dark"] {
+:root[data-synchropage-resolved-theme="dark"] {
   --pp-bg-app: oklch(0.185 0.007 86);
   --pp-bg-rail: oklch(0.195 0.007 86);
   --pp-bg-sidebar: oklch(0.190 0.007 86);

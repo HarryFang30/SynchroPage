@@ -84,22 +84,22 @@ _PDF_FILE_SUBSET_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _PDF_FILE_SUBSET_CACHE_BYTES = 0
 LOGGER = logging.getLogger("pdf_agent.server.web_app")
 
-PAGEPAIR_SHARED_INSTRUCTIONS = """You are the model backend for PagePair Reader.
+PAGEPAIR_SHARED_INSTRUCTIONS = """You are the model backend for SynchroPage.
 Use the provided PDF/page context, selected text, formulas, images, and task-specific instructions as primary evidence.
 Preserve LaTeX formulas, cite page numbers when available, and do not invent facts that are not supported by the provided source material.
 Follow the task-specific instructions included in each request, including any required output format."""
 
 PAGEPAIR_FAST_TEACHING_INSTRUCTIONS = (
-    "Generate PagePair teaching notes from the compact document context and provided page source. "
+    "Generate SynchroPage teaching notes from the compact document context and provided page source. "
     "Return strict JSON only, preserve technical tokens/LaTeX, and do not invent unsupported facts."
 )
 
-AGENT_INSTRUCTIONS = """You are the AI agent panel inside PagePair Reader.
+AGENT_INSTRUCTIONS = """You are the AI agent panel inside SynchroPage.
 Use the current PDF/page context, selected text, formulas, and image attachments as primary evidence.
 Answer in the user's language, preserve LaTeX formulas, cite page numbers when available, and keep the response useful for study, review, or editing.
 Follow the answer-mode instructions included in each request."""
 
-TEACHING_GENERATOR_INSTRUCTIONS = """You are the PagePair per-page teaching generator.
+TEACHING_GENERATOR_INSTRUCTIONS = """You are the SynchroPage per-page teaching generator.
 Generate page-aligned study notes for one PDF page at a time.
 Return strict JSON only. Do not wrap JSON in Markdown fences.
 Use the requested output language from the prompt for all prose. Preserve formulas in LaTeX using $...$ or $$...$$.
@@ -113,7 +113,7 @@ Render tables as GitHub-Flavored Markdown tables inside speaker_notes_md when th
 Keep speaker_notes_md concise: prefer 4-7 focused bullets or short sections, avoid restating the source text line by line, and only expand when formulas, tables, or derivations need it.
 Do not invent facts that are not supported by the source page text. If the page has no extractable text, mark it as needs_parser_fallback."""
 
-TEACHING_GENERATOR_FAST_INSTRUCTIONS = """You are the PagePair per-page teaching generator.
+TEACHING_GENERATOR_FAST_INSTRUCTIONS = """You are the SynchroPage per-page teaching generator.
 Return strict JSON only. Use the requested output language for all prose.
 Keep speaker_notes_md concise, explain rather than transcribe, preserve technical tokens, and do not invent unsupported facts.
 Escape LaTeX backslashes in JSON strings, for example write \\\\frac and \\\\to."""
@@ -650,7 +650,7 @@ def _default_web_root() -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the local PDF Agent web app.")
+    parser = argparse.ArgumentParser(description="Run the local SynchroPage web app.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--web-root", type=Path, default=None, help="Directory containing the built web UI.")
@@ -659,7 +659,7 @@ def main(argv: list[str] | None = None) -> int:
 
     server = create_server(args.host, args.port, web_root=args.web_root, model=args.model)
     url = f"http://{args.host}:{server.server_address[1]}/"
-    print(f"PDF Agent web app: {url}")
+    print(f"SynchroPage web app: {url}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -985,7 +985,7 @@ def _build_fast_teaching_generation_prompt(body: Mapping[str, Any], target_pages
     source_text_limit = _teaching_source_text_limit(body)
     batch = len(target_pages) > 1
     sections = [
-        f"Generate concise PagePair teaching JSON for PDF page(s): {_format_page_ranges(target_page_numbers)}.",
+        f"Generate concise SynchroPage teaching JSON for PDF page(s): {_format_page_ranges(target_page_numbers)}.",
         f"Output shape: {_teaching_fast_output_shape(target_page_numbers, batch=batch)}",
         f"Language: {output_language_label} ({output_language_code}); write all prose in this language and preserve technical tokens.",
         "Rules: JSON only; no Markdown fences; escape LaTeX backslashes as \\\\frac and \\\\to; do not copy source text; use 3-5 focused bullets/short sections.",
@@ -1022,7 +1022,7 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
         "Task-specific instructions:",
         _teaching_generator_instructions(body),
         "",
-        "Generate one PagePair teaching page JSON for the given PDF page.",
+        "Generate one SynchroPage teaching page JSON for the given PDF page.",
         "",
         "Output shape:",
         _teaching_contract_json(_teaching_page_output_contract(page_no)),
@@ -1079,7 +1079,7 @@ def _build_teaching_batch_generation_prompt(body: Mapping[str, Any], target_page
         "Task-specific instructions:",
         _teaching_generator_instructions(body),
         "",
-        f"Generate PagePair teaching page JSON for {len(target_pages)} PDF pages in one batch.",
+        f"Generate SynchroPage teaching page JSON for {len(target_pages)} PDF pages in one batch.",
         "Return one page object for every target page. Do not skip pages. Do not merge pages.",
         f"Target page numbers: {_format_page_ranges(target_page_numbers)}",
         "",
@@ -1675,7 +1675,7 @@ def _normalize_generated_page_candidate(
         if output_language_code == "en-US":
             notes = (
                 "## This page cannot be explained reliably yet\n\n"
-                "This page has no extractable PDF text layer. PagePair will not invent content; add OCR or page text, then regenerate."
+                "This page has no extractable PDF text layer. SynchroPage will not invent content; add OCR or page text, then regenerate."
             )
         else:
             notes = (

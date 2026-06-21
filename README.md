@@ -1,6 +1,6 @@
-# PDF Agent
+# SynchroPage
 
-工业级课程 PDF Agent 工作区：将 PDF 转换为页级对齐的 `lecture_pairpack.v1` 结构化产物，提供 React/TypeScript PagePair Reader，并通过 OpenAI OAuth Gateway 驱动右侧 IDE / Cursor / Codex 风格 AI Agent Panel。
+SynchroPage 是工业级课程 PDF 阅读与讲解工作区：将 PDF 转换为页级对齐的 `lecture_pairpack.v1` 结构化产物，提供 React/TypeScript 双栏阅读器，并通过 OpenAI OAuth Gateway 驱动右侧 IDE / Cursor / Codex 风格 AI Agent Panel。
 
 当前前端是 local-first workspace：PDF Blob、讲解页、Agent 对话、PDF 选区上下文、当前页、设置和布局都会保存到 IndexedDB，刷新后自动恢复。
 
@@ -18,7 +18,7 @@
 ```text
 apps/
   desktop/                    Electron macOS app shell，自动启动后端并打开 Reader
-  web/                         React + TypeScript PagePair Reader 前端
+  web/                         React + TypeScript SynchroPage 前端
     src/                       App 组件、assistant-ui adapter、CSS 视觉系统
       lib/persistence/         Dexie/IndexedDB schema、store、migration、import/export、repair
 config/
@@ -128,8 +128,8 @@ PYTHONPATH=src python3 -m pdf_agent.web_app --port 8765
 桌面端位于 `apps/desktop`。它使用 Electron 作为 macOS 外壳，启动时会：
 
 1. 找到可用端口，默认优先 `127.0.0.1:8765`。
-2. 如果该端口已经是 PagePair 后端，就直接复用。
-3. 否则启动内置 Python sidecar `pagepair-backend`。
+2. 如果该端口已经是 SynchroPage 后端，就直接复用。
+3. 否则启动内置 Python sidecar `synchropage-backend`。
 4. 把打包进 App 的 `web-dist` 通过 `--web-root` 传给后端。
 5. 在桌面窗口中打开 `http://127.0.0.1:<port>/`。
 
@@ -143,7 +143,7 @@ npm --prefix apps/desktop run dev
 
 ```bash
 npm --prefix apps/desktop run pack
-open "apps/desktop/release/mac-arm64/PagePair Reader.app"
+open "apps/desktop/release/mac-arm64/SynchroPage.app"
 ```
 
 也可以使用仓库级一键脚本：
@@ -175,7 +175,7 @@ electron-builder --mac --dir
 生成物：
 
 ```text
-apps/desktop/release/mac-arm64/PagePair Reader.app
+apps/desktop/release/mac-arm64/SynchroPage.app
 ```
 
 如果要生成 DMG / zip：
@@ -205,13 +205,13 @@ App Store 发布使用 Electron MAS target，配置在 [apps/desktop/package.jso
 
 1. Apple Developer Program 账号。
 2. App Store Connect app 记录。
-3. 显式 App ID / bundle ID：`com.pagepair.reader`。如果要换 bundle ID，需要同步修改 `apps/desktop/package.json` 的 `build.appId`，并重新创建 profiles。
+3. 显式 App ID / bundle ID：`com.synchropage.reader`。如果要换 bundle ID，需要同步修改 `apps/desktop/package.json` 的 `build.appId`，并重新创建 profiles。
 4. 本机 Keychain 中安装 `Apple Development` 证书，用于 `mas-dev` 本地 sandbox 测试。
 5. 本机 Keychain 中安装 `Apple Distribution` / `3rd Party Mac Developer Application` 证书，用于 App Store 构建。
 6. 本机 Keychain 中安装 Mac App Store installer 证书。electron-builder 当前会查找 legacy 名称 `3rd Party Mac Developer Installer`。
 7. 下载匹配 bundle ID 的 provisioning profiles：
-   - `apps/desktop/profiles/PagePair_Development.provisionprofile`
-   - `apps/desktop/profiles/PagePair_AppStore.provisionprofile`
+   - `apps/desktop/profiles/SynchroPage_Development.provisionprofile`
+   - `apps/desktop/profiles/SynchroPage_AppStore.provisionprofile`
 
 检查当前机器是否具备 MAS 构建条件：
 
@@ -246,7 +246,7 @@ PAGEPAIR_MAS_PROFILE=/path/to/appstore.provisionprofile npm --prefix apps/deskto
 桌面端日志写入 macOS app logs 目录，例如：
 
 ```text
-~/Library/Logs/PagePair Reader/backend.log
+~/Library/Logs/SynchroPage/backend.log
 ```
 
 可选环境变量：
@@ -316,7 +316,7 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 
 ## Reader 使用方法
 
-页面默认加载示例 PagePair 文档。核心工作流：
+页面默认加载示例 SynchroPage 文档。核心工作流：
 
 1. 用上传按钮导入 PDF。
 2. 如果已有生成结果，用 JSON 按钮导入 `lecture_pairpack.v1` 文件。
@@ -343,6 +343,8 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 
 前端使用 Dexie + IndexedDB 作为 local-first persistence layer。不要把 PDF、聊天或生成内容存进 `localStorage`；`localStorage` 只保存很小的 fallback，例如 `lastWorkspaceId` 和 UI preference fallback。
 
+为兼容重命名前已经创建的本地工作区，部分内部存储 key 仍保留历史 `pagepair-*` 名称；用户可见产品名统一为 SynchroPage。
+
 保存位置：
 
 ```text
@@ -354,7 +356,7 @@ localStorage key: pagepair.lastWorkspaceId.v1
 
 ```text
 workspaces        workspace metadata、active document/thread、当前页、layout snapshot、settings snapshot
-documents         PDF/PagePair document metadata、页数、当前 PDF 页、pdfBlobId
+documents         PDF / SynchroPage document metadata、页数、当前 PDF 页、pdfBlobId
 fileBlobs         PDF Blob 本体
 generatedPages    逐页讲解 markdown/json/status
 chatThreads       Agent 对话线程

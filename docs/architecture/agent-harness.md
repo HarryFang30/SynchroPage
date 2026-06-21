@@ -55,11 +55,11 @@ flowchart TB
 
 ## 当前落地文件
 
-- [src/pdf_agent/harness/agent_loop.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/agent_loop.py)
-- [src/pdf_agent/harness/ports.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/ports.py)
-- [src/pdf_agent/harness/types.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/types.py)
-- [src/pdf_agent/harness/policy.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/policy.py)
-- [src/pdf_agent/harness/session_store.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/session_store.py)
-- [src/pdf_agent/auth/openai_oauth.py](/Users/harry/PDF_Agent/src/pdf_agent/auth/openai_oauth.py)
-- [src/pdf_agent/gateway/openai_gateway.py](/Users/harry/PDF_Agent/src/pdf_agent/gateway/openai_gateway.py)
-- [config/harness/course_pdf_harness.yaml](/Users/harry/PDF_Agent/config/harness/course_pdf_harness.yaml)
+- [src/pdf_agent/harness/agent_loop.py](/Users/harry/SynchroPage/src/pdf_agent/harness/agent_loop.py)
+- [src/pdf_agent/harness/ports.py](/Users/harry/SynchroPage/src/pdf_agent/harness/ports.py)
+- [src/pdf_agent/harness/types.py](/Users/harry/SynchroPage/src/pdf_agent/harness/types.py)
+- [src/pdf_agent/harness/policy.py](/Users/harry/SynchroPage/src/pdf_agent/harness/policy.py)
+- [src/pdf_agent/harness/session_store.py](/Users/harry/SynchroPage/src/pdf_agent/harness/session_store.py)
+- [src/pdf_agent/auth/openai_oauth.py](/Users/harry/SynchroPage/src/pdf_agent/auth/openai_oauth.py)
+- [src/pdf_agent/gateway/openai_gateway.py](/Users/harry/SynchroPage/src/pdf_agent/gateway/openai_gateway.py)
+- [config/harness/course_pdf_harness.yaml](/Users/harry/SynchroPage/config/harness/course_pdf_harness.yaml)

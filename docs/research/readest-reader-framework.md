@@ -18,7 +18,7 @@
 - Supabase、S3、sync、KOSync、WebDAV、TTS、AI notebook、书库多书视图。
 - 复杂 e-ink、竖排、CJK transform 和自定义字体/纹理系统。
 
-## 已应用到 PagePair Reader
+## 已应用到 SynchroPage
 
 - `apps/web/index.html` 作为 Vite/React mount point。
 - `apps/web/src/App.tsx` 实现 reader progress、页级 rail、PDF/页面预览、讲解/结构/JSON tabs，以及 `@assistant-ui/react` Agent Panel。

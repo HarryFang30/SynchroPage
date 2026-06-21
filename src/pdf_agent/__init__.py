@@ -1,4 +1,4 @@
-"""Course PDF Agent harness contracts and orchestration."""
+"""SynchroPage course PDF harness contracts and orchestration."""
 
 from .auth import OpenAIOAuthApi, OpenAIOAuthManager
 from .gateway import build_chatgpt_codex_auth

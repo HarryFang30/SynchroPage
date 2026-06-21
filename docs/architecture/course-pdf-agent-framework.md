@@ -1,10 +1,10 @@
-# 稳定高效的课程 PDF Agent 框架
+# 稳定高效的课程 SynchroPage 框架
 
 ## 核心选择
 
 当前最优路线应调整为：
 
-**GPT-5.5 direct PDF understanding + deterministic PagePair workflow + local parser fallback**
+**GPT-5.5 direct PDF understanding + deterministic SynchroPage workflow + local parser fallback**
 
 也就是说，GPT-5.5 可以作为主模型直接读取 PDF，但系统不能把“整份 PDF 丢给模型一次性生成所有页讲解”当作唯一流程。稳定高效的关键是把模型能力放进可控 Agent 框架里：
 
@@ -26,14 +26,14 @@
 
 已落地的 harness 文件：
 
-- [docs/architecture/agent-harness.md](/Users/harry/PDF_Agent/docs/architecture/agent-harness.md)
-- [src/pdf_agent/harness/agent_loop.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/agent_loop.py)
-- [src/pdf_agent/harness/ports.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/ports.py)
-- [src/pdf_agent/harness/types.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/types.py)
-- [src/pdf_agent/harness/policy.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/policy.py)
-- [src/pdf_agent/harness/session_store.py](/Users/harry/PDF_Agent/src/pdf_agent/harness/session_store.py)
-- [config/harness/course_pdf_harness.yaml](/Users/harry/PDF_Agent/config/harness/course_pdf_harness.yaml)
-- [docs/workflows/course-pdf-pairpack.md](/Users/harry/PDF_Agent/docs/workflows/course-pdf-pairpack.md)
+- [docs/architecture/agent-harness.md](/Users/harry/SynchroPage/docs/architecture/agent-harness.md)
+- [src/pdf_agent/harness/agent_loop.py](/Users/harry/SynchroPage/src/pdf_agent/harness/agent_loop.py)
+- [src/pdf_agent/harness/ports.py](/Users/harry/SynchroPage/src/pdf_agent/harness/ports.py)
+- [src/pdf_agent/harness/types.py](/Users/harry/SynchroPage/src/pdf_agent/harness/types.py)
+- [src/pdf_agent/harness/policy.py](/Users/harry/SynchroPage/src/pdf_agent/harness/policy.py)
+- [src/pdf_agent/harness/session_store.py](/Users/harry/SynchroPage/src/pdf_agent/harness/session_store.py)
+- [config/harness/course_pdf_harness.yaml](/Users/harry/SynchroPage/config/harness/course_pdf_harness.yaml)
+- [docs/workflows/course-pdf-pairpack.md](/Users/harry/SynchroPage/docs/workflows/course-pdf-pairpack.md)
 
 ## 为什么不是单次大 Prompt
 
@@ -50,7 +50,7 @@ flowchart LR
     A["Upload PDF"] --> B["GPT-5.5 Document Planner"]
     B --> C["Document Plan JSON"]
     C --> D["Page Teaching Agent"]
-    D --> E["PagePair JSON"]
+    D --> E["SynchroPage JSON"]
     E --> F["Page Reviewer"]
     F --> G{Pass?}
     G -- yes --> H["Store / UI Render"]
@@ -90,11 +90,11 @@ flowchart LR
 
 落地文件：
 
-- [docs/architecture/openai-oauth-gateway.md](/Users/harry/PDF_Agent/docs/architecture/openai-oauth-gateway.md)
-- [src/pdf_agent/auth/openai_oauth.py](/Users/harry/PDF_Agent/src/pdf_agent/auth/openai_oauth.py)
-- [src/pdf_agent/auth/api.py](/Users/harry/PDF_Agent/src/pdf_agent/auth/api.py)
-- [src/pdf_agent/gateway/openai_gateway.py](/Users/harry/PDF_Agent/src/pdf_agent/gateway/openai_gateway.py)
-- [config/auth/openai_oauth.yaml](/Users/harry/PDF_Agent/config/auth/openai_oauth.yaml)
+- [docs/architecture/openai-oauth-gateway.md](/Users/harry/SynchroPage/docs/architecture/openai-oauth-gateway.md)
+- [src/pdf_agent/auth/openai_oauth.py](/Users/harry/SynchroPage/src/pdf_agent/auth/openai_oauth.py)
+- [src/pdf_agent/auth/api.py](/Users/harry/SynchroPage/src/pdf_agent/auth/api.py)
+- [src/pdf_agent/gateway/openai_gateway.py](/Users/harry/SynchroPage/src/pdf_agent/gateway/openai_gateway.py)
+- [config/auth/openai_oauth.yaml](/Users/harry/SynchroPage/config/auth/openai_oauth.yaml)
 
 ## GPT-5.5 直读 PDF 的输入策略
 
@@ -106,7 +106,7 @@ flowchart LR
 - 每页输出 `confidence` 和 `evidence`。
 - 严格遵循 JSON Schema，不输出解释性散文。
 
-示例请求骨架见 [examples/openai/gpt55_responses_pdf_request.json](/Users/harry/PDF_Agent/examples/openai/gpt55_responses_pdf_request.json)。
+示例请求骨架见 [examples/openai/gpt55_responses_pdf_request.json](/Users/harry/SynchroPage/examples/openai/gpt55_responses_pdf_request.json)。
 
 ## 稳定性机制
 
@@ -133,11 +133,11 @@ flowchart LR
 
 ## Prompt 与 Schema 文件
 
-- Prompt 配置：[config/prompts/course_agent.prompt.yaml](/Users/harry/PDF_Agent/config/prompts/course_agent.prompt.yaml)
-- Harness 配置：[config/harness/course_pdf_harness.yaml](/Users/harry/PDF_Agent/config/harness/course_pdf_harness.yaml)
-- 输出 Schema：[contracts/schemas/lecture_pairpack/v1.schema.json](/Users/harry/PDF_Agent/contracts/schemas/lecture_pairpack/v1.schema.json)
-- 页级批处理 Schema：[contracts/schemas/lecture_pairpack/page_batch.v1.schema.json](/Users/harry/PDF_Agent/contracts/schemas/lecture_pairpack/page_batch.v1.schema.json)
-- GPT-5.5 PDF 请求示例：[examples/openai/gpt55_responses_pdf_request.json](/Users/harry/PDF_Agent/examples/openai/gpt55_responses_pdf_request.json)
+- Prompt 配置：[config/prompts/course_agent.prompt.yaml](/Users/harry/SynchroPage/config/prompts/course_agent.prompt.yaml)
+- Harness 配置：[config/harness/course_pdf_harness.yaml](/Users/harry/SynchroPage/config/harness/course_pdf_harness.yaml)
+- 输出 Schema：[contracts/schemas/lecture_pairpack/v1.schema.json](/Users/harry/SynchroPage/contracts/schemas/lecture_pairpack/v1.schema.json)
+- 页级批处理 Schema：[contracts/schemas/lecture_pairpack/page_batch.v1.schema.json](/Users/harry/SynchroPage/contracts/schemas/lecture_pairpack/page_batch.v1.schema.json)
+- GPT-5.5 PDF 请求示例：[examples/openai/gpt55_responses_pdf_request.json](/Users/harry/SynchroPage/examples/openai/gpt55_responses_pdf_request.json)
 
 ## 官方资料依据
 

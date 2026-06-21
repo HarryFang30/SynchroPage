@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="PagePair Reader.app"
+APP_NAME="SynchroPage.app"
 DESKTOP_DIR="$ROOT_DIR/apps/desktop"
 BUILT_APP="$DESKTOP_DIR/release/mac-arm64/$APP_NAME"
 INSTALL_DIR="/Applications"
@@ -16,7 +16,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/build-macos-app.sh [options]
 
-Build the PagePair Reader macOS app in one command.
+Build the SynchroPage macOS app in one command.
 
 Options:
   --install       Copy the built app to /Applications
@@ -101,7 +101,7 @@ if [[ "$SKIP_DEPS" -eq 0 ]]; then
   fi
 fi
 
-log "Building PagePair Reader.app"
+log "Building SynchroPage.app"
 if [[ "$RUN_DMG" -eq 1 ]]; then
   npm --prefix apps/desktop run dist
 else
@@ -119,7 +119,7 @@ install_app() {
   local destination_dir="$1"
   local destination_app="$destination_dir/$APP_NAME"
   log "Installing to $destination_app"
-  osascript -e 'tell application "PagePair Reader" to quit' >/dev/null 2>&1 || true
+  osascript -e 'tell application "SynchroPage" to quit' >/dev/null 2>&1 || true
   mkdir -p "$destination_dir"
   rm -rf "$destination_app"
   ditto "$BUILT_APP" "$destination_app"

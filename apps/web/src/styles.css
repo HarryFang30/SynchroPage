@@ -7,7 +7,7 @@
 @import "./styles/agent.css";
 @import "./styles/settings.css";
 @import "./styles/dark-overrides.css";
-@import "./styles/pagepair-refinements.css";
+@import "./styles/synchropage-refinements.css";
 @import "./styles/responsive.css";
 
 @tailwind utilities;

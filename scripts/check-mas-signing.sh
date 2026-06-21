@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:---dist}"
-APP_STORE_PROFILE="${PAGEPAIR_MAS_PROFILE:-$ROOT_DIR/apps/desktop/profiles/PagePair_AppStore.provisionprofile}"
-DEV_PROFILE="${PAGEPAIR_MAS_DEV_PROFILE:-$ROOT_DIR/apps/desktop/profiles/PagePair_Development.provisionprofile}"
+APP_STORE_PROFILE="${PAGEPAIR_MAS_PROFILE:-$ROOT_DIR/apps/desktop/profiles/SynchroPage_AppStore.provisionprofile}"
+DEV_PROFILE="${PAGEPAIR_MAS_DEV_PROFILE:-$ROOT_DIR/apps/desktop/profiles/SynchroPage_Development.provisionprofile}"
 
 if [[ "$MODE" != "--dist" && "$MODE" != "--dev" ]]; then
   echo "Usage: $0 [--dist|--dev]" >&2
@@ -57,7 +57,7 @@ if [[ "$failures" -gt 0 ]]; then
   cat >&2 <<'EOF'
 
 Prepare signing assets:
-  1. Register explicit App ID / bundle ID: com.pagepair.reader
+  1. Register explicit App ID / bundle ID: com.synchropage.reader
   2. Install the required Apple Developer certificates in Keychain.
   3. Download the matching provisioning profile into apps/desktop/profiles/.
   4. Re-run the MAS command.

@@ -1,9 +1,9 @@
 {
-  "name": "pagepair-desktop",
-  "version": "0.1.0",
+  "name": "synchropage-desktop",
+  "version": "0.1.1",
   "private": true,
-  "description": "macOS desktop shell for PagePair Reader.",
-  "author": "PagePair",
+  "description": "macOS desktop shell for SynchroPage.",
+  "author": "SynchroPage",
   "main": "main.cjs",
   "scripts": {
     "build:web": "npm --prefix ../web run build",
@@ -18,8 +18,8 @@
     "mas:dist": "npm run mas:check -- --dist && npm run build:web && npm run build:backend && electron-builder --mac mas"
   },
   "build": {
-    "appId": "com.pagepair.reader",
-    "productName": "PagePair Reader",
+    "appId": "com.synchropage.reader",
+    "productName": "SynchroPage",
     "directories": {
       "output": "release"
     },
@@ -40,7 +40,7 @@
         "from": "bin",
         "to": "backend",
         "filter": [
-          "pagepair-backend*"
+          "synchropage-backend*"
         ]
       }
     ],
@@ -51,10 +51,10 @@
         "zip"
       ],
       "extendInfo": {
-        "NSCameraUsageDescription": "PagePair can attach user-selected images. Camera access is only used if a future capture workflow explicitly requests it.",
-        "NSMicrophoneUsageDescription": "PagePair can support voice input in the agent composer when enabled by the user.",
-        "NSDocumentsFolderUsageDescription": "PagePair reads and writes only documents selected by the user.",
-        "NSDownloadsFolderUsageDescription": "PagePair may export workspace backups to a location selected by the user."
+        "NSCameraUsageDescription": "SynchroPage can attach user-selected images. Camera access is only used if a future capture workflow explicitly requests it.",
+        "NSMicrophoneUsageDescription": "SynchroPage can support voice input in the agent composer when enabled by the user.",
+        "NSDocumentsFolderUsageDescription": "SynchroPage reads and writes only documents selected by the user.",
+        "NSDownloadsFolderUsageDescription": "SynchroPage may export workspace backups to a location selected by the user."
       }
     },
     "mas": {
@@ -62,9 +62,9 @@
       "hardenedRuntime": false,
       "entitlements": "entitlements/entitlements.mas.plist",
       "entitlementsInherit": "entitlements/entitlements.mas.inherit.plist",
-      "provisioningProfile": "profiles/PagePair_AppStore.provisionprofile",
+      "provisioningProfile": "profiles/SynchroPage_AppStore.provisionprofile",
       "binaries": [
-        "Contents/Resources/backend/pagepair-backend"
+        "Contents/Resources/backend/synchropage-backend"
       ],
       "artifactName": "${productName}-${version}-mas.${ext}"
     },
@@ -74,9 +74,9 @@
       "hardenedRuntime": false,
       "entitlements": "entitlements/entitlements.mas.plist",
       "entitlementsInherit": "entitlements/entitlements.mas.inherit.plist",
-      "provisioningProfile": "profiles/PagePair_Development.provisionprofile",
+      "provisioningProfile": "profiles/SynchroPage_Development.provisionprofile",
       "binaries": [
-        "Contents/Resources/backend/pagepair-backend"
+        "Contents/Resources/backend/synchropage-backend"
       ],
       "artifactName": "${productName}-${version}-mas-dev.${ext}"
     }

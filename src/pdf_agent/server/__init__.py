@@ -1,1 +1,1 @@
-"""HTTP server package for the PagePair web app."""
+"""HTTP server package for the SynchroPage web app."""

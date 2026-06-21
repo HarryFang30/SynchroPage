@@ -103,7 +103,7 @@
   --shadow-pop: var(--pp-shadow-popover);
 }
 
-:root[data-pagepair-resolved-theme="dark"] {
+:root[data-synchropage-resolved-theme="dark"] {
   color-scheme: dark;
   --background: oklch(0.18 0.006 86);
   --foreground: oklch(0.82 0.012 86);
@@ -223,7 +223,7 @@ body {
   text-rendering: geometricPrecision;
 }
 
-:root[data-pagepair-resolved-theme="dark"] body {
+:root[data-synchropage-resolved-theme="dark"] body {
   background:
     radial-gradient(circle at 16% 0%, oklch(0.30 0.044 44 / 0.14), transparent 28%),
     linear-gradient(180deg, oklch(0.205 0.007 86), var(--bg) 220px, oklch(0.180 0.006 86) 100%);

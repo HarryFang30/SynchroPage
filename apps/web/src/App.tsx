@@ -214,8 +214,8 @@ const samplePack: PagePack = {
         output_language: "zh-CN",
         slide_title: "从讲解 PDF 改为双栏工作台",
         speaker_notes_md:
-          "## 从讲解 PDF 改为双栏工作台\n\n这一页建立产品方向：系统不再把讲解重新排成 PDF，而是保留原始 PDF 页面作为左侧参照，在右侧生成可编辑的讲解内容。\n\n### 讲课口径\n\n- 先强调原 PDF 是事实来源，讲解只是对当前页的教学化展开。\n- 再说明 PagePair JSON 会把页号、解析文本、讲解稿和置信度绑定在一起。\n- 最后指出这种格式更适合校对、重跑和版本管理。",
-        concepts: ["PagePair JSON", "左右对照", "页级对齐"],
+          "## 从讲解 PDF 改为双栏工作台\n\n这一页建立产品方向：系统不再把讲解重新排成 PDF，而是保留原始 PDF 页面作为左侧参照，在右侧生成可编辑的讲解内容。\n\n### 讲课口径\n\n- 先强调原 PDF 是事实来源，讲解只是对当前页的教学化展开。\n- 再说明 SynchroPage JSON 会把页号、解析文本、讲解稿和置信度绑定在一起。\n- 最后指出这种格式更适合校对、重跑和版本管理。",
+        concepts: ["SynchroPage JSON", "左右对照", "页级对齐"],
         visual_explanations: ["左侧保留原页面语境，右侧只承载可编辑讲解。"],
         prerequisites: ["课程 PDF 已完成页级解析"],
         confidence: 0.94,
@@ -286,8 +286,8 @@ const englishSamplePack: PagePack = {
         output_language: "en-US",
         slide_title: "From Notes PDF to Split Workspace",
         speaker_notes_md:
-          "## From Notes PDF to Split Workspace\n\nThis page sets the product direction: instead of regenerating an explanation PDF, the app keeps the original PDF page as the reference and places editable teaching notes beside it.\n\n### Teaching Line\n\n- Emphasize that the original PDF remains the source of truth, while notes are a teaching-oriented expansion of the current page.\n- Explain that PagePair JSON binds page number, parsed text, notes, and confidence together.\n- Close by pointing out why this format is easier to review, rerun, and version.",
-        concepts: ["PagePair JSON", "Side-by-side review", "Page alignment"],
+          "## From Notes PDF to Split Workspace\n\nThis page sets the product direction: instead of regenerating an explanation PDF, the app keeps the original PDF page as the reference and places editable teaching notes beside it.\n\n### Teaching Line\n\n- Emphasize that the original PDF remains the source of truth, while notes are a teaching-oriented expansion of the current page.\n- Explain that SynchroPage JSON binds page number, parsed text, notes, and confidence together.\n- Close by pointing out why this format is easier to review, rerun, and version.",
+        concepts: ["SynchroPage JSON", "Side-by-side review", "Page alignment"],
         visual_explanations: ["The left side preserves page context; the right side carries editable notes only."],
         prerequisites: ["The course PDF has been parsed at page level"],
         confidence: 0.94,
@@ -1157,8 +1157,8 @@ export default function App() {
     const root = document.documentElement;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const applyTheme = () => {
-      root.dataset.pagepairTheme = uiPreferences.theme;
-      root.dataset.pagepairResolvedTheme =
+      root.dataset.synchropageTheme = uiPreferences.theme;
+      root.dataset.synchropageResolvedTheme =
         uiPreferences.theme === "system" ? (media.matches ? "dark" : "light") : uiPreferences.theme;
     };
 
@@ -1169,7 +1169,7 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.lang = uiPreferences.language === "en-US" ? "en" : "zh-CN";
-    document.documentElement.dataset.pagepairLanguage = uiPreferences.language;
+    document.documentElement.dataset.synchropageLanguage = uiPreferences.language;
   }, [uiPreferences.language]);
 
   useEffect(() => {
@@ -1348,7 +1348,7 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${payload.workspace.title || "pagepair-workspace"}-workspace.json`;
+      link.download = `${payload.workspace.title || "synchropage-workspace"}-workspace.json`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -1691,9 +1691,9 @@ export default function App() {
       >
       <header className="topbar">
         <div className="brand">
-          <div className="brand-mark">PP</div>
+          <div className="brand-mark">SP</div>
           <div>
-            <h1>PagePair Reader</h1>
+            <h1>SynchroPage</h1>
             <p>{pack.document.title}</p>
           </div>
         </div>
@@ -2017,7 +2017,7 @@ export default function App() {
               <div className="rail-top">
                 <div className="rail-header">
                   <div>
-                    <strong>PagePair</strong>
+                    <strong>SynchroPage</strong>
                     <span>{activeProject?.name || copy.rail.defaultCourse}</span>
                   </div>
                   <div className="rail-header-actions" ref={railActionMenuRef}>

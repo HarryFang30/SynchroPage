@@ -1,12 +1,12 @@
-/* PagePair warm workspace refinements */
+/* SynchroPage warm workspace refinements */
 
-/* PagePair warm workspace refinements: token-driven surface, pane, and control hierarchy. */
+/* SynchroPage warm workspace refinements: token-driven surface, pane, and control hierarchy. */
 body {
   background: linear-gradient(180deg, var(--pp-bg-app), var(--pp-bg-main));
   color: var(--pp-text-secondary);
 }
 
-:root[data-pagepair-resolved-theme="dark"] body {
+:root[data-synchropage-resolved-theme="dark"] body {
   background: linear-gradient(180deg, var(--pp-bg-app), var(--pp-bg-main));
 }
 
@@ -51,7 +51,7 @@ body {
   box-shadow: inset 0 0 0 1px color-mix(in oklch, white 28%, transparent);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .brand-mark {
+:root[data-synchropage-resolved-theme="dark"] .brand-mark {
   box-shadow: inset 0 0 0 1px color-mix(in oklch, white 7%, transparent);
 }
 
@@ -210,7 +210,7 @@ body {
   box-shadow: 0 8px 24px color-mix(in oklch, var(--brand) 16%, transparent);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .primary-button {
+:root[data-synchropage-resolved-theme="dark"] .primary-button {
   background: linear-gradient(180deg, color-mix(in oklch, var(--brand) 88%, var(--pp-bg-elevated)), color-mix(in oklch, var(--brand-deep) 86%, var(--pp-bg-app)));
   box-shadow: 0 10px 30px color-mix(in oklch, var(--brand) 14%, transparent);
 }
@@ -335,7 +335,7 @@ body {
   box-shadow: inset 0 0 0 1px color-mix(in oklch, white 34%, transparent);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .search-box input {
+:root[data-synchropage-resolved-theme="dark"] .search-box input {
   box-shadow: inset 0 0 0 1px color-mix(in oklch, white 4%, transparent);
 }
 
@@ -801,7 +801,7 @@ body {
   box-shadow: inset 0 0 0 1px color-mix(in oklch, white 24%, transparent);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .aui-composer-root {
+:root[data-synchropage-resolved-theme="dark"] .aui-composer-root {
   background: var(--pp-bg-input);
   box-shadow: inset 0 0 0 1px color-mix(in oklch, white 4%, transparent);
 }
@@ -811,7 +811,7 @@ body {
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand) 9%, transparent), inset 0 0 0 1px color-mix(in oklch, white 22%, transparent);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .aui-composer-root:focus-within {
+:root[data-synchropage-resolved-theme="dark"] .aui-composer-root:focus-within {
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand) 12%, transparent), inset 0 0 0 1px color-mix(in oklch, white 5%, transparent);
 }
 
@@ -864,12 +864,12 @@ body {
   color: var(--pp-text-primary);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .markdown-body code {
+:root[data-synchropage-resolved-theme="dark"] .markdown-body code {
   background: color-mix(in oklch, var(--pp-bg-panel-2) 76%, var(--pp-bg-app));
   color: oklch(0.86 0.010 86);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .markdown-body pre {
+:root[data-synchropage-resolved-theme="dark"] .markdown-body pre {
   background: oklch(0.105 0.005 86);
   color: oklch(0.88 0.010 86);
 }
@@ -879,7 +879,7 @@ body {
   backdrop-filter: blur(2px);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .settings-overlay {
+:root[data-synchropage-resolved-theme="dark"] .settings-overlay {
   background: oklch(0.055 0.005 86 / 0.66);
   backdrop-filter: blur(2px);
 }
@@ -945,7 +945,7 @@ body {
   backdrop-filter: blur(2px);
 }
 
-:root[data-pagepair-resolved-theme="dark"] .course-dialog-overlay {
+:root[data-synchropage-resolved-theme="dark"] .course-dialog-overlay {
   background: oklch(0.055 0.005 86 / 0.62);
 }
 

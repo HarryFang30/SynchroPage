@@ -88,12 +88,12 @@ const config: Config = {
       themes: [
         {
           name: "theme-light",
-          selectors: [':root[data-pagepair-resolved-theme="light"]'],
+          selectors: [':root[data-synchropage-resolved-theme="light"]'],
           extend: {},
         },
         {
           name: "theme-dark",
-          selectors: [':root[data-pagepair-resolved-theme="dark"]'],
+          selectors: [':root[data-synchropage-resolved-theme="dark"]'],
           extend: {},
         },
       ],
