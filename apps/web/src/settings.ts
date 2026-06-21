@@ -37,7 +37,7 @@ export const defaultUiPreferences: UiPreferences = {
   modelReasoningEffort: "medium",
   agentAnswerMode: "concise",
   autoSaveSession: true,
-  theme: "system",
+  theme: "dark",
   accentColor: "clay",
   pdfBackground: "paper",
   pdfViewMode: "continuous",

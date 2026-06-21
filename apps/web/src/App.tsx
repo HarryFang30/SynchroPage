@@ -5208,7 +5208,7 @@ export default function App() {
 
       <main className="workspace" data-pane-count={visiblePaneCount}>
         <PanelGroup orientation="horizontal" className="workspace-panels">
-          <Panel className="workspace-panel" hidden={!panels.rail} defaultSize={16} minSize={11}>
+          <Panel className="workspace-panel" hidden={!panels.rail} defaultSize={22} minSize={18}>
             <aside className="page-rail document-rail">
               <div className="rail-top">
                 <div className="rail-header">
@@ -5424,7 +5424,7 @@ export default function App() {
 
           {panels.rail && <WorkspaceResizeHandle />}
 
-          <Panel className="workspace-panel" defaultSize={pdfOnly ? 100 : 34} minSize={26}>
+          <Panel className="workspace-panel" defaultSize={pdfOnly ? 100 : panels.notes && panels.agent ? 36 : 52} minSize={30}>
             <section className="pdf-pane">
               <PaneToolbar
                 title={pdfUrl ? copy.common.sourcePdfPage(currentPdfPageNo) : copy.pdf.samplePdfPage}
@@ -5472,7 +5472,7 @@ export default function App() {
 
           {(panels.notes || panels.agent) && <WorkspaceResizeHandle />}
 
-          <Panel className="workspace-panel" hidden={!panels.notes} defaultSize={30} minSize={24}>
+          <Panel className="workspace-panel" hidden={!panels.notes} defaultSize={panels.agent ? 26 : 42} minSize={22}>
             <section className="notes-pane">
               <PaneToolbar
                 title={copy.notes.title}
@@ -5531,7 +5531,7 @@ export default function App() {
 
           {panels.notes && panels.agent && <WorkspaceResizeHandle />}
 
-          <Panel className="workspace-panel" hidden={!panels.agent} defaultSize={20} minSize={18}>
+          <Panel className="workspace-panel" hidden={!panels.agent} defaultSize={panels.notes ? 22 : 32} minSize={20}>
             {panels.agent && (
               <AgentPanel
                 key={agentRuntimeKey}
@@ -6706,12 +6706,10 @@ function AssistantThinkingIndicator() {
   const copy = useAppCopy();
   return (
     <div className="assistant-thinking" aria-label="Assistant is thinking">
-      <span className="thinking-wave" aria-hidden="true">
-        <span />
-        <span />
-        <span />
-        <span />
-        <span />
+      <span className="thinking-skeleton-stack" aria-hidden="true">
+        <span className="thinking-skeleton-line long" />
+        <span className="thinking-skeleton-line medium" />
+        <span className="thinking-skeleton-line short" />
       </span>
       <span>{copy.agent.thinking}</span>
     </div>
