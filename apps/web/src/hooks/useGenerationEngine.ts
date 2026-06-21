@@ -74,6 +74,9 @@ import {
   createDocumentFileLoaderFromBlob,
 } from "./generationPersistence";
 
+const TEACHING_PAGE_REQUEST_TIMEOUT_MS = 120_000;
+const TEACHING_BATCH_REQUEST_TIMEOUT_MS = 150_000;
+
 export interface GenerationEngineParams {
   isGeneratingNotes: boolean;
   setIsGeneratingNotes: (v: boolean) => void;
@@ -242,33 +245,35 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             const documentFile = await getDocumentFileForPlan(plan);
             const priority = teachingModelRequestPriority([runningPage], p.currentPdfPageNo, "now", "next");
             const response = await runTeachingModelRequest(() =>
-              requestJson<GeneratedTeachingPageResponse>(
-                "/api/generate/page",
-                {
-                  method: "POST",
-                  signal: generationSignal,
-                  body: JSON.stringify({
-                    model: plan.model,
-                    fallbackModel: plan.fallbackModel,
-                    reasoningEffort: plan.reasoningEffort,
-                    qualityPlan: teachingQualityPlanPayload(plan),
-                    document: workingPack.document,
-                    documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
-                    documentFile,
-                    outputLanguage: pageOutputLanguage,
-                    outputLanguageLabel: pageOutputLanguageLabel,
-                    uiLanguage: p.uiPreferences.language,
-                    page: teachingRequestPage(runningPage, plan),
-                    pageCount: totalPages,
-                    previousPage: previousPage
-                      ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
-                      : null,
-                    nextPage: nextPage
-                      ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
-                      : null,
-                  }),
-                },
-                p.copy.errors.accountNotFound,
+              runGenerationRequestWithTimeout(generationSignal, TEACHING_PAGE_REQUEST_TIMEOUT_MS, (requestSignal) =>
+                requestJson<GeneratedTeachingPageResponse>(
+                  "/api/generate/page",
+                  {
+                    method: "POST",
+                    signal: requestSignal,
+                    body: JSON.stringify({
+                      model: plan.model,
+                      fallbackModel: plan.fallbackModel,
+                      reasoningEffort: plan.reasoningEffort,
+                      qualityPlan: teachingQualityPlanPayload(plan),
+                      document: workingPack.document,
+                      documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
+                      documentFile,
+                      outputLanguage: pageOutputLanguage,
+                      outputLanguageLabel: pageOutputLanguageLabel,
+                      uiLanguage: p.uiPreferences.language,
+                      page: teachingRequestPage(runningPage, plan),
+                      pageCount: totalPages,
+                      previousPage: previousPage
+                        ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
+                        : null,
+                      nextPage: nextPage
+                        ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
+                        : null,
+                    }),
+                  },
+                  p.copy.errors.accountNotFound,
+                ),
               ),
               { priority, signal: generationSignal },
             );
@@ -320,27 +325,29 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               const documentFile = await getDocumentFileForPlan(pageBatch.plan);
               const priority = teachingModelRequestPriority(runningPages, p.currentPdfPageNo, "now", "next");
               const response = await runTeachingModelRequest(() =>
-                requestJson<GeneratedTeachingPagesResponse>(
-                  "/api/generate/pages",
-                  {
-                    method: "POST",
-                    signal: generationSignal,
-                    body: JSON.stringify({
-                      model: pageBatch.plan.model,
-                      fallbackModel: pageBatch.plan.fallbackModel,
-                      reasoningEffort: pageBatch.plan.reasoningEffort,
-                      qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
-                      document: workingPack.document,
-                      documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
-                      documentFile,
-                      outputLanguage: pageOutputLanguage,
-                      outputLanguageLabel: pageOutputLanguageLabel,
-                      uiLanguage: p.uiPreferences.language,
-                      pages: runningPages.map((page) => teachingRequestPage(page, pageBatch.plan)),
-                      pageCount: totalPages,
-                    }),
-                  },
-                  p.copy.errors.accountNotFound,
+                runGenerationRequestWithTimeout(generationSignal, TEACHING_BATCH_REQUEST_TIMEOUT_MS, (requestSignal) =>
+                  requestJson<GeneratedTeachingPagesResponse>(
+                    "/api/generate/pages",
+                    {
+                      method: "POST",
+                      signal: requestSignal,
+                      body: JSON.stringify({
+                        model: pageBatch.plan.model,
+                        fallbackModel: pageBatch.plan.fallbackModel,
+                        reasoningEffort: pageBatch.plan.reasoningEffort,
+                        qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
+                        document: workingPack.document,
+                        documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
+                        documentFile,
+                        outputLanguage: pageOutputLanguage,
+                        outputLanguageLabel: pageOutputLanguageLabel,
+                        uiLanguage: p.uiPreferences.language,
+                        pages: runningPages.map((page) => teachingRequestPage(page, pageBatch.plan)),
+                        pageCount: totalPages,
+                      }),
+                    },
+                    p.copy.errors.accountNotFound,
+                  ),
                 ),
                 { priority, signal: generationSignal },
               );
@@ -692,33 +699,35 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 ? teachingModelRequestPriority([runningPage], p.currentPdfPageNo, "next", "later")
                 : "later";
               const response = await runTeachingModelRequest(() =>
-                requestJson<GeneratedTeachingPageResponse>(
-                  "/api/generate/page",
-                  {
-                    method: "POST",
-                    signal: generationSignal,
-                    body: JSON.stringify({
-                      model: plan.model,
-                      fallbackModel: plan.fallbackModel,
-                      reasoningEffort: plan.reasoningEffort,
-                      qualityPlan: teachingQualityPlanPayload(plan),
-                      document: workingPack.document,
-                      documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
-                      documentFile,
-                      outputLanguage: p.teachingOutputLanguage,
-                      outputLanguageLabel: teachingOutputLanguageName(p.teachingOutputLanguage),
-                      uiLanguage: p.uiPreferences.language,
-                      page: teachingRequestPage(runningPage, plan),
-                      pageCount: totalPages,
-                      previousPage: previousPage
-                        ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
-                        : null,
-                      nextPage: nextPage
-                        ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
-                        : null,
-                    }),
-                  },
-                  p.copy.errors.accountNotFound,
+                runGenerationRequestWithTimeout(generationSignal, TEACHING_PAGE_REQUEST_TIMEOUT_MS, (requestSignal) =>
+                  requestJson<GeneratedTeachingPageResponse>(
+                    "/api/generate/page",
+                    {
+                      method: "POST",
+                      signal: requestSignal,
+                      body: JSON.stringify({
+                        model: plan.model,
+                        fallbackModel: plan.fallbackModel,
+                        reasoningEffort: plan.reasoningEffort,
+                        qualityPlan: teachingQualityPlanPayload(plan),
+                        document: workingPack.document,
+                        documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
+                        documentFile,
+                        outputLanguage: p.teachingOutputLanguage,
+                        outputLanguageLabel: teachingOutputLanguageName(p.teachingOutputLanguage),
+                        uiLanguage: p.uiPreferences.language,
+                        page: teachingRequestPage(runningPage, plan),
+                        pageCount: totalPages,
+                        previousPage: previousPage
+                          ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
+                          : null,
+                        nextPage: nextPage
+                          ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
+                          : null,
+                      }),
+                    },
+                    p.copy.errors.accountNotFound,
+                  ),
                 ),
                 { priority, signal: generationSignal },
               );
@@ -790,27 +799,29 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                   ? teachingModelRequestPriority(runningPages, p.currentPdfPageNo, "next", "later")
                   : "later";
                 const response = await runTeachingModelRequest(() =>
-                  requestJson<GeneratedTeachingPagesResponse>(
-                    "/api/generate/pages",
-                    {
-                      method: "POST",
-                      signal: generationSignal,
-                      body: JSON.stringify({
-                        model: pageBatch.plan.model,
-                        fallbackModel: pageBatch.plan.fallbackModel,
-                        reasoningEffort: pageBatch.plan.reasoningEffort,
-                        qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
-                        document: workingPack.document,
-                        documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
-                        documentFile,
-                        outputLanguage: p.teachingOutputLanguage,
-                        outputLanguageLabel: teachingOutputLanguageName(p.teachingOutputLanguage),
-                        uiLanguage: p.uiPreferences.language,
-                        pages: runningPages.map((page) => teachingRequestPage(page, pageBatch.plan)),
-                        pageCount: totalPages,
-                      }),
-                    },
-                    p.copy.errors.accountNotFound,
+                  runGenerationRequestWithTimeout(generationSignal, TEACHING_BATCH_REQUEST_TIMEOUT_MS, (requestSignal) =>
+                    requestJson<GeneratedTeachingPagesResponse>(
+                      "/api/generate/pages",
+                      {
+                        method: "POST",
+                        signal: requestSignal,
+                        body: JSON.stringify({
+                          model: pageBatch.plan.model,
+                          fallbackModel: pageBatch.plan.fallbackModel,
+                          reasoningEffort: pageBatch.plan.reasoningEffort,
+                          qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
+                          document: workingPack.document,
+                          documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
+                          documentFile,
+                          outputLanguage: p.teachingOutputLanguage,
+                          outputLanguageLabel: teachingOutputLanguageName(p.teachingOutputLanguage),
+                          uiLanguage: p.uiPreferences.language,
+                          pages: runningPages.map((page) => teachingRequestPage(page, pageBatch.plan)),
+                          pageCount: totalPages,
+                        }),
+                      },
+                      p.copy.errors.accountNotFound,
+                    ),
                   ),
                   { priority, signal: generationSignal },
                 );
@@ -929,4 +940,48 @@ export function useGenerationEngine(p: GenerationEngineParams) {
   ]);
 
   return { handleGenerateNotes, handleGenerateProjectMissingNotes };
+}
+
+async function runGenerationRequestWithTimeout<T>(
+  parentSignal: AbortSignal,
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+) {
+  if (parentSignal.aborted) throw createAbortError();
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const abortFromParent = () => controller.abort(parentSignal.reason);
+  parentSignal.addEventListener("abort", abortFromParent, { once: true });
+
+  try {
+    return await run(controller.signal);
+  } catch (error) {
+    if (timedOut) throw createGenerationTimeoutError(timeoutMs);
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+    parentSignal.removeEventListener("abort", abortFromParent);
+  }
+}
+
+function createGenerationTimeoutError(timeoutMs: number) {
+  const seconds = Math.round(timeoutMs / 1000);
+  const error = new Error(`讲解生成超时（${seconds} 秒）。这一页可能是图表密集页或上游模型处理过慢，请稍后重试。`);
+  error.name = "TimeoutError";
+  return error;
+}
+
+function createAbortError() {
+  try {
+    return new DOMException("Generation aborted", "AbortError");
+  } catch {
+    const error = new Error("Generation aborted");
+    error.name = "AbortError";
+    return error;
+  }
 }

@@ -73,7 +73,7 @@ function preprocessMarkdownTextSegment(text: string) {
     .map((segment) => {
       if (segment.startsWith("`") && segment.endsWith("`")) return repairInlineCodeMath(segment);
       const normalized = normalizeDisplayMathBlocks(repairDisplayMathDelimiterSpillover(
-        repairBinaryTransitionMathSpillover(normalizeMathDelimiters(escapeCurrencyDollarsPreservingMath(repairMalformedInlineMath(normalizeEscapedMarkdownNewlines(segment))))),
+        repairBinaryTransitionMathSpillover(normalizeMathDelimiters(escapeCurrencyDollarsPreservingMath(repairMalformedInlineMath(repairMalformedProseMath(normalizeEscapedMarkdownNewlines(segment)))))),
       ));
       return normalized
         .split(markdownMathSpan)
@@ -87,7 +87,7 @@ function preprocessMarkdownTextSegment(text: string) {
 }
 
 function normalizeEscapedMarkdownNewlines(text: string) {
-  return text.replace(/\\n(?=(?:[ \t]*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s)|\s*$))/g, "\n");
+  return text.replace(/\\n(?=(?:[ \t]*(?:\$?\s*[-*+]\s|\d+[.)]\s|#{1,6}\s)|\s*$))/g, "\n");
 }
 
 function normalizeMathDelimiters(text: string) {
@@ -139,6 +139,33 @@ function isLikelyMathInlineCode(value: string) {
   if (/\d+\s*\^\s*\d+/.test(trimmed)) return true;
   if (/\b[A-Za-z]\s*(?:\\times|\*)\s*\d/.test(trimmed)) return true;
   return false;
+}
+
+function repairMalformedProseMath(text: string) {
+  return text
+    .split("\n")
+    .map((line) => isMalformedProseMathLine(line) ? repairMalformedProseMathLine(line) : line)
+    .join("\n");
+}
+
+function isMalformedProseMathLine(line: string) {
+  return (
+    /^\s*\$\s*[-*+]\s+/.test(line) ||
+    (/\\text\{[^{}]*[\u3400-\u9fff][^{}]*\}/.test(line) && /\${2,}\s*(?:\\to|\\rightarrow|→)\s*\${2,}\$?/.test(line))
+  );
+}
+
+function repairMalformedProseMathLine(line: string) {
+  return line
+    .replace(/^(\s*)\$\s*([-*+]\s+)/, "$1$2")
+    .replace(/\\text\{([^{}]*)\}/g, "$1")
+    .replace(/\${2,}\s*(\\to|\\rightarrow|→)\s*\${2,}\$?/g, (_match, arrow: string) => {
+      const normalizedArrow = arrow === "→" ? "\\to" : arrow;
+      return ` $${normalizedArrow}$ `;
+    })
+    .replace(/\s+([，。；：！？、])/g, "$1")
+    .replace(/([“（])\s+/g, "$1")
+    .replace(/\s+([”）])/g, "$1");
 }
 
 function repairMalformedInlineMath(text: string) {

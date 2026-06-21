@@ -37,6 +37,17 @@ def _decode_pdf_file_data(value: str) -> bytes:
     return base64.b64decode(value)
 
 
+def _blank_pdf_file_data(page_count: int = 2) -> str:
+    from PyPDF2 import PdfWriter
+
+    writer = PdfWriter()
+    for _ in range(page_count):
+        writer.add_blank_page(width=72, height=72)
+    pdf_buffer = io.BytesIO()
+    writer.write(pdf_buffer)
+    return base64.b64encode(pdf_buffer.getvalue()).decode("ascii")
+
+
 class WebAppTest(unittest.TestCase):
     def test_read_json_rejects_oversized_content_length_before_reading(self) -> None:
         handler = PdfAgentRequestHandler.__new__(PdfAgentRequestHandler)
@@ -211,14 +222,9 @@ class WebAppTest(unittest.TestCase):
         self.assertNotIn("[p.30] Page 30", cache_prefix)
 
     def test_agent_payload_subsets_pdf_file_for_long_documents(self) -> None:
-        from PyPDF2 import PdfReader, PdfWriter
+        from PyPDF2 import PdfReader
 
-        writer = PdfWriter()
-        for _ in range(12):
-            writer.add_blank_page(width=72, height=72)
-        pdf_buffer = io.BytesIO()
-        writer.write(pdf_buffer)
-        file_data = base64.b64encode(pdf_buffer.getvalue()).decode("ascii")
+        file_data = _blank_pdf_file_data(12)
 
         payload = _build_responses_payload(
             {
@@ -263,7 +269,7 @@ class WebAppTest(unittest.TestCase):
                 "document": {"id": "doc_1", "title": "T7 Verilog HDL", "page_count": 2},
                 "documentFile": {
                     "filename": "t7.pdf",
-                    "fileData": "JVBERi0x",
+                    "fileData": _blank_pdf_file_data(2),
                     "sha256": "a" * 64,
                 },
                 "documentContext": {
@@ -339,7 +345,7 @@ class WebAppTest(unittest.TestCase):
             {
                 "model": "gpt-5.4-mini",
                 "fallbackModel": "gpt-5.5",
-                "documentFile": {"filename": "lecture.pdf", "fileData": "JVBERi0x"},
+                "documentFile": {"filename": "lecture.pdf", "fileData": _blank_pdf_file_data(2)},
                 "page": {"page_no": 1},
             }
         )
@@ -353,14 +359,9 @@ class WebAppTest(unittest.TestCase):
         self.assertNotIn("documentFile", candidates[2][0])
 
     def test_pdf_file_input_can_subset_to_target_pages(self) -> None:
-        from PyPDF2 import PdfReader, PdfWriter
+        from PyPDF2 import PdfReader
 
-        writer = PdfWriter()
-        for _ in range(3):
-            writer.add_blank_page(width=72, height=72)
-        pdf_buffer = io.BytesIO()
-        writer.write(pdf_buffer)
-        file_data = base64.b64encode(pdf_buffer.getvalue()).decode("ascii")
+        file_data = _blank_pdf_file_data(3)
 
         file_input = _pdf_file_input({"filename": "three.pdf", "fileData": file_data}, page_numbers=[2])
 

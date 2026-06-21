@@ -60,6 +60,7 @@ test.describe("Agent Panel", () => {
           "结果通常是近似值,例如 ((0.715)10 $\\to (0.10110$......)2,因为小数可能无法有限表示。",
           "每一位的权值是 `16^0, 16^1, 16^2, ...`,和十进制一致。",
           "例子 `E $\\times 16^2 + 3 \\times 16^1 +$ A $\\times 16^0$`。",
+          "$- \\text{组合电路可以看成}“\\text{当前输入} $$\\to$$$ 当前输出”的直接映射。",
         ].join("\\n"),
       },
     });
@@ -70,11 +71,14 @@ test.describe("Agent Panel", () => {
     await page.keyboard.press("Enter");
 
     const assistant = page.locator(".assistant-message").last();
-    await expect(assistant.locator(".katex")).toHaveCount(4, { timeout: 10_000 });
+    await expect(assistant.locator(".katex")).toHaveCount(5, { timeout: 10_000 });
     await expect(assistant.locator(".katex-error")).toHaveCount(0);
     await expect(assistant.locator("code")).toHaveCount(0);
     await expect(assistant).not.toContainText("$0, 1, 2, 3, 4$");
     await expect(assistant).not.toContainText("$\\to");
+    await expect(assistant).not.toContainText("$-");
+    await expect(assistant).not.toContainText("\\text{组合电路");
+    await expect(assistant).not.toContainText("$$\\to$$$");
   });
 
   test("adding an image shows the preview inside the composer", async ({ page }) => {

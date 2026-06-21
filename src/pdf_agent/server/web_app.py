@@ -14,6 +14,7 @@ import os
 import random
 import re
 import shutil
+import socket
 import threading
 import urllib.error
 import urllib.parse
@@ -72,6 +73,7 @@ PDF_FILE_SUBSET_CACHE_MAX_BYTES = 120_000_000
 PROMPT_CACHE_VERSION = "synchropage.prompt-cache.v1"
 DOCUMENT_CACHE_PREFIX_VERSION = "synchropage.document-prefix.v1"
 TEACHING_API_CONCURRENCY = 6
+TEACHING_UPSTREAM_TIMEOUT_SECONDS = _env_positive_int("PDF_AGENT_TEACHING_TIMEOUT_SECONDS", 90)
 AGENT_RETRY_DELAYS_SECONDS = (0.75, 2.0)
 TEACHING_RETRY_DELAYS_SECONDS = (0.5, 1.5, 3.0)
 TEACHING_MAX_RETRY_DELAY_SECONDS = 12.0
@@ -286,7 +288,7 @@ class TeachingGenerationGateway:
         manager: OpenAIOAuthManager,
         *,
         model: str = DEFAULT_AGENT_MODEL,
-        timeout_seconds: float = 180.0,
+        timeout_seconds: float = float(TEACHING_UPSTREAM_TIMEOUT_SECONDS),
         api_concurrency: int = TEACHING_API_CONCURRENCY,
     ) -> None:
         self.manager = manager
@@ -459,6 +461,12 @@ class TeachingGenerationGateway:
                 redacted_gateway_error(detail),
                 code="upstream_error",
                 retry_after_seconds=_retry_after_seconds(exc.headers.get("Retry-After")),
+            ) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise HttpError(
+                504,
+                f"OpenAI teaching generation timed out after {self.timeout_seconds:.0f}s",
+                code="upstream_timeout",
             ) from exc
         except urllib.error.URLError as exc:
             raise HttpError(502, redacted_gateway_error(str(exc)), code="network_error") from exc
@@ -702,7 +710,11 @@ def _build_teaching_generation_payload(body: Mapping[str, Any], *, default_model
     cache_prefix = _build_document_cache_prefix(body)
     if cache_prefix:
         content.append({"type": "input_text", "text": cache_prefix})
-    pdf_file = _pdf_file_input(body.get("documentFile"), page_numbers=_teaching_generation_page_numbers(body))
+    pdf_file = _pdf_file_input(
+        body.get("documentFile"),
+        page_numbers=_teaching_generation_page_numbers(body),
+        fallback_to_original_on_subset_failure=False,
+    )
     if pdf_file:
         content.append(pdf_file)
     content.append({"type": "input_text", "text": _build_teaching_generation_prompt(body)})
@@ -739,7 +751,13 @@ def _teaching_generation_candidate_bodies(body: Mapping[str, Any]) -> list[tuple
         fallback_body.pop("fallbackModel", None)
         model_bodies.append(fallback_body)
 
-    has_pdf_file = bool(_pdf_file_input(body.get("documentFile")))
+    has_pdf_file = bool(
+        _pdf_file_input(
+            body.get("documentFile"),
+            page_numbers=_teaching_generation_page_numbers(body),
+            fallback_to_original_on_subset_failure=False,
+        )
+    )
     candidates: list[tuple[Mapping[str, Any], bool]] = []
     if has_pdf_file:
         candidates.extend((candidate, True) for candidate in model_bodies)
@@ -1419,6 +1437,8 @@ def _should_retry_without_file_input(exc: HttpError, payload: Mapping[str, Any])
 
 def _should_retry_transient_upstream_error(exc: HttpError) -> bool:
     if exc.status == 429 and "usage limit" in str(exc).lower():
+        return False
+    if exc.code == "upstream_timeout":
         return False
     return exc.code == "network_error" or exc.status in {429, 500, 502, 503, 504}
 
