@@ -7,7 +7,7 @@ provider:
   default_model: "gpt-5.5"
 
 device_flow:
-  client_id: "app_EMoamEEZ73f0CkXaXp7hrann"
+  client_id: "${PDF_AGENT_OPENAI_OAUTH_CLIENT_ID}"
   start_url: "https://auth.openai.com/api/accounts/deviceauth/usercode"
   poll_url: "https://auth.openai.com/api/accounts/deviceauth/token"
   token_url: "https://auth.openai.com/oauth/token"

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from pdf_agent.server.web_app import (
     HttpError,
+    PdfAgentRequestHandler,
     _build_responses_payload,
     _build_teaching_generation_prompt,
     _build_teaching_generation_payload,
@@ -30,6 +31,35 @@ from pdf_agent.gateway.openai_gateway import redacted_gateway_error
 
 
 class WebAppTest(unittest.TestCase):
+    def test_read_json_rejects_oversized_content_length_before_reading(self) -> None:
+        handler = PdfAgentRequestHandler.__new__(PdfAgentRequestHandler)
+        handler.headers = {"Content-Length": "100000001"}  # type: ignore[assignment]
+        handler.rfile = io.BytesIO(b"{}")  # type: ignore[assignment]
+
+        with self.assertRaises(HttpError) as raised:
+            handler._read_json()
+
+        self.assertEqual(raised.exception.status, 413)
+        self.assertEqual(raised.exception.code, "json_body_too_large")
+
+    def test_static_path_rejects_symlinked_index_outside_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "web"
+            outside = Path(tmp) / "outside"
+            nested = root / "nested"
+            root.mkdir()
+            outside.mkdir()
+            nested.mkdir()
+            secret = outside / "index.html"
+            secret.write_text("secret", encoding="utf-8")
+            (nested / "index.html").symlink_to(secret)
+
+            with self.assertRaises(HttpError) as raised:
+                _resolve_static_path(root, "/nested/")
+
+            self.assertEqual(raised.exception.status, 403)
+            self.assertEqual(raised.exception.code, "forbidden")
+
     def test_retry_after_seconds_accepts_delta_seconds(self) -> None:
         self.assertEqual(_retry_after_seconds("2.5"), 2.5)
         self.assertIsNone(_retry_after_seconds("-1"))

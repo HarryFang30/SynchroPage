@@ -3,6 +3,16 @@ name = "pdf-agent"
 version = "0.1.0"
 description = "Industrial harness for stable course PDF agent workflows."
 requires-python = ">=3.11"
+dependencies = [
+  "jsonschema>=4.0.0",
+  "PyPDF2>=3.0.0",
+  "PyYAML>=6.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.6.0",
+]
 
 [build-system]
 requires = ["setuptools>=69", "wheel"]

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 DEFAULT_PROVIDER_ID = "codex_oauth"
-CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+OAUTH_CLIENT_ID_ENV_VARS = ("PDF_AGENT_OPENAI_OAUTH_CLIENT_ID", "OPENAI_OAUTH_CLIENT_ID")
 DEVICE_AUTH_USERCODE_URL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
 DEVICE_AUTH_TOKEN_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
 OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
@@ -40,6 +40,7 @@ _SENSITIVE_FIELD_PATTERN = "|".join(re.escape(field) for field in SENSITIVE_OAUT
 _JSON_SECRET_RE = re.compile(rf'("(?:(?:{_SENSITIVE_FIELD_PATTERN}))"\s*:\s*")[^"]+(")', re.IGNORECASE)
 _FORM_SECRET_RE = re.compile(rf"((?:{_SENSITIVE_FIELD_PATTERN})=)[^&\s]+", re.IGNORECASE)
 _BEARER_SECRET_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/-]+", re.IGNORECASE)
+_ENV_VAR_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
 
 
 class OpenAIOAuthError(RuntimeError):
@@ -94,7 +95,7 @@ class UrllibJsonHttpClient:
 @dataclass(frozen=True)
 class OpenAIOAuthConfig:
     provider_id: str = DEFAULT_PROVIDER_ID
-    client_id: str = CODEX_CLIENT_ID
+    client_id: str = field(default_factory=lambda: _default_oauth_client_id())
     device_start_url: str = DEVICE_AUTH_USERCODE_URL
     device_poll_url: str = DEVICE_AUTH_TOKEN_URL
     token_url: str = OAUTH_TOKEN_URL
@@ -112,7 +113,7 @@ class OpenAIOAuthConfig:
         storage = _mapping(value.get("storage"))
         return cls(
             provider_id=_string_value(provider.get("id"), DEFAULT_PROVIDER_ID),
-            client_id=_string_value(flow.get("client_id"), CODEX_CLIENT_ID),
+            client_id=_config_string_value(flow.get("client_id"), _default_oauth_client_id()),
             device_start_url=_string_value(flow.get("start_url"), DEVICE_AUTH_USERCODE_URL),
             device_poll_url=_string_value(flow.get("poll_url"), DEVICE_AUTH_TOKEN_URL),
             token_url=_string_value(flow.get("token_url"), OAUTH_TOKEN_URL),
@@ -151,6 +152,16 @@ class OpenAIOAuthConfig:
         if isinstance(value, (str, Path)):
             return cls.from_file(value)
         raise TypeError(f"unsupported OpenAI OAuth config type: {type(value)!r}")
+
+    def require_client_id(self) -> str:
+        client_id = self.client_id.strip()
+        if not client_id or _ENV_VAR_RE.match(client_id):
+            env_names = " or ".join(OAUTH_CLIENT_ID_ENV_VARS)
+            raise OpenAIOAuthError(
+                "oauth_client_id_missing",
+                f"OpenAI OAuth client id is not configured. Set {env_names}.",
+            )
+        return client_id
 
 
 @dataclass(frozen=True)
@@ -316,10 +327,11 @@ class OpenAIOAuthManager:
         self._refresh_locks: dict[str, asyncio.Lock] = {}
 
     async def start_login(self) -> DeviceAuthorization:
+        client_id = self.config.require_client_id()
         response = await asyncio.to_thread(
             self.http_client.post_json,
             self.config.device_start_url,
-            {"client_id": self.config.client_id},
+            {"client_id": client_id},
             self._headers(),
         )
         self._ensure_success(response, "device_code_failed")
@@ -513,6 +525,7 @@ class OpenAIOAuthManager:
             return lock
 
     async def _exchange_code_for_tokens(self, code: str, code_verifier: str) -> dict[str, Any]:
+        client_id = self.config.require_client_id()
         response = await asyncio.to_thread(
             self.http_client.post_form,
             self.config.token_url,
@@ -520,7 +533,7 @@ class OpenAIOAuthManager:
                 "grant_type": "authorization_code",
                 "code": code,
                 "redirect_uri": self.config.redirect_uri,
-                "client_id": self.config.client_id,
+                "client_id": client_id,
                 "code_verifier": code_verifier,
             },
             self._headers(),
@@ -531,13 +544,14 @@ class OpenAIOAuthManager:
         return response.body
 
     async def _refresh_with_token(self, refresh_token: str) -> dict[str, Any]:
+        client_id = self.config.require_client_id()
         response = await asyncio.to_thread(
             self.http_client.post_form,
             self.config.token_url,
             {
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token,
-                "client_id": self.config.client_id,
+                "client_id": client_id,
                 "scope": "openid profile email",
             },
             self._headers(),
@@ -714,6 +728,24 @@ def _string_value(value: Any, default: str) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else default
 
 
+def _config_string_value(value: Any, default: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return default
+    raw = value.strip()
+    env_match = _ENV_VAR_RE.match(raw)
+    if env_match:
+        return os.environ.get(env_match.group(1), default).strip()
+    return os.path.expandvars(raw).strip()
+
+
+def _default_oauth_client_id() -> str:
+    for name in OAUTH_CLIENT_ID_ENV_VARS:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _optional_path(value: Any) -> Path | None:
     return Path(value).expanduser() if isinstance(value, str) and value.strip() else None
 
@@ -752,7 +784,7 @@ def _compute_expires_at_ms(expires_in: Any) -> int:
 
 
 def _now_ms() -> int:
-    return int(time.time() * 1000)
+    return int(time.monotonic() * 1000)
 
 
 def _extract_identity_from_tokens(tokens: dict[str, Any]) -> tuple[str | None, str | None]:

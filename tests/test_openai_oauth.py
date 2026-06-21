@@ -15,6 +15,8 @@ from pdf_agent.gateway import (
     parse_codex_models,
 )
 
+TEST_OAUTH_CONFIG = {"device_flow": {"client_id": "client-test"}}
+
 
 class FakeHttpClient:
     def __init__(self) -> None:
@@ -93,7 +95,11 @@ class OpenAIOAuthManagerTest(unittest.TestCase):
         async def scenario() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 fake = FakeHttpClient()
-                manager = OpenAIOAuthManager(storage_path=Path(tmp) / "openai_oauth.json", http_client=fake)
+                manager = OpenAIOAuthManager(
+                    config=TEST_OAUTH_CONFIG,
+                    storage_path=Path(tmp) / "openai_oauth.json",
+                    http_client=fake,
+                )
 
                 device = await manager.start_login()
                 self.assertEqual(device.device_code, "device-123")
@@ -121,7 +127,11 @@ class OpenAIOAuthManagerTest(unittest.TestCase):
                 self.assertTrue(auth.headers["Authorization"].startswith("Bearer "))
                 self.assertEqual(auth.headers["originator"], "pdf-agent")
 
-                reloaded = OpenAIOAuthManager(storage_path=Path(tmp) / "openai_oauth.json", http_client=fake)
+                reloaded = OpenAIOAuthManager(
+                    config=TEST_OAUTH_CONFIG,
+                    storage_path=Path(tmp) / "openai_oauth.json",
+                    http_client=fake,
+                )
                 refreshed_auth = await build_chatgpt_codex_auth(reloaded)
                 self.assertEqual(refreshed_auth.account_id, "acct_1")
                 self.assertEqual(fake.form_calls[-1]["grant_type"], "refresh_token")
@@ -168,7 +178,11 @@ class OpenAIOAuthManagerTest(unittest.TestCase):
 
     def test_oauth_error_details_are_redacted(self) -> None:
         async def scenario() -> None:
-            manager = OpenAIOAuthManager(storage_path=Path(tempfile.gettempdir()) / "unused-oauth.json", http_client=FailingHttpClient())
+            manager = OpenAIOAuthManager(
+                config=TEST_OAUTH_CONFIG,
+                storage_path=Path(tempfile.gettempdir()) / "unused-oauth.json",
+                http_client=FailingHttpClient(),
+            )
             with self.assertRaises(OpenAIOAuthError) as raised:
                 await manager.start_login()
 
@@ -177,6 +191,22 @@ class OpenAIOAuthManagerTest(unittest.TestCase):
             self.assertNotIn("at-secret", message)
             self.assertNotIn("rt-secret", message)
             self.assertNotIn("code-secret", message)
+
+        asyncio.run(scenario())
+
+    def test_missing_oauth_client_id_fails_before_network_call(self) -> None:
+        async def scenario() -> None:
+            fake = FakeHttpClient()
+            manager = OpenAIOAuthManager(
+                config={"device_flow": {"client_id": "${PDF_AGENT_OPENAI_OAUTH_CLIENT_ID}"}},
+                storage_path=Path(tempfile.gettempdir()) / "unused-oauth.json",
+                http_client=fake,
+            )
+            with self.assertRaises(OpenAIOAuthError) as raised:
+                await manager.start_login()
+
+            self.assertEqual(raised.exception.code, "oauth_client_id_missing")
+            self.assertEqual(fake.json_urls, [])
 
         asyncio.run(scenario())
 

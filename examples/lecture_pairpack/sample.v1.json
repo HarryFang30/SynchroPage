@@ -1,0 +1,42 @@
+{
+  "schema": "lecture_pairpack.v1",
+  "document": {
+    "id": "sample-course",
+    "title": "Sample Course PDF",
+    "source_pdf_url": "sample.pdf",
+    "page_count": 1,
+    "prompt_version": "course-agent.prompt.v1",
+    "model": "gpt-5.5"
+  },
+  "pages": [
+    {
+      "page_no": 1,
+      "source": {
+        "pdf_page_ref": "#page=1",
+        "text_md": "A sample title page introducing the course topic.",
+        "ocr_used": false,
+        "parser": "sample",
+        "page_type": "title"
+      },
+      "teaching": {
+        "slide_title": "Course Introduction",
+        "speaker_notes_md": "This page introduces the course and sets up the main learning goal.",
+        "concepts": ["course overview"],
+        "prerequisites": [],
+        "contextual_bridge": "",
+        "visual_explanations": [],
+        "formula_explanations": [],
+        "evidence": [
+          {
+            "kind": "title",
+            "quote_or_reference": "Sample Course PDF"
+          }
+        ],
+        "confidence": 0.95,
+        "needs_review": false,
+        "needs_parser_fallback": false
+      },
+      "status": "ready"
+    }
+  ]
+}

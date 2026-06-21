@@ -1,0 +1,36 @@
+{
+  "schema": "lecture_pairpack.page_batch.v1",
+  "document_id": "sample-course",
+  "target_pages": [1],
+  "pages": [
+    {
+      "page_no": 1,
+      "source": {
+        "pdf_page_ref": "#page=1",
+        "text_md": "A sample title page introducing the course topic.",
+        "ocr_used": false,
+        "parser": "sample",
+        "page_type": "title"
+      },
+      "teaching": {
+        "slide_title": "Course Introduction",
+        "speaker_notes_md": "This page introduces the course and sets up the main learning goal.",
+        "concepts": ["course overview"],
+        "prerequisites": [],
+        "contextual_bridge": "",
+        "visual_explanations": [],
+        "formula_explanations": [],
+        "evidence": [
+          {
+            "kind": "title",
+            "quote_or_reference": "Sample Course PDF"
+          }
+        ],
+        "confidence": 0.95,
+        "needs_review": false,
+        "needs_parser_fallback": false
+      },
+      "status": "ready"
+    }
+  ]
+}

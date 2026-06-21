@@ -80,7 +80,7 @@ npm --prefix apps/desktop install
 python3 -m pip install pyinstaller
 ```
 
-当前 Python 后端只依赖标准库，不强制安装包。直接从源码运行时使用 `PYTHONPATH=src`。
+Python 后端依赖 `PyPDF2` 和 `PyYAML`。建议安装为 editable package，或者至少安装 `pyproject.toml` 中声明的运行时依赖。直接从源码运行时使用 `PYTHONPATH=src`。
 
 可选：安装为 editable package：
 
@@ -284,6 +284,14 @@ http://127.0.0.1:5173/
 ## OpenAI OAuth 使用方式
 
 浏览器不持有模型凭据，所有模型请求都经过后端代理。
+
+启动真实 OAuth 前需要提供 OpenAI OAuth client id。不要把真实 client id 写入仓库配置，使用环境变量：
+
+```bash
+export PDF_AGENT_OPENAI_OAUTH_CLIENT_ID="app_xxx"
+```
+
+也兼容 `OPENAI_OAUTH_CLIENT_ID`。仓库里的 [config/auth/openai_oauth.yaml](config/auth/openai_oauth.yaml) 只保留 `${PDF_AGENT_OPENAI_OAUTH_CLIENT_ID}` 占位符。
 
 流程：
 

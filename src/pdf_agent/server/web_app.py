@@ -7,6 +7,7 @@ import datetime
 import hashlib
 import io
 import json
+import logging
 import math
 import mimetypes
 import os
@@ -33,12 +34,22 @@ from pdf_agent.gateway import (
     redacted_gateway_error,
 )
 
+def _env_positive_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_WEB_ROOT = PROJECT_ROOT / "apps" / "web"
 DIST_WEB_ROOT = SOURCE_WEB_ROOT / "dist"
 WEB_ROOT = DIST_WEB_ROOT if DIST_WEB_ROOT.exists() else SOURCE_WEB_ROOT
 OAUTH_CONFIG_PATH = PROJECT_ROOT / "config" / "auth" / "openai_oauth.yaml"
 DEFAULT_AGENT_MODEL = os.environ.get("PDF_AGENT_MODEL", "gpt-5.5")
+DEFAULT_MAX_JSON_BODY_BYTES = 100_000_000
+MAX_JSON_BODY_BYTES = _env_positive_int("PDF_AGENT_MAX_JSON_BODY_BYTES", DEFAULT_MAX_JSON_BODY_BYTES)
 MAX_CONTEXT_ITEMS = 10
 MAX_CONTEXT_CHARS = 16_000
 MAX_TEACHING_FAST_SOURCE_CHARS = 2_500
@@ -70,6 +81,7 @@ _PDF_FILE_CACHE_BYTES = 0
 _PDF_FILE_SUBSET_CACHE_LOCK = threading.Lock()
 _PDF_FILE_SUBSET_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _PDF_FILE_SUBSET_CACHE_BYTES = 0
+LOGGER = logging.getLogger("pdf_agent.server.web_app")
 
 PAGEPAIR_SHARED_INSTRUCTIONS = """You are the model backend for PagePair Reader.
 Use the provided PDF/page context, selected text, formulas, images, and task-specific instructions as primary evidence.
@@ -124,20 +136,42 @@ class HttpError(RuntimeError):
 class AsyncRunner:
     def __init__(self) -> None:
         self.loop = asyncio.new_event_loop()
-        self.thread = threading.Thread(target=self._run, name="pdf-agent-async", daemon=True)
+        self.thread = threading.Thread(target=self._run, name="pdf-agent-async", daemon=False)
         self.thread.start()
 
     def run(self, awaitable: Any) -> Any:
         future = asyncio.run_coroutine_threadsafe(awaitable, self.loop)
         return future.result()
 
-    def shutdown(self) -> None:
-        self.loop.call_soon_threadsafe(self.loop.stop)
-        self.thread.join(timeout=2)
+    def shutdown(self, *, timeout_seconds: float = 10.0) -> None:
+        if not self.thread.is_alive():
+            return
+        future = asyncio.run_coroutine_threadsafe(self._cancel_pending_tasks(), self.loop)
+        try:
+            future.result(timeout=timeout_seconds)
+        except Exception as exc:
+            LOGGER.warning("Async shutdown did not complete cleanly: %s", redacted_gateway_error(str(exc)))
+        finally:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self.thread.join(timeout=timeout_seconds)
+            if self.thread.is_alive():
+                LOGGER.error("Async runner thread did not stop after %.1fs", timeout_seconds)
 
     def _run(self) -> None:
         asyncio.set_event_loop(self.loop)
-        self.loop.run_forever()
+        try:
+            self.loop.run_forever()
+        finally:
+            self.loop.close()
+
+    async def _cancel_pending_tasks(self) -> None:
+        current = asyncio.current_task(self.loop)
+        pending = [task for task in asyncio.all_tasks(self.loop) if task is not current and not task.done()]
+        if pending:
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+        await self.loop.shutdown_asyncgens()
 
 
 class AgentChatGateway:
@@ -490,12 +524,25 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
             self._send_exception(exc)
 
     def log_message(self, format: str, *args: Any) -> None:
-        return
+        try:
+            message = format % args if args else format
+        except TypeError:
+            message = f"{format} {args!r}"
+        LOGGER.info("%s - %s", self.address_string(), redacted_gateway_error(message))
 
     def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0") or 0)
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError as exc:
+            raise HttpError(400, "Invalid Content-Length", code="invalid_content_length") from exc
         if length <= 0:
             return {}
+        if length > MAX_JSON_BODY_BYTES:
+            raise HttpError(
+                413,
+                f"JSON body is too large. Limit is {MAX_JSON_BODY_BYTES} bytes.",
+                code="json_body_too_large",
+            )
         raw = self.rfile.read(length).decode("utf-8")
         try:
             value = json.loads(raw)
@@ -2351,7 +2398,7 @@ def _selected_context(value: Any) -> str:
     pdf_source_text = _selected_pdf_source_text(value)
     if pdf_source_text:
         pdf_source_title = _string_value(pdf_source.get("title") if isinstance(pdf_source, Mapping) else "", "")
-        pdf_label = f"Corresponding PDF source"
+        pdf_label = "Corresponding PDF source"
         if pdf_source_page:
             pdf_label += f" p.{pdf_source_page}"
         if pdf_source_title:
@@ -2642,12 +2689,17 @@ def _extract_response_text(value: Any) -> str:
 def _resolve_static_path(web_root: Path, request_path: str) -> Path:
     decoded = urllib.parse.unquote(request_path)
     relative = "index.html" if decoded in {"", "/"} else decoded.lstrip("/")
-    candidate = (web_root / relative).resolve()
     root = web_root.resolve()
+    candidate = _resolve_under_root(root, web_root / relative)
+    if candidate.is_dir():
+        candidate = _resolve_under_root(root, candidate / "index.html")
+    return candidate
+
+
+def _resolve_under_root(root: Path, path: Path) -> Path:
+    candidate = path.resolve()
     if candidate != root and root not in candidate.parents:
         raise HttpError(403, "Forbidden", code="forbidden")
-    if candidate.is_dir():
-        candidate = candidate / "index.html"
     return candidate
 
 
