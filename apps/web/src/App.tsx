@@ -1,16 +1,12 @@
 import {
   Archive,
-  Check,
   BookOpen,
+  Check,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   Columns3,
-  Copy,
   FileInput,
   FileJson,
-  Image,
   Lock,
   Maximize2,
   Minimize2,
@@ -21,21 +17,15 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
-  RefreshCw,
-  Send,
   Settings,
   Settings2,
   Trash2,
   Upload,
-  X,
   Zap,
 } from "lucide-react";
 import {
   lazy,
-  type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
-  type RefObject,
   useCallback,
   useEffect,
   useMemo,
@@ -63,89 +53,35 @@ import {
   MarkdownBlock,
   PageNavigator,
   PaneToolbar,
-  ReaderMarkdown,
   SlidePreview,
   StructurePanel,
 } from "./components/workspace/WorkspaceChrome";
-import {
-  useOAuthFlow,
-  type OAuthMode,
-} from "./hooks/useOAuthFlow";
+import { useOAuthFlow } from "./hooks/useOAuthFlow";
 import { useGenerationEngine } from "./hooks/useGenerationEngine";
 import {
   usePageSelection,
   type SelectedContext,
-  type SelectionToolbarState,
 } from "./hooks/usePageSelection";
 import { getAppCopy, type AppCopy } from "./i18n";
 import {
-  createPdfAgentAdapter,
   selectedContextPayload,
   type AgentAttachment,
   type AgentContextItem,
-  type AgentSnapshot,
-  type ChatModelAdapter,
   type ChatPersistInput,
 } from "./lib/assistant/agentChatAdapter";
 import {
-  batchTeachingPages,
-  fullPdfContextForTeachingGeneration,
-  generatedTeachingNeedsRetry,
-  generationFailureMarkdown,
-  lightPdfContextForFastTeachingGeneration,
-  PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
-  prioritizeTeachingPages,
   resolveTeachingOutputLanguage,
-  shouldPreferTeachingCandidate,
-  teachingDocumentContextForPlan,
-  TEACHING_BATCH_FALLBACK_CONCURRENCY,
-  TEACHING_DOCUMENT_GENERATION_CONCURRENCY,
-  TEACHING_GENERATION_CONCURRENCY,
-  teachingExtractionPageNumbers,
-  teachingGenerationQualityPlan,
-  teachingModelRequestPriority,
-  teachingOutputLanguageName,
-  TEACHING_PROJECT_MODEL_REQUEST_CONCURRENCY,
-  TEACHING_PROJECT_WARMUP_PAGE_COUNT,
-  teachingQualityPlanPayload,
-  teachingRequestPage,
-  teachingWarmupPageNumbers,
-  type AsyncLimiterPriority,
-  type GeneratedTeachingPageResponse,
-  type GeneratedTeachingPagesResponse,
   type PageData,
   type PagePack,
-  type TeachingGenerationQualityPlan,
-  type TeachingOutputLanguage,
 } from "./lib/generation/teachingGeneration";
 import {
-  createAsyncLimiter,
   generationPageStatus,
   hasCompletedTeaching,
-  mergePageIntoPack,
-  missingSourceTextPageNumbers,
-  normalizeGeneratedPage,
-  pageWithSourceText,
-  runWithConcurrencyLimit,
   type GenerationPageStatus,
 } from "./lib/generation/generationRuntime";
-import { requestJson } from "./lib/http/requestJson";
-import {
-  cachedPdfDirectFileInputFromBlob,
-  cachedPdfDirectFileInputFromUrl,
-  pdfDirectFileCacheKey,
-  type PdfDirectFileInput,
-} from "./lib/pdf/directFile";
+import { cachedPdfDirectFileInputFromUrl } from "./lib/pdf/directFile";
 import {
   buildPdfContextFromPack,
-  extractPdfContextFromDocument,
-  extractPdfPagesFromBlob,
-  extractPdfPagesFromDocument,
-  loadPdfJsRuntime,
-  mergePdfContextPages,
-  pdfContextFromExtractedPages,
-  pdfContextPageNumbers,
-  waitForPdfExtractionIdle,
   type PdfContextPage,
   type PdfContextPayload,
 } from "./lib/pdf/textExtraction";
@@ -168,7 +104,6 @@ import {
   ensureWorkspace,
   exportWorkspace,
   importWorkspace,
-  loadDocumentGenerationBundle,
   loadCourseProjects,
   loadLastWorkspace,
   loadWorkspaceDocument,
@@ -178,7 +113,6 @@ import {
   repairWorkspaceStorage,
   saveChatMessage,
   saveDocumentPatch,
-  saveGeneratedPage,
   saveGeneratedPagesFromPack,
   saveImportedPagePack,
   savePdfBlob,
@@ -198,12 +132,8 @@ import {
 import {
   agentAnswerModeReasoningEffort,
   asPersistedRecord,
-  assistantContentText,
-  compactText,
   createDraftPagePack,
   createId,
-  formatPageRanges,
-  generateTargetPageNumbers,
   isActiveTab,
   isPanelVisibility,
   normalizePack,
@@ -212,20 +142,13 @@ import {
   storageRepairCount,
   upsertThreadMessage,
   workspaceLayoutSnapshot,
-  type ActiveTab,
   type GeneratePageMode,
   type PanelKey,
   type PanelVisibility,
 } from "./lib/workspace/pagePairState";
 import {
   AppCopyContext,
-  AssistantUiContext,
-  loadAssistantUiRuntime,
   useAppCopy,
-  useAssistantUi,
-  useAssistantUiRuntime,
-  useDeferredAssistantRuntime,
-  type AssistantUiRuntime,
 } from "./lib/contexts";
 
 type SettingsSection =
