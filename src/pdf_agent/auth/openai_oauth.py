@@ -16,6 +16,7 @@ from typing import Any, Protocol
 
 DEFAULT_PROVIDER_ID = "codex_oauth"
 OAUTH_CLIENT_ID_ENV_VARS = ("PDF_AGENT_OPENAI_OAUTH_CLIENT_ID", "OPENAI_OAUTH_CLIENT_ID")
+DEFAULT_CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 DEVICE_AUTH_USERCODE_URL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
 DEVICE_AUTH_TOKEN_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
 OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
@@ -743,7 +744,10 @@ def _default_oauth_client_id() -> str:
         value = os.environ.get(name, "").strip()
         if value:
             return value
-    return ""
+    # Public OAuth client id used by the Codex device-code flow. This is not an
+    # access token or refresh token; keeping it bundled lets the desktop app
+    # refresh an existing OAuth session after restart without requiring shell env.
+    return DEFAULT_CODEX_OAUTH_CLIENT_ID
 
 
 def _optional_path(value: Any) -> Path | None:

@@ -7,7 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pdf_agent.auth.openai_oauth import HttpJsonResponse, OpenAIOAuthError, OpenAIOAuthManager
+from pdf_agent.auth.openai_oauth import (
+    DEFAULT_CODEX_OAUTH_CLIENT_ID,
+    HttpJsonResponse,
+    OpenAIOAuthError,
+    OpenAIOAuthManager,
+)
 from pdf_agent.gateway import (
     build_chatgpt_codex_auth,
     build_codex_backend_headers,
@@ -194,7 +199,7 @@ class OpenAIOAuthManagerTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_missing_oauth_client_id_fails_before_network_call(self) -> None:
+    def test_missing_oauth_client_id_uses_bundled_codex_public_client(self) -> None:
         async def scenario() -> None:
             fake = FakeHttpClient()
             manager = OpenAIOAuthManager(
@@ -202,11 +207,36 @@ class OpenAIOAuthManagerTest(unittest.TestCase):
                 storage_path=Path(tempfile.gettempdir()) / "unused-oauth.json",
                 http_client=fake,
             )
-            with self.assertRaises(OpenAIOAuthError) as raised:
-                await manager.start_login()
 
-            self.assertEqual(raised.exception.code, "oauth_client_id_missing")
-            self.assertEqual(fake.json_urls, [])
+            await manager.start_login()
+
+            self.assertEqual(fake.json_urls, ["https://auth.openai.com/api/accounts/deviceauth/usercode"])
+
+        asyncio.run(scenario())
+
+    def test_refresh_after_restart_uses_bundled_codex_public_client(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                fake = FakeHttpClient()
+                manager = OpenAIOAuthManager(
+                    config={"device_flow": {"client_id": "${PDF_AGENT_OPENAI_OAUTH_CLIENT_ID}"}},
+                    storage_path=Path(tmp) / "openai_oauth.json",
+                    http_client=fake,
+                )
+
+                device = await manager.start_login()
+                fake.poll_ready = True
+                await manager.poll_login(device.device_code)
+
+                reloaded = OpenAIOAuthManager(
+                    config={"device_flow": {"client_id": "${PDF_AGENT_OPENAI_OAUTH_CLIENT_ID}"}},
+                    storage_path=Path(tmp) / "openai_oauth.json",
+                    http_client=fake,
+                )
+                await build_chatgpt_codex_auth(reloaded)
+
+                self.assertEqual(fake.form_calls[-1]["grant_type"], "refresh_token")
+                self.assertEqual(fake.form_calls[-1]["client_id"], DEFAULT_CODEX_OAUTH_CLIENT_ID)
 
         asyncio.run(scenario())
 

@@ -285,13 +285,15 @@ http://127.0.0.1:5173/
 
 浏览器不持有模型凭据，所有模型请求都经过后端代理。
 
-启动真实 OAuth 前需要提供 OpenAI OAuth client id。不要把真实 client id 写入仓库配置，使用环境变量：
+桌面应用内置 Codex device-code flow 使用的 OpenAI OAuth public client id，因此自用场景下不需要额外配置环境变量。这个 client id 不是 access token / refresh token，不具备模型调用权限；真实会话仍由你登录后保存在本机的 refresh token 负责。
+
+如果你要覆盖默认 client id，可以使用环境变量：
 
 ```bash
 export PDF_AGENT_OPENAI_OAUTH_CLIENT_ID="app_xxx"
 ```
 
-也兼容 `OPENAI_OAUTH_CLIENT_ID`。仓库里的 [config/auth/openai_oauth.yaml](config/auth/openai_oauth.yaml) 只保留 `${PDF_AGENT_OPENAI_OAUTH_CLIENT_ID}` 占位符。
+也兼容 `OPENAI_OAUTH_CLIENT_ID`。仓库里的 [config/auth/openai_oauth.yaml](config/auth/openai_oauth.yaml) 保留 `${PDF_AGENT_OPENAI_OAUTH_CLIENT_ID}` 占位符；当环境变量不存在时，后端会回退到内置的 Codex public client id。
 
 流程：
 
