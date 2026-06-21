@@ -76,6 +76,15 @@ import {
 
 const TEACHING_PAGE_REQUEST_TIMEOUT_MS = 120_000;
 const TEACHING_BATCH_REQUEST_TIMEOUT_MS = 150_000;
+const TEACHING_PAGE_REQUEST_STALL_MS = 60_000;
+const TEACHING_BATCH_REQUEST_STALL_MS = 75_000;
+
+type GenerationRequestWatchdogOptions = {
+  stallMs?: number;
+  stalledMessage?: string;
+  timeoutMessage?: string;
+  onStalled?: () => void;
+};
 
 export interface GenerationEngineParams {
   isGeneratingNotes: boolean;
@@ -274,7 +283,12 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                   },
                   p.copy.errors.accountNotFound,
                 ),
-              ),
+              {
+                stallMs: TEACHING_PAGE_REQUEST_STALL_MS,
+                stalledMessage: p.copy.errors.generationRequestStalled(timeoutSeconds(TEACHING_PAGE_REQUEST_STALL_MS)),
+                timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_PAGE_REQUEST_TIMEOUT_MS)),
+                onStalled: () => p.setJobStatus(p.copy.status.generationPageFailed(pageNo, p.copy.errors.generationRequestStalled(timeoutSeconds(TEACHING_PAGE_REQUEST_STALL_MS)))),
+              }),
               { priority, signal: generationSignal },
             );
             return normalizeGeneratedWithLanguage(response, runningPage, pageOutputLanguage);
@@ -348,7 +362,12 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                     },
                     p.copy.errors.accountNotFound,
                   ),
-                ),
+                {
+                  stallMs: TEACHING_BATCH_REQUEST_STALL_MS,
+                  stalledMessage: p.copy.errors.generationBatchRequestStalled(timeoutSeconds(TEACHING_BATCH_REQUEST_STALL_MS)),
+                  timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_BATCH_REQUEST_TIMEOUT_MS)),
+                  onStalled: () => p.setJobStatus(p.copy.errors.generationBatchRequestStalled(timeoutSeconds(TEACHING_BATCH_REQUEST_STALL_MS))),
+                }),
                 { priority, signal: generationSignal },
               );
               const generatedPagesByNumber = new Map(
@@ -728,7 +747,12 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                     },
                     p.copy.errors.accountNotFound,
                   ),
-                ),
+                {
+                  stallMs: TEACHING_PAGE_REQUEST_STALL_MS,
+                  stalledMessage: p.copy.errors.generationRequestStalled(timeoutSeconds(TEACHING_PAGE_REQUEST_STALL_MS)),
+                  timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_PAGE_REQUEST_TIMEOUT_MS)),
+                  onStalled: () => p.setJobStatus(p.copy.status.generationPageFailed(pageNo, p.copy.errors.generationRequestStalled(timeoutSeconds(TEACHING_PAGE_REQUEST_STALL_MS)))),
+                }),
                 { priority, signal: generationSignal },
               );
               const normalizedGeneratedPage = normalizeGeneratedPage(response.page, runningPage);
@@ -822,7 +846,12 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                       },
                       p.copy.errors.accountNotFound,
                     ),
-                  ),
+                  {
+                    stallMs: TEACHING_BATCH_REQUEST_STALL_MS,
+                    stalledMessage: p.copy.errors.generationBatchRequestStalled(timeoutSeconds(TEACHING_BATCH_REQUEST_STALL_MS)),
+                    timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_BATCH_REQUEST_TIMEOUT_MS)),
+                    onStalled: () => p.setJobStatus(p.copy.errors.generationBatchRequestStalled(timeoutSeconds(TEACHING_BATCH_REQUEST_STALL_MS))),
+                  }),
                   { priority, signal: generationSignal },
                 );
                 const generatedPagesByNumber = new Map(
@@ -946,34 +975,56 @@ async function runGenerationRequestWithTimeout<T>(
   parentSignal: AbortSignal,
   timeoutMs: number,
   run: (signal: AbortSignal) => Promise<T>,
+  options: GenerationRequestWatchdogOptions = {},
 ) {
   if (parentSignal.aborted) throw createAbortError();
 
   const controller = new AbortController();
   let timedOut = false;
+  let stalled = false;
   const timer = window.setTimeout(() => {
     timedOut = true;
     controller.abort();
   }, timeoutMs);
+  const stallTimer = options.stallMs
+    ? window.setTimeout(() => {
+        stalled = true;
+        options.onStalled?.();
+        controller.abort();
+      }, options.stallMs)
+    : null;
   const abortFromParent = () => controller.abort(parentSignal.reason);
   parentSignal.addEventListener("abort", abortFromParent, { once: true });
 
   try {
     return await run(controller.signal);
   } catch (error) {
-    if (timedOut) throw createGenerationTimeoutError(timeoutMs);
+    if (stalled) throw createGenerationStalledError(options.stalledMessage, options.stallMs);
+    if (timedOut) throw createGenerationTimeoutError(timeoutMs, options.timeoutMessage);
     throw error;
   } finally {
     window.clearTimeout(timer);
+    if (stallTimer !== null) window.clearTimeout(stallTimer);
     parentSignal.removeEventListener("abort", abortFromParent);
   }
 }
 
-function createGenerationTimeoutError(timeoutMs: number) {
-  const seconds = Math.round(timeoutMs / 1000);
-  const error = new Error(`讲解生成超时（${seconds} 秒）。这一页可能是图表密集页或上游模型处理过慢，请稍后重试。`);
+function createGenerationTimeoutError(timeoutMs: number, message?: string) {
+  const seconds = timeoutSeconds(timeoutMs);
+  const error = new Error(message || `讲解生成超时（${seconds} 秒）。这一页可能是图表密集页、服务端限流或上游模型处理过慢，请稍后重试。`);
   error.name = "TimeoutError";
   return error;
+}
+
+function createGenerationStalledError(message?: string, stallMs = TEACHING_PAGE_REQUEST_STALL_MS) {
+  const seconds = timeoutSeconds(stallMs);
+  const error = new Error(message || `OpenAI 上游超过 ${seconds} 秒没有返回，已自动停止这一页。可能是服务端限流或请求卡住，请稍后重试。`);
+  error.name = "GenerationStalledError";
+  return error;
+}
+
+function timeoutSeconds(timeoutMs: number) {
+  return Math.round(timeoutMs / 1000);
 }
 
 function createAbortError() {

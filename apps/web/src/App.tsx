@@ -19,6 +19,7 @@ import {
   Plus,
   Settings,
   Settings2,
+  Square,
   Trash2,
   Upload,
   Zap,
@@ -70,6 +71,7 @@ import {
   type ChatPersistInput,
 } from "./lib/assistant/agentChatAdapter";
 import {
+  generationFailureMarkdown,
   resolveTeachingOutputLanguage,
   type PageData,
   type PagePack,
@@ -423,6 +425,32 @@ export default function App() {
   const pdfNavigationPageCount = Math.max(pdfUrl ? pdfPageCount || pack.document.page_count || pack.pages.length : pack.pages.length, 1);
   const currentPdfPageNo = Math.min(Math.max(currentPageNo, 1), pdfNavigationPageCount);
   const teachingOutputLanguage = resolveTeachingOutputLanguage(uiPreferences);
+  const stopNotesGeneration = useCallback(() => {
+    const message = copy.errors.generationStopped;
+    generationAbortControllerRef.current?.abort();
+    generationAbortControllerRef.current = null;
+    setIsGeneratingNotes(false);
+    setGenerateMenuOpen(false);
+    setJobStatus(message);
+    setPack((current) => ({
+      ...current,
+      pages: current.pages.map((page) => {
+        if (page.status !== "running") return page;
+        return {
+          ...page,
+          status: "failed",
+          teaching: {
+            ...page.teaching,
+            output_language: teachingOutputLanguage,
+            slide_title: page.teaching.slide_title || `PDF p.${page.page_no}`,
+            speaker_notes_md: generationFailureMarkdown(message, teachingOutputLanguage),
+            confidence: 0,
+            needs_review: true,
+          },
+        };
+      }),
+    }));
+  }, [copy.errors.generationStopped, teachingOutputLanguage]);
   const pageLookup = useMemo(() => {
     const pagesByNumber = new Map<number, PageData>();
     const indexesByNumber = new Map<number, number>();
@@ -1830,13 +1858,16 @@ export default function App() {
               type="button"
               onClick={() => {
                 setGenerateMenuOpen(false);
-                handleGenerateNotes();
+                if (isGeneratingNotes) {
+                  stopNotesGeneration();
+                } else {
+                  handleGenerateNotes();
+                }
               }}
-              disabled={isGeneratingNotes}
-              title={generateScopeSummary}
+              title={isGeneratingNotes ? copy.topbar.stopGeneration : generateScopeSummary}
             >
-              <Zap />
-              {copy.topbar.generate}
+              {isGeneratingNotes ? <Square /> : <Zap />}
+              {isGeneratingNotes ? copy.topbar.stopGeneration : copy.topbar.generate}
             </button>
             <button
               className={`primary-button generate-menu-button ${generateMenuOpen ? "active" : ""}`}

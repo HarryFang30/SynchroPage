@@ -215,6 +215,9 @@ export type AppCopy = {
     jsonNeedsPages: string;
     emptyGatewayResult: string;
     generationStopped: string;
+    generationRequestStalled: (seconds: number) => string;
+    generationBatchRequestStalled: (seconds: number) => string;
+    generationRequestTimedOut: (seconds: number) => string;
     imageReadFailed: string;
     importedDocument: string;
     importedPageTitle: (index: number) => string;
@@ -269,6 +272,7 @@ export type AppCopy = {
     exportJson: string;
     advancedSettings: string;
     generate: string;
+    stopGeneration: string;
     generateScopeLabel: string;
     generateScopeAll: string;
     generateScopeAllDescription: string;
@@ -633,6 +637,9 @@ const zhCN: AppCopy = {
     jsonNeedsPages: "JSON 需要包含 pages 数组",
     emptyGatewayResult: "AI 网关返回了空结果",
     generationStopped: "生成已停止",
+    generationRequestStalled: (seconds) => `OpenAI 上游超过 ${seconds} 秒没有返回，已自动停止这一页。可能是服务端限流或请求卡住，请稍后重试。`,
+    generationBatchRequestStalled: (seconds) => `OpenAI 上游超过 ${seconds} 秒没有返回，已自动拆分为单页重试。`,
+    generationRequestTimedOut: (seconds) => `讲解生成超时（${seconds} 秒）。这一页可能是图表密集页、服务端限流或上游模型处理过慢，请稍后重试。`,
     imageReadFailed: "图片读取失败",
     importedDocument: "导入文档",
     importedPageTitle: (index) => `第 ${index + 1} 页讲解`,
@@ -687,6 +694,7 @@ const zhCN: AppCopy = {
     exportJson: "导出 JSON",
     advancedSettings: "高级设置",
     generate: "生成",
+    stopGeneration: "停止",
     generateScopeLabel: "生成范围",
     generateScopeAll: "全部页面",
     generateScopeAllDescription: "检查整份 PDF，已生成页会自动跳过",
@@ -1051,6 +1059,9 @@ const enUS: AppCopy = {
     jsonNeedsPages: "JSON must contain a pages array",
     emptyGatewayResult: "AI gateway returned an empty result",
     generationStopped: "Generation stopped",
+    generationRequestStalled: (seconds) => `OpenAI upstream did not return for ${seconds}s, so this page was stopped automatically. This may be rate limiting or a stuck request. Try again shortly.`,
+    generationBatchRequestStalled: (seconds) => `OpenAI upstream did not return for ${seconds}s, so the batch was split into single-page retries.`,
+    generationRequestTimedOut: (seconds) => `Notes generation timed out after ${seconds}s. This page may be visual-heavy, rate-limited, or slow upstream. Try again shortly.`,
     imageReadFailed: "Failed to read image",
     importedDocument: "Imported document",
     importedPageTitle: (index) => `Page ${index + 1} notes`,
@@ -1105,6 +1116,7 @@ const enUS: AppCopy = {
     exportJson: "Export JSON",
     advancedSettings: "Advanced settings",
     generate: "Generate",
+    stopGeneration: "Stop",
     generateScopeLabel: "Generate range",
     generateScopeAll: "All pages",
     generateScopeAllDescription: "Check the whole PDF and skip completed pages",
