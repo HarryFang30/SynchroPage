@@ -64,6 +64,7 @@ MAX_TRANSCRIPT_MESSAGES = 8
 MAX_IMAGE_ATTACHMENTS = 8
 MAX_IMAGE_DATA_URL_CHARS = 8_000_000
 MAX_PDF_FILE_DATA_CHARS = 80_000_000
+PDF_FILE_DATA_URL_PREFIX = "data:application/pdf;base64,"
 PDF_FILE_CACHE_MAX_ENTRIES = 8
 PDF_FILE_CACHE_MAX_BYTES = 240_000_000
 PDF_FILE_SUBSET_CACHE_MAX_ENTRIES = 64
@@ -222,12 +223,24 @@ class AgentChatGateway:
             text, content_type = await self._post_responses_with_retries(url, payload, headers)
             return text, content_type, payload
         except HttpError as exc:
-            if not _should_retry_without_prompt_cache(exc, payload):
-                raise
-            fallback_payload = _without_prompt_cache(payload)
-            text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
-            fallback_payload["_pagepair_cache_fallback_without_fields"] = True
-            return text, content_type, fallback_payload
+            if _should_retry_without_file_input(exc, payload):
+                fallback_payload = _without_file_input(payload)
+                try:
+                    text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
+                except HttpError as fallback_exc:
+                    if not _should_retry_without_prompt_cache(fallback_exc, fallback_payload):
+                        raise
+                    fallback_payload = _without_prompt_cache(fallback_payload)
+                    text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
+                    fallback_payload["_pagepair_cache_fallback_without_fields"] = True
+                fallback_payload["_pagepair_file_fallback_without_input_file"] = True
+                return text, content_type, fallback_payload
+            if _should_retry_without_prompt_cache(exc, payload):
+                fallback_payload = _without_prompt_cache(payload)
+                text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
+                fallback_payload["_pagepair_cache_fallback_without_fields"] = True
+                return text, content_type, fallback_payload
+            raise
 
     async def _post_responses_with_retries(
         self,
@@ -367,12 +380,24 @@ class TeachingGenerationGateway:
             text, content_type = await self._post_responses_with_retries(url, payload, headers)
             return text, content_type, payload
         except HttpError as exc:
-            if not _should_retry_without_prompt_cache(exc, payload):
-                raise
-            fallback_payload = _without_prompt_cache(payload)
-            text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
-            fallback_payload["_pagepair_cache_fallback_without_fields"] = True
-            return text, content_type, fallback_payload
+            if _should_retry_without_file_input(exc, payload):
+                fallback_payload = _without_file_input(payload)
+                try:
+                    text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
+                except HttpError as fallback_exc:
+                    if not _should_retry_without_prompt_cache(fallback_exc, fallback_payload):
+                        raise
+                    fallback_payload = _without_prompt_cache(fallback_payload)
+                    text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
+                    fallback_payload["_pagepair_cache_fallback_without_fields"] = True
+                fallback_payload["_pagepair_file_fallback_without_input_file"] = True
+                return text, content_type, fallback_payload
+            if _should_retry_without_prompt_cache(exc, payload):
+                fallback_payload = _without_prompt_cache(payload)
+                text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
+                fallback_payload["_pagepair_cache_fallback_without_fields"] = True
+                return text, content_type, fallback_payload
+            raise
 
     async def _post_responses_with_retries(
         self,
@@ -1176,6 +1201,18 @@ def _normalized_document_cache_context(body: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def _raw_pdf_file_data(value: Any) -> str:
+    file_data = str(value or "").strip()
+    if file_data.startswith("data:") and "," in file_data:
+        return file_data.split(",", 1)[1].strip()
+    return file_data
+
+
+def _pdf_file_data_url(file_data: str) -> str:
+    raw_file_data = _raw_pdf_file_data(file_data)
+    return f"{PDF_FILE_DATA_URL_PREFIX}{raw_file_data}" if raw_file_data else ""
+
+
 def _pdf_file_input(
     value: Any,
     *,
@@ -1184,17 +1221,15 @@ def _pdf_file_input(
 ) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
-    file_data = str(value.get("fileData") or value.get("file_data") or "").strip()
+    file_data = _raw_pdf_file_data(value.get("fileData") or value.get("file_data"))
     sha256 = _string_value(value.get("sha256"), "")
     if not file_data and sha256:
         cached = _cached_pdf_file_payload(sha256)
         if cached:
             value = {**cached, **value}
-            file_data = str(cached.get("fileData") or "").strip()
+            file_data = _raw_pdf_file_data(cached.get("fileData"))
     if not file_data:
         return None
-    if file_data.startswith("data:") and "," in file_data:
-        file_data = file_data.split(",", 1)[1].strip()
     if not file_data or len(file_data) > MAX_PDF_FILE_DATA_CHARS:
         return None
     filename = _string_value(value.get("filename") or value.get("fileName"), "document.pdf")
@@ -1210,16 +1245,14 @@ def _pdf_file_input(
     return {
         "type": "input_file",
         "filename": filename,
-        "file_data": file_data,
+        "file_data": _pdf_file_data_url(file_data),
     }
 
 
 def _cache_pdf_file_payload(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise HttpError(400, "PDF cache request did not include a document file", code="invalid_pdf_cache")
-    file_data = str(value.get("fileData") or value.get("file_data") or "").strip()
-    if file_data.startswith("data:") and "," in file_data:
-        file_data = file_data.split(",", 1)[1].strip()
+    file_data = _raw_pdf_file_data(value.get("fileData") or value.get("file_data"))
     if not file_data or len(file_data) > MAX_PDF_FILE_DATA_CHARS:
         raise HttpError(400, "PDF cache request did not include usable PDF data", code="invalid_pdf_cache")
     try:
@@ -1377,6 +1410,13 @@ def _should_retry_without_prompt_cache(exc: HttpError, payload: Mapping[str, Any
     )
 
 
+def _should_retry_without_file_input(exc: HttpError, payload: Mapping[str, Any]) -> bool:
+    if exc.status not in {400, 413, 415, 422} or not _payload_has_file_input(payload):
+        return False
+    message = str(exc).lower()
+    return any(token in message for token in ("file_data", "input_file", "input[0].content", "unsupported file"))
+
+
 def _should_retry_transient_upstream_error(exc: HttpError) -> bool:
     if exc.status == 429 and "usage limit" in str(exc).lower():
         return False
@@ -1427,6 +1467,40 @@ def _without_prompt_cache(payload: Mapping[str, Any]) -> dict[str, Any]:
     return fallback_payload
 
 
+def _payload_has_file_input(payload: Mapping[str, Any]) -> bool:
+    for message in payload.get("input") if isinstance(payload.get("input"), list) else []:
+        if not isinstance(message, Mapping):
+            continue
+        for part in message.get("content") if isinstance(message.get("content"), list) else []:
+            if isinstance(part, Mapping) and part.get("type") == "input_file":
+                return True
+    return False
+
+
+def _without_file_input(payload: Mapping[str, Any]) -> dict[str, Any]:
+    fallback_payload = dict(payload)
+    input_value = payload.get("input")
+    if not isinstance(input_value, list):
+        return fallback_payload
+
+    fallback_input: list[Any] = []
+    for message in input_value:
+        if not isinstance(message, Mapping):
+            fallback_input.append(message)
+            continue
+        fallback_message = dict(message)
+        content = message.get("content")
+        if isinstance(content, list):
+            fallback_message["content"] = [
+                part
+                for part in content
+                if not (isinstance(part, Mapping) and part.get("type") == "input_file")
+            ]
+        fallback_input.append(fallback_message)
+    fallback_payload["input"] = fallback_input
+    return fallback_payload
+
+
 def _prompt_cache_metadata(
     payload: Mapping[str, Any],
     *,
@@ -1440,6 +1514,7 @@ def _prompt_cache_metadata(
         "prefix_hash": _sha256_text(prefix)[:24] if prefix else None,
         "prefix_chars": len(prefix),
         "fallback_without_cache": bool(payload.get("_pagepair_cache_fallback_without_fields")),
+        "fallback_without_file_input": bool(payload.get("_pagepair_file_fallback_without_input_file")),
     }
     if response_text is not None:
         usage = _extract_prompt_cache_usage(response_text, content_type)

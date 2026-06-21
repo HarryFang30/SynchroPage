@@ -26,8 +26,15 @@ from pdf_agent.server.web_app import (
     _static_file_etag,
     _teaching_generation_candidate_bodies,
     _transient_retry_delay_seconds,
+    _without_file_input,
 )
 from pdf_agent.gateway.openai_gateway import redacted_gateway_error
+
+
+def _decode_pdf_file_data(value: str) -> bytes:
+    if value.startswith("data:") and "," in value:
+        value = value.split(",", 1)[1]
+    return base64.b64decode(value)
 
 
 class WebAppTest(unittest.TestCase):
@@ -244,7 +251,8 @@ class WebAppTest(unittest.TestCase):
 
         content = payload["input"][0]["content"]
         self.assertEqual(content[1]["type"], "input_file")
-        subset_reader = PdfReader(io.BytesIO(base64.b64decode(content[1]["file_data"])))
+        self.assertTrue(content[1]["file_data"].startswith("data:application/pdf;base64,"))
+        subset_reader = PdfReader(io.BytesIO(_decode_pdf_file_data(content[1]["file_data"])))
         self.assertEqual(len(subset_reader.pages), 5)
         self.assertIn("PDF subset is attached as an input_file for pages 1-2, 7, 11-12", content[2]["text"])
 
@@ -358,7 +366,8 @@ class WebAppTest(unittest.TestCase):
 
         self.assertIsNotNone(file_input)
         assert file_input is not None
-        subset_reader = PdfReader(io.BytesIO(base64.b64decode(file_input["file_data"])))
+        self.assertTrue(file_input["file_data"].startswith("data:application/pdf;base64,"))
+        subset_reader = PdfReader(io.BytesIO(_decode_pdf_file_data(file_input["file_data"])))
         self.assertEqual(len(subset_reader.pages), 1)
 
     def test_pdf_file_input_reuses_cached_page_subset(self) -> None:
@@ -379,7 +388,7 @@ class WebAppTest(unittest.TestCase):
         self.assertIsNotNone(second)
         assert first is not None and second is not None
         self.assertEqual(first["file_data"], second["file_data"])
-        subset_reader = PdfReader(io.BytesIO(base64.b64decode(second["file_data"])))
+        subset_reader = PdfReader(io.BytesIO(_decode_pdf_file_data(second["file_data"])))
         self.assertEqual(len(subset_reader.pages), 1)
 
     def test_pdf_file_input_does_not_fallback_to_full_pdf_when_subset_fails(self) -> None:
@@ -420,6 +429,37 @@ class WebAppTest(unittest.TestCase):
         self.assertFalse(any(part.get("type") == "input_file" for part in content))
         self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_long:"))
 
+    def test_without_file_input_preserves_cache_context_and_prompt(self) -> None:
+        payload = {
+            "model": "gpt-5.5",
+            "prompt_cache_key": "pagepair:doc:abc",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "PAGEPAIR CACHEABLE DOCUMENT CONTEXT\n\n[p.1] Intro",
+                        },
+                        {
+                            "type": "input_file",
+                            "filename": "lecture.pdf",
+                            "file_data": "data:application/pdf;base64,JVBERi0x",
+                        },
+                        {"type": "input_text", "text": "User question"},
+                    ],
+                }
+            ],
+        }
+
+        fallback = _without_file_input(payload)
+
+        content = fallback["input"][0]["content"]
+        self.assertEqual([part["type"] for part in content], ["input_text", "input_text"])
+        self.assertTrue(content[0]["text"].startswith("PAGEPAIR CACHEABLE DOCUMENT CONTEXT"))
+        self.assertEqual(content[1]["text"], "User question")
+        self.assertIn("prompt_cache_key", fallback)
+
     def test_teaching_generation_payload_subsets_pdf_file_to_batch_pages(self) -> None:
         from PyPDF2 import PdfReader, PdfWriter
 
@@ -444,7 +484,8 @@ class WebAppTest(unittest.TestCase):
 
         file_part = payload["input"][0]["content"][0]
         self.assertEqual(file_part["type"], "input_file")
-        subset_reader = PdfReader(io.BytesIO(base64.b64decode(file_part["file_data"])))
+        self.assertTrue(file_part["file_data"].startswith("data:application/pdf;base64,"))
+        subset_reader = PdfReader(io.BytesIO(_decode_pdf_file_data(file_part["file_data"])))
         self.assertEqual(len(subset_reader.pages), 2)
 
     def test_teaching_generation_payload_can_use_cached_pdf_reference(self) -> None:
@@ -469,7 +510,7 @@ class WebAppTest(unittest.TestCase):
 
         file_part = payload["input"][0]["content"][0]
         self.assertEqual(file_part["type"], "input_file")
-        subset_reader = PdfReader(io.BytesIO(base64.b64decode(file_part["file_data"])))
+        subset_reader = PdfReader(io.BytesIO(_decode_pdf_file_data(file_part["file_data"])))
         self.assertEqual(len(subset_reader.pages), 1)
 
     def test_teaching_batch_prompt_uses_single_schema_contract(self) -> None:
