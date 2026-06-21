@@ -1,0 +1,389 @@
+/* PDF */
+
+.pdf-pane,
+.notes-pane,
+.agent-panel {
+  display: grid;
+  grid-template-rows: 52px minmax(0, 1fr);
+}
+
+.notes-pane {
+  container-type: inline-size;
+}
+
+.pdf-pane {
+  grid-template-rows: 52px minmax(0, 1fr) auto;
+}
+
+.pdf-focus .pdf-pane {
+  background: var(--background);
+}
+
+.pdf-focus .pdf-frame {
+  padding: clamp(16px, 2.2vw, 28px);
+}
+
+.pdf-focus .slide-preview {
+  width: min(100%, 980px);
+  max-height: min(68vh, 760px);
+}
+
+.pane-toolbar,
+.agent-toolbar {
+  min-width: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  background: color-mix(in oklch, var(--background) 76%, white);
+  box-shadow: none;
+}
+
+.toolbar-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.toolbar-title span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-dot,
+.agent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted) 70%, var(--brand));
+  box-shadow: none;
+}
+
+.agent-dot {
+  background: color-mix(in oklch, var(--muted) 62%, var(--brand));
+  box-shadow: none;
+}
+
+.confidence-badge {
+  min-width: 48px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--secondary) 70%, white);
+  color: color-mix(in oklch, var(--text) 72%, var(--muted));
+  font-size: 12px;
+  font-weight: 900;
+  box-shadow: none;
+}
+
+output {
+  min-width: 58px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.pdf-frame {
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px 17px;
+  background: linear-gradient(180deg, color-mix(in oklch, var(--background) 94%, white), color-mix(in oklch, var(--secondary) 32%, var(--background)));
+}
+
+.app-shell[data-pdf-background="plain"] .pdf-frame {
+  background: var(--background);
+}
+
+.app-shell[data-pdf-background="soft"] .pdf-frame {
+  background: linear-gradient(180deg, color-mix(in oklch, var(--brand-soft) 18%, var(--background)), color-mix(in oklch, var(--secondary) 36%, var(--background)));
+}
+
+.pdf-frame iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.05);
+}
+
+.pdf-frame.has-pdf {
+  align-content: start;
+  overflow: hidden;
+  place-items: start center;
+}
+
+.pdf-frame.has-pdf iframe,
+.pdf-native-fallback iframe {
+  border-radius: 6px;
+}
+
+.pdf-js-viewer {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: 10px;
+  padding: 2px 0 16px;
+}
+
+.pdf-scroll-viewer {
+  overflow: auto;
+  outline: 0;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+}
+
+.pdf-page-stack {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 32px;
+  padding: 8px 0 42px;
+}
+
+.pdf-page-shell {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  scroll-margin-top: 18px;
+}
+
+.pdf-page-label {
+  width: min(100%, 980px);
+  color: color-mix(in oklch, var(--muted) 70%, transparent);
+  font-size: 11px;
+  font-weight: 680;
+  letter-spacing: 0;
+  text-align: left;
+}
+
+.pdf-page-shell.active .pdf-page-label {
+  color: color-mix(in oklch, var(--brand) 72%, var(--muted));
+}
+
+.pdf-scroll-viewer.single-page .pdf-page-stack {
+  min-height: 100%;
+  align-content: center;
+}
+
+.pdf-page-placeholder {
+  max-width: 100%;
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--panel) 82%, white);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--line) 46%, transparent);
+}
+
+.pdf-page-layered {
+  position: relative;
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 7px;
+  background: white;
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.08), 0 16px 36px oklch(0.34 0.03 95 / 0.10);
+}
+
+.pdf-visual-layer {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  user-select: none;
+}
+
+.pdf-text-layer {
+  color-scheme: only light;
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  text-align: initial;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  caret-color: CanvasText;
+  forced-color-adjust: none;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+}
+
+.pdf-text-layer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+  white-space: pre;
+}
+
+.pdf-text-layer {
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.pdf-text-layer .markedContent {
+  display: contents;
+}
+
+.pdf-text-layer span[role="img"] {
+  cursor: default;
+  user-select: none;
+}
+
+.pdf-text-layer .endOfContent {
+  position: absolute;
+  z-index: 0;
+  inset: 100% 0 0;
+  cursor: default;
+  user-select: none;
+}
+
+.pdf-text-layer.selecting .endOfContent {
+  top: 0;
+}
+
+.pdf-text-layer ::selection,
+.pdf-text-layer br::selection {
+  background: color-mix(in oklch, var(--brand) 28%, transparent);
+}
+
+.pdf-layer-note {
+  max-width: min(520px, 100%);
+  border: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--popover) 92%, var(--background));
+  color: var(--muted);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pdf-layer-note.error {
+  border-color: color-mix(in oklch, var(--brand) 32%, var(--line));
+  color: var(--text);
+}
+
+.pdf-native-fallback {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+  display: grid;
+  gap: 10px;
+}
+
+.pdf-native-fallback iframe {
+  min-height: 520px;
+}
+
+.slide-preview {
+  width: min(100%, 720px);
+  aspect-ratio: 16 / 10;
+  padding: 36px;
+  border: 1px solid color-mix(in oklch, var(--line) 78%, white);
+  border-radius: 8px;
+  background: linear-gradient(180deg, color-mix(in oklch, var(--background) 76%, white), color-mix(in oklch, var(--background) 86%, white));
+  box-shadow: 0 18px 42px oklch(0.34 0.03 95 / 0.10);
+}
+
+.slide-kicker {
+  color: var(--coral);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.slide-preview h2 {
+  max-width: 11ch;
+  margin: 18px 0 20px;
+  font-family: var(--font-reading);
+  color: var(--text-strong);
+  font-size: 31px;
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+}
+
+.slide-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 22px;
+}
+
+.slide-lines {
+  display: grid;
+  gap: 10px;
+}
+
+.slide-lines span {
+  height: 12px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--soft-strong) 74%, white);
+}
+
+.slide-lines span:nth-child(2) {
+  width: 82%;
+  background: color-mix(in oklch, var(--brand-soft) 82%, white);
+}
+
+.slide-lines span:nth-child(3) {
+  width: 68%;
+  background: color-mix(in oklch, var(--coral-soft) 76%, white);
+}
+
+.slide-figure {
+  min-height: 150px;
+  display: grid;
+  align-items: end;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--secondary) 70%, white);
+  box-shadow: none;
+}
+
+.slide-figure span {
+  border-radius: 6px 6px 0 0;
+  background: var(--brand);
+  box-shadow: 0 6px 14px oklch(0.34 0.03 95 / 0.10);
+}
+
+.slide-figure span:nth-child(1) { height: 48%; }
+.slide-figure span:nth-child(2) { height: 62%; background: var(--violet); }
+.slide-figure span:nth-child(3) { height: 78%; background: var(--gold); }
+.slide-figure span:nth-child(4) { height: 42%; background: var(--coral); }

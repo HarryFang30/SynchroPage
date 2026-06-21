@@ -1,0 +1,529 @@
+/* Sidebar */
+
+.page-rail,
+.pdf-pane,
+.notes-pane,
+.agent-panel {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in oklch, var(--background) 94%, white);
+  box-shadow: none;
+}
+
+.page-rail {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.rail-top {
+  padding: 14px 12px 10px;
+  background: color-mix(in oklch, var(--sidebar) 76%, var(--background));
+}
+
+.rail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.rail-header > div:first-child {
+  min-width: 0;
+}
+
+.rail-header strong,
+.rail-header span {
+  display: block;
+}
+
+.rail-header strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 720;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-header span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-header-actions {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.rail-icon-button,
+.rail-header-actions .mini-button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.rail-icon-button:hover,
+.rail-icon-button.active,
+.rail-header-actions .mini-button:hover {
+  background: color-mix(in oklch, var(--secondary) 56%, transparent);
+  color: var(--text-strong);
+  transform: none;
+}
+
+.rail-icon-button.active {
+  background: color-mix(in oklch, var(--secondary) 62%, transparent);
+  color: var(--text-strong);
+}
+
+.rail-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.rail-icon-button svg,
+.rail-header-actions .mini-button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.rail-header-actions .mini-button {
+  border-color: transparent;
+}
+
+.rail-action-menu {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 178px;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid color-mix(in oklch, var(--line) 70%, transparent);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--popover) 94%, var(--background));
+  box-shadow: 0 18px 44px oklch(0.30 0.018 95 / 0.14);
+}
+
+.rail-action-menu button,
+.rail-action-menu .mini-button {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  justify-items: start;
+  gap: 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-strong);
+  padding: 0 9px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 560;
+  box-shadow: none;
+}
+
+.rail-action-menu button:hover,
+.rail-action-menu .mini-button:hover {
+  background: color-mix(in oklch, var(--secondary) 52%, transparent);
+}
+
+.rail-action-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.rail-action-menu svg {
+  width: 17px;
+  height: 17px;
+  color: currentColor;
+}
+
+.search-box input {
+  width: 100%;
+  height: 36px;
+  border: 1px solid color-mix(in oklch, var(--line) 52%, transparent);
+  border-radius: 8px;
+  outline: 0;
+  background: color-mix(in oklch, var(--background) 74%, white);
+  color: var(--text);
+  padding: 0 10px;
+  font-size: 13px;
+  box-shadow: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.search-box input:focus {
+  border-color: color-mix(in oklch, var(--brand) 42%, var(--line));
+  background: var(--panel-strong);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--brand) 8%, transparent);
+}
+
+.rail-nav {
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 8px 12px;
+}
+
+.rail-section {
+  display: grid;
+  gap: 2px;
+  margin-top: 10px;
+}
+
+.rail-section:first-child {
+  margin-top: 0;
+}
+
+.rail-section-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px 4px;
+  color: color-mix(in oklch, var(--muted) 86%, var(--text));
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.rail-section-label small {
+  color: color-mix(in oklch, var(--muted) 66%, transparent);
+  font-size: 10.5px;
+  font-weight: 620;
+}
+
+.course-item,
+.document-item,
+.recent-item,
+.rail-footer button {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.course-item,
+.recent-item {
+  min-height: 36px;
+  display: grid;
+  align-items: center;
+  border-radius: 7px;
+}
+
+.course-item {
+  position: relative;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 0 34px 0 8px;
+}
+
+.course-item svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.course-item span,
+.recent-item span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.course-item small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.course-item:hover,
+.document-item:hover,
+.recent-item:hover,
+.rail-footer button:hover {
+  background: color-mix(in oklch, var(--secondary) 46%, transparent);
+}
+
+.course-item.active,
+.document-item.active {
+  background: color-mix(in oklch, var(--secondary) 58%, transparent);
+  color: var(--text-strong);
+}
+
+.course-item.active svg {
+  color: color-mix(in oklch, var(--brand) 60%, var(--muted));
+}
+
+.document-list {
+  display: grid;
+  gap: 2px;
+}
+
+.document-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 10px;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 5px 64px 5px 14px;
+  border-radius: 7px;
+}
+
+.recent-item {
+  position: relative;
+  padding-right: 64px;
+}
+
+.document-copy {
+  min-width: 0;
+}
+
+.document-copy strong,
+.document-copy span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-copy strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 560;
+  letter-spacing: 0;
+}
+
+.document-copy span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.document-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted) 54%, transparent);
+  justify-self: center;
+}
+
+.document-item.active .document-dot {
+  background: color-mix(in oklch, var(--brand) 76%, var(--muted));
+}
+
+.document-state {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+}
+
+.document-state.missing {
+  background: var(--destructive);
+}
+
+.rail-row-actions {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: opacity 120ms ease;
+}
+
+.rail-row-action {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--secondary) 72%, var(--background));
+  color: var(--muted);
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.rail-row-action svg {
+  width: 15px;
+  height: 15px;
+}
+
+.course-item:hover .rail-row-actions,
+.course-item:focus-within .rail-row-actions,
+.document-item:hover .rail-row-actions,
+.document-item:focus-within .rail-row-actions,
+.recent-item:hover .rail-row-actions,
+.recent-item:focus-within .rail-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.rail-row-action:hover {
+  background: color-mix(in oklch, var(--brand) 18%, var(--secondary));
+  color: color-mix(in oklch, var(--brand) 72%, var(--text));
+}
+
+.rail-delete-button:hover {
+  background: color-mix(in oklch, var(--destructive) 12%, var(--secondary));
+  color: var(--destructive);
+}
+
+.rail-empty {
+  padding: 12px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.recent-item {
+  position: relative;
+  padding: 0 34px 0 28px;
+}
+
+.rail-footer {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border-top: 1px solid color-mix(in oklch, var(--line) 58%, transparent);
+  background: color-mix(in oklch, var(--sidebar) 72%, var(--background));
+}
+
+.rail-footer button {
+  min-height: 40px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: 7px;
+}
+
+.rail-footer svg {
+  width: 17px;
+  height: 17px;
+  color: color-mix(in oklch, var(--text) 72%, var(--muted));
+}
+
+.rail-footer span {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.rail-footer small {
+  max-width: 110px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.course-dialog-overlay {
+  position: fixed;
+  z-index: 95;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: oklch(0.20 0.012 95 / 0.24);
+  backdrop-filter: blur(2px);
+}
+
+.course-dialog {
+  width: min(360px, calc(100vw - 36px));
+  padding: 18px;
+  border: 1px solid color-mix(in oklch, var(--line) 64%, transparent);
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--popover) 94%, white);
+  box-shadow: 0 20px 56px oklch(0.25 0.018 95 / 0.24);
+}
+
+.course-dialog h2 {
+  margin: 0 0 14px;
+  color: var(--text-strong);
+  font-size: 17px;
+  line-height: 1.25;
+  font-weight: 680;
+}
+
+.course-dialog input {
+  width: 100%;
+  height: 38px;
+  border: 1px solid color-mix(in oklch, var(--line) 68%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background) 82%, white);
+  color: var(--text);
+  padding: 0 10px;
+  font-size: 13px;
+  outline: 0;
+}
+
+.course-dialog input:focus {
+  border-color: color-mix(in oklch, var(--brand) 42%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--brand) 9%, transparent);
+}
+
+.course-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.course-dialog-actions button {
+  min-height: 32px;
+  border: 1px solid color-mix(in oklch, var(--line) 68%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background) 84%, white);
+  color: var(--text);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 580;
+}
+
+.course-dialog-actions button:last-child {
+  border-color: color-mix(in oklch, var(--brand) 66%, var(--line));
+  background: color-mix(in oklch, var(--brand) 90%, white);
+  color: var(--primary-foreground);
+}
+
+.course-dialog-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}

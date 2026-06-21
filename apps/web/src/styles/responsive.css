@@ -1,0 +1,271 @@
+/* Final refinements, scrollbar, compact, media queries */
+
+.aui-composer-root {
+  min-height: var(--chat-composer-min-height);
+  border-radius: var(--radius-composer);
+}
+
+.aui-composer-input {
+  min-height: 68px;
+}
+
+.aui-composer-root:focus-within,
+:root[data-pagepair-resolved-theme="dark"] .aui-composer-root:focus-within {
+  border-color: var(--pp-accent-border);
+  box-shadow: var(--pp-ring), var(--pp-shadow-inset);
+}
+
+.primary-button,
+.composer-send {
+  background: linear-gradient(180deg, var(--pp-accent-hover), var(--pp-accent-active));
+}
+
+.primary-button:hover,
+.composer-send:hover {
+  background: linear-gradient(180deg, color-mix(in oklch, var(--pp-accent-hover) 92%, white), var(--pp-accent));
+}
+
+.settings-dialog {
+  box-shadow: var(--pp-shadow-md);
+}
+
+.app-shell[data-scrollbar-style="subtle"] *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.app-shell[data-scrollbar-style="subtle"] *::-webkit-scrollbar-thumb {
+  border-width: 2px;
+  background: color-mix(in oklch, var(--muted-soft) 24%, transparent);
+  background-clip: padding-box;
+}
+
+.app-shell[data-scrollbar-style="native"] *::-webkit-scrollbar {
+  width: auto;
+  height: auto;
+}
+
+.app-shell[data-scrollbar-style="native"] *::-webkit-scrollbar-thumb {
+  border: initial;
+  background: initial;
+}
+
+.compact-mode .topbar {
+  padding-block: 7px;
+}
+
+.compact-mode .pane-toolbar,
+.compact-mode .agent-toolbar {
+  min-height: 46px;
+  padding-block: 7px;
+}
+
+.compact-mode .notes-content {
+  padding: 18px 20px 22px;
+}
+
+.compact-mode .aui-thread-inner {
+  padding: 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-skeleton-line {
+    animation: none;
+    background-position: 0 0;
+    opacity: 0.62;
+  }
+
+  .composer-send,
+  .mini-button,
+  :where(
+    button,
+    input,
+    select,
+    textarea,
+    [role="button"],
+    .settings-nav-item,
+    .settings-switch,
+    .settings-close
+  ) {
+    transition: none;
+  }
+
+  .composer-send:hover {
+    transform: none;
+  }
+}
+
+@media (max-width: 1180px) {
+  body {
+    overflow: auto;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  .topbar-page-nav {
+    position: static;
+    order: 3;
+    transform: none;
+  }
+
+  .app-shell {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .workspace {
+    height: auto;
+    min-height: 0;
+    padding: 0 12px 12px;
+  }
+
+  .workspace-panels {
+    height: auto;
+    min-height: 0;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .workspace-panel {
+    width: 100% !important;
+    min-height: 420px;
+    flex: none !important;
+    overflow: hidden;
+    border: 1px solid color-mix(in oklch, var(--line) 74%, transparent);
+    border-radius: 8px;
+    background: color-mix(in oklch, var(--background) 88%, white);
+  }
+
+  .workspace-panel[hidden] {
+    display: none !important;
+  }
+
+  .workspace-resize-handle {
+    display: none;
+  }
+
+  .pdf-focus .workspace-panel {
+    min-height: calc(100vh - 170px);
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .app-shell[data-debug-mode="true"] {
+    grid-template-rows: auto auto minmax(0, 1fr) 34px;
+  }
+
+  .app-shell[data-fullscreen-mode="true"] {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 12px;
+  }
+
+  .brand,
+  .topbar-actions {
+    width: 100%;
+  }
+
+  .topbar-actions {
+    flex-wrap: wrap;
+  }
+
+  .oauth-device-panel {
+    top: 138px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    padding: 14px;
+  }
+
+  .oauth-code-display {
+    gap: 6px;
+  }
+
+  .oauth-code-group {
+    gap: 5px;
+  }
+
+  .oauth-code-cell {
+    width: clamp(28px, 7.5vw, 39px);
+    height: 44px;
+    font-size: 20px;
+  }
+
+  .oauth-device-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-dialog {
+    width: min(100vw - 24px, 560px);
+    height: min(100vh - 24px, 760px);
+    grid-template-columns: 1fr;
+  }
+
+  .settings-sidebar {
+    grid-template-rows: auto auto;
+    gap: 10px;
+    padding: 12px;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in oklch, var(--line) 70%, transparent);
+  }
+
+  .settings-nav {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+  }
+
+  .settings-nav-item {
+    width: auto;
+    min-width: max-content;
+    height: 36px;
+    grid-template-columns: 18px auto;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  .settings-content-header {
+    padding: 18px 18px 14px;
+  }
+
+  .settings-panel {
+    padding: 12px 18px 20px;
+  }
+
+  .settings-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    min-height: 0;
+  }
+
+  .settings-row-control {
+    justify-content: flex-start;
+  }
+
+  .settings-status-value {
+    text-align: left;
+  }
+
+  .slide-preview {
+    padding: 24px;
+  }
+
+  .slide-preview h2 {
+    font-size: 26px;
+  }
+}
