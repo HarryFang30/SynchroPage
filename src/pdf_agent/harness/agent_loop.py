@@ -52,7 +52,7 @@ class CoursePdfHarness:
         """Start a run in the background and return its run id immediately."""
         await self.ports.policy.assert_can_start_run(input)
         run_id, signal = await self.ports.runs.create(input)
-        self.ports.progress.emit({"type": "run_started", "runId": run_id, "workflowName": "course_pdf_pairpack"})
+        self.ports.progress.emit({"type": "run_started", "runId": run_id, "workflowName": "course_pdf_synchropage"})
         asyncio.create_task(self._run_lifecycle(run_id, signal, input, raise_errors=False))
         return run_id
 
@@ -60,7 +60,7 @@ class CoursePdfHarness:
         """Run synchronously. Useful for queue workers and tests."""
         await self.ports.policy.assert_can_start_run(input)
         run_id, signal = await self.ports.runs.create(input)
-        self.ports.progress.emit({"type": "run_started", "runId": run_id, "workflowName": "course_pdf_pairpack"})
+        self.ports.progress.emit({"type": "run_started", "runId": run_id, "workflowName": "course_pdf_synchropage"})
         await self._run_lifecycle(run_id, signal, input, raise_errors=True)
         return run_id
 

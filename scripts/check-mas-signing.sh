@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:---dist}"
-APP_STORE_PROFILE="${PAGEPAIR_MAS_PROFILE:-$ROOT_DIR/apps/desktop/profiles/SynchroPage_AppStore.provisionprofile}"
-DEV_PROFILE="${PAGEPAIR_MAS_DEV_PROFILE:-$ROOT_DIR/apps/desktop/profiles/SynchroPage_Development.provisionprofile}"
+APP_STORE_PROFILE="${SYNCHROPAGE_MAS_PROFILE:-$ROOT_DIR/apps/desktop/profiles/SynchroPage_AppStore.provisionprofile}"
+DEV_PROFILE="${SYNCHROPAGE_MAS_DEV_PROFILE:-$ROOT_DIR/apps/desktop/profiles/SynchroPage_Development.provisionprofile}"
 
 if [[ "$MODE" != "--dist" && "$MODE" != "--dev" ]]; then
   echo "Usage: $0 [--dist|--dev]" >&2
@@ -63,8 +63,8 @@ Prepare signing assets:
   4. Re-run the MAS command.
 
 For a custom profile path, set:
-  PAGEPAIR_MAS_PROFILE=/path/to/AppStore.provisionprofile
-  PAGEPAIR_MAS_DEV_PROFILE=/path/to/Development.provisionprofile
+  SYNCHROPAGE_MAS_PROFILE=/path/to/AppStore.provisionprofile
+  SYNCHROPAGE_MAS_DEV_PROFILE=/path/to/Development.provisionprofile
 EOF
   exit 1
 fi

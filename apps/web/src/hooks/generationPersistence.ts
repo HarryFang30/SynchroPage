@@ -8,7 +8,7 @@ import {
 import {
   saveGeneratedPage,
 } from "../lib/persistence";
-import { asPersistedRecord } from "../lib/workspace/pagePairState";
+import { asPersistedRecord } from "../lib/workspace/synchroPageState";
 import type { PageData, PagePack, TeachingGenerationQualityPlan } from "../lib/generation/teachingGeneration";
 
 // ── Single page persistence ───────────────────────────────────

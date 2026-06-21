@@ -10,8 +10,8 @@ from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATHS = {
-    "lecture_pairpack.v1": ROOT / "contracts/schemas/lecture_pairpack/v1.schema.json",
-    "lecture_pairpack.page_batch.v1": ROOT / "contracts/schemas/lecture_pairpack/page_batch.v1.schema.json",
+    "synchropage.lecture.v1": ROOT / "contracts/schemas/synchropage_lecture/v1.schema.json",
+    "synchropage.lecture.page_batch.v1": ROOT / "contracts/schemas/synchropage_lecture/page_batch.v1.schema.json",
 }
 
 
@@ -40,7 +40,7 @@ def main() -> int:
         validated_examples += 1
 
     if validated_examples < len(SCHEMA_PATHS):
-        raise SystemExit("No example JSON document was validated for every lecture_pairpack schema")
+        raise SystemExit("No example JSON document was validated for every synchropage_lecture schema")
 
     print(
         "validated "

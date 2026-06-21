@@ -1,5 +1,5 @@
 {
-  "schema": "lecture_pairpack.v1",
+  "schema": "synchropage.lecture.v1",
   "document": {
     "id": "sample-course",
     "title": "Sample Course PDF",

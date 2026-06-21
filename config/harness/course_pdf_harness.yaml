@@ -11,7 +11,7 @@ model:
     browser_never_receives_model_secret: true
 
 workflow:
-  name: "course_pdf_pairpack"
+  name: "course_pdf_synchropage"
   phases:
     - id: "planning"
       agent_role: "document_planner"

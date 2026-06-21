@@ -1,7 +1,7 @@
 version: "course-agent.prompt.v1"
 default_model: "gpt-5.5"
 api_surface: "responses"
-primary_output_schema: "lecture_pairpack.v1"
+primary_output_schema: "synchropage.lecture.v1"
 
 runtime_policy:
   max_pages_per_generation_call: 5
@@ -24,7 +24,7 @@ runtime_policy:
 
 harness:
   config_file: "config/harness/course_pdf_harness.yaml"
-  workflow_file: "docs/workflows/course-pdf-pairpack.md"
+  workflow_file: "docs/workflows/course-pdf-synchropage.md"
   event_stream: "sse"
   run_store: "postgres_or_sqlite"
   journal_store: "jsonl_or_database"
@@ -129,7 +129,7 @@ page_teaching_prompt: |
   8. evidence 必须引用当前页可见信息，例如标题、关键词、公式、图注或表头。
   9. confidence 低于 0.78 时必须设置 needs_review: true。
 
-  输出必须符合 lecture_pairpack.page_batch.v1 schema。
+  输出必须符合 synchropage.lecture.page_batch.v1 schema。
 
 reviewer_prompt: |
   任务：审查 Page Teaching Agent 的输出是否稳定、可信、页级对齐。
@@ -165,7 +165,7 @@ repair_prompt: |
   1. 保留 page_no。
   2. 只修复 reviewer 指出的缺陷。
   3. 如果无法从 PDF 或 Page JSON 获得证据，不要补编内容，设置 needs_parser_fallback: true。
-  4. 输出同样必须符合 lecture_pairpack.page.v1 schema。
+  4. 输出同样必须符合 synchropage.lecture.page.v1 schema。
 
 ui_summary_prompt: |
   任务：为前端右侧栏生成短标题和预览摘要。

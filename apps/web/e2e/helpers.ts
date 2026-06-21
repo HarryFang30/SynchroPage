@@ -3,8 +3,8 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 
-export const DB_NAME = "pagepair-reader";
-export const LS_KEYS = ["pagepair.lastWorkspaceId.v1", "pagepair.uiPreferences.v1"];
+export const DB_NAME = "synchropage-reader";
+export const LS_KEYS = ["synchropage.lastWorkspaceId.v1", "synchropage.uiPreferences.v1"];
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

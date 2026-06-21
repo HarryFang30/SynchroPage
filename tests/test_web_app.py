@@ -146,11 +146,11 @@ class WebAppTest(unittest.TestCase):
         )
 
         self.assertEqual(payload["model"], "gpt-5.5")
-        self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_1:"))
+        self.assertTrue(str(payload["prompt_cache_key"]).startswith("synchropage:doc_1:"))
         self.assertEqual(payload["prompt_cache_retention"], "24h")
         content = payload["input"][0]["content"]
         self.assertEqual(content[0]["type"], "input_text")
-        self.assertIn("PAGEPAIR CACHEABLE DOCUMENT CONTEXT", content[0]["text"])
+        self.assertIn("SYNCHROPAGE CACHEABLE DOCUMENT CONTEXT", content[0]["text"])
         self.assertIn("truncated_context: no", content[0]["text"])
         self.assertIn("[p.1] Intro", content[0]["text"])
         self.assertIn("[p.3] Eigenvectors", content[0]["text"])
@@ -287,10 +287,10 @@ class WebAppTest(unittest.TestCase):
 
         self.assertEqual(payload["model"], "gpt-5.5")
         self.assertEqual(payload["prompt_cache_retention"], "24h")
-        self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_1:"))
+        self.assertTrue(str(payload["prompt_cache_key"]).startswith("synchropage:doc_1:"))
         content = payload["input"][0]["content"]
         self.assertEqual(content[0]["type"], "input_text")
-        self.assertIn("PAGEPAIR CACHEABLE DOCUMENT CONTEXT", content[0]["text"])
+        self.assertIn("SYNCHROPAGE CACHEABLE DOCUMENT CONTEXT", content[0]["text"])
         self.assertIn("[p.1] Intro", content[0]["text"])
         self.assertIn("[p.2] Enable", content[0]["text"])
         self.assertEqual(content[1]["type"], "input_file")
@@ -327,11 +327,11 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("Generate SynchroPage teaching notes", payload["instructions"])
         content = payload["input"][0]["content"]
         self.assertEqual(content[0]["type"], "input_text")
-        self.assertIn("PAGEPAIR CACHEABLE DOCUMENT CONTEXT", content[0]["text"])
+        self.assertIn("SYNCHROPAGE CACHEABLE DOCUMENT CONTEXT", content[0]["text"])
         self.assertIn("[p.1] Intro", content[0]["text"])
         self.assertEqual(content[1]["type"], "input_text")
         self.assertIn("Pages JSONL:", content[1]["text"])
-        self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_1:"))
+        self.assertTrue(str(payload["prompt_cache_key"]).startswith("synchropage:doc_1:"))
         self.assertEqual(payload["prompt_cache_retention"], "24h")
 
     def test_teaching_generation_candidate_bodies_try_fast_model_then_fallback(self) -> None:
@@ -427,19 +427,19 @@ class WebAppTest(unittest.TestCase):
 
         content = payload["input"][0]["content"]
         self.assertFalse(any(part.get("type") == "input_file" for part in content))
-        self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_long:"))
+        self.assertTrue(str(payload["prompt_cache_key"]).startswith("synchropage:doc_long:"))
 
     def test_without_file_input_preserves_cache_context_and_prompt(self) -> None:
         payload = {
             "model": "gpt-5.5",
-            "prompt_cache_key": "pagepair:doc:abc",
+            "prompt_cache_key": "synchropage:doc:abc",
             "input": [
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "input_text",
-                            "text": "PAGEPAIR CACHEABLE DOCUMENT CONTEXT\n\n[p.1] Intro",
+                            "text": "SYNCHROPAGE CACHEABLE DOCUMENT CONTEXT\n\n[p.1] Intro",
                         },
                         {
                             "type": "input_file",
@@ -456,7 +456,7 @@ class WebAppTest(unittest.TestCase):
 
         content = fallback["input"][0]["content"]
         self.assertEqual([part["type"] for part in content], ["input_text", "input_text"])
-        self.assertTrue(content[0]["text"].startswith("PAGEPAIR CACHEABLE DOCUMENT CONTEXT"))
+        self.assertTrue(content[0]["text"].startswith("SYNCHROPAGE CACHEABLE DOCUMENT CONTEXT"))
         self.assertEqual(content[1]["text"], "User question")
         self.assertIn("prompt_cache_key", fallback)
 
@@ -661,7 +661,7 @@ class WebAppTest(unittest.TestCase):
             default_model="fallback",
         )
 
-        self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_balanced:"))
+        self.assertTrue(str(payload["prompt_cache_key"]).startswith("synchropage:doc_balanced:"))
         self.assertEqual(payload["prompt_cache_retention"], "24h")
 
     def test_agent_and_teaching_share_document_cache_prefix(self) -> None:
@@ -749,7 +749,7 @@ class WebAppTest(unittest.TestCase):
 
         self.assertEqual(payload_a["prompt_cache_key"], payload_b["prompt_cache_key"])
         self.assertEqual(prefix_a, prefix_b)
-        self.assertIn("cache_version: pagepair.document-prefix.v2", prefix_a)
+        self.assertIn("cache_version: synchropage.document-prefix.v1", prefix_a)
         self.assertLess(prefix_a.index("[p.1] First"), prefix_a.index("[p.2] Second"))
 
     def test_generated_page_normalizes_mixed_language_latex_ranges(self) -> None:

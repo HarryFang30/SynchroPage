@@ -34,7 +34,7 @@ export function createDraftPagePack(
 ): PagePack {
   const safeCount = Math.max(1, Math.floor(pageCount) || 1);
   return {
-    schema: "lecture_pairpack.v1",
+    schema: "synchropage.lecture.v1",
     document: {
       id: documentId,
       title,
@@ -84,7 +84,7 @@ export function pagePackFromPersistence(
   if (rawPages.length) {
     return normalizePack(
       {
-        schema: "lecture_pairpack.v1",
+        schema: "synchropage.lecture.v1",
         document: {
           id: document.id,
           title: documentTitle,
@@ -193,7 +193,7 @@ export function normalizePack(raw: unknown, copy: AppCopy): PagePack {
   if (!Array.isArray(pages)) throw new Error(copy.errors.jsonNeedsPages);
 
   return {
-    schema: source.schema || "lecture_pairpack.v1",
+    schema: source.schema || "synchropage.lecture.v1",
     document: {
       id: source.document?.id || "imported_document",
       title: source.document?.title || source.title || copy.errors.importedDocument,

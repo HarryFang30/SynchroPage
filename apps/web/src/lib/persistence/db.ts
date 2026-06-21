@@ -24,7 +24,7 @@ class SynchroPagePersistenceDb extends Dexie {
   settings!: Table<SettingsRecord, string>;
 
   constructor() {
-    super("pagepair-reader", { chromeTransactionDurability: "strict" });
+    super("synchropage-reader", { chromeTransactionDurability: "strict" });
 
     this.version(1).stores({
       workspaces: "id, updatedAt, lastOpenedAt, activeDocumentId, activeThreadId",

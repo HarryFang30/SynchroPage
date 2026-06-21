@@ -145,7 +145,7 @@ import {
   type GeneratePageMode,
   type PanelKey,
   type PanelVisibility,
-} from "./lib/workspace/pagePairState";
+} from "./lib/workspace/synchroPageState";
 import {
   AppCopyContext,
   useAppCopy,
@@ -194,7 +194,7 @@ const defaultPanelVisibility: PanelVisibility = {
 };
 
 const samplePack: PagePack = {
-  schema: "lecture_pairpack.v1",
+  schema: "synchropage.lecture.v1",
   document: {
     id: "demo_course_pdf",
     title: "课程 PDF 逐页讲解",
@@ -234,7 +234,7 @@ const samplePack: PagePack = {
         output_language: "zh-CN",
         slide_title: "最优技术路径",
         speaker_notes_md:
-          "## 最优技术路径\n\n解析层使用 Docling 或 PyMuPDF 生成稳定 Page JSON；生成层通过 OpenAI Gateway 调用 Responses API；展示层读取 lecture_pairpack.v1.json。\n\n### 讲课口径\n\n- 解析和生成分离，避免把整份 PDF 直接塞给模型。\n- OpenAI Gateway 是唯一模型入口，前端只关心任务状态和结果数据。\n- 如果遇到扫描件或公式密集页，再通过 fallback 路由切换 OCR 或专业解析器。",
+          "## 最优技术路径\n\n解析层使用 Docling 或 PyMuPDF 生成稳定 Page JSON；生成层通过 OpenAI Gateway 调用 Responses API；展示层读取 synchropage.lecture.v1.json。\n\n### 讲课口径\n\n- 解析和生成分离，避免把整份 PDF 直接塞给模型。\n- OpenAI Gateway 是唯一模型入口，前端只关心任务状态和结果数据。\n- 如果遇到扫描件或公式密集页，再通过 fallback 路由切换 OCR 或专业解析器。",
         concepts: ["OpenAI Gateway", "Docling", "PyMuPDF", "Structured Outputs"],
         visual_explanations: ["流程图应突出 parser、generator、validator 三个边界。"],
         prerequisites: ["已确认不生成讲解 PDF"],
@@ -266,7 +266,7 @@ const samplePack: PagePack = {
 };
 
 const englishSamplePack: PagePack = {
-  schema: "lecture_pairpack.v1",
+  schema: "synchropage.lecture.v1",
   document: {
     id: "demo_course_pdf",
     title: "Course PDF Page-by-Page Notes",
@@ -306,7 +306,7 @@ const englishSamplePack: PagePack = {
         output_language: "en-US",
         slide_title: "Recommended Technical Path",
         speaker_notes_md:
-          "## Recommended Technical Path\n\nUse Docling or PyMuPDF in the parsing layer to generate stable Page JSON; use OpenAI Gateway and the Responses API in the generation layer; render lecture_pairpack.v1.json in the web layer.\n\n### Teaching Line\n\n- Keep parsing and generation separate instead of sending the full PDF directly to the model.\n- Treat OpenAI Gateway as the only model entry point, while the frontend only tracks task status and result data.\n- For scanned or formula-heavy pages, route through OCR or a specialized parser fallback.",
+          "## Recommended Technical Path\n\nUse Docling or PyMuPDF in the parsing layer to generate stable Page JSON; use OpenAI Gateway and the Responses API in the generation layer; render synchropage.lecture.v1.json in the web layer.\n\n### Teaching Line\n\n- Keep parsing and generation separate instead of sending the full PDF directly to the model.\n- Treat OpenAI Gateway as the only model entry point, while the frontend only tracks task status and result data.\n- For scanned or formula-heavy pages, route through OCR or a specialized parser fallback.",
         concepts: ["OpenAI Gateway", "Docling", "PyMuPDF", "Structured Outputs"],
         visual_explanations: ["The flow diagram should emphasize the parser, generator, and validator boundaries."],
         prerequisites: ["The team has confirmed it will not generate a notes PDF"],
@@ -1329,7 +1329,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${pack.document.id || "lecture"}-pairpack.json`;
+    link.download = `${pack.document.id || "lecture"}-synchropage.json`;
     document.body.appendChild(link);
     link.click();
     link.remove();

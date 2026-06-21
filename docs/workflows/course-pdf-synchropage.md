@@ -1,4 +1,4 @@
-# Course PDF PairPack Workflow
+# Course PDF SynchroPage Lecture Workflow
 
 这是 harness 的规范流程。实现时可以由 FastAPI worker、队列任务或本地 CLI 调用。
 
@@ -24,7 +24,7 @@
 
 必须：
 
-- 使用 `lecture_pairpack.page_batch.v1` schema。
+- 使用 `synchropage.lecture.page_batch.v1` schema。
 - 拒绝非 target pages 的输出。
 - 每页必须有 evidence。
 - 失败页标记 `needs_review`，继续其他页面。
@@ -55,7 +55,7 @@
 
 持久化：
 
-- `lecture_pairpack.v1.json`
+- `synchropage.lecture.v1.json`
 - page thumbnails
 - journal
 - event log

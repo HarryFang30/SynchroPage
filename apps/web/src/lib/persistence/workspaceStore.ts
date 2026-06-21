@@ -1204,8 +1204,8 @@ export async function exportWorkspace(workspaceId: string): Promise<ExportedWork
       .map((record) => [record.id, record.hash]),
   );
   return {
-    schema: "pagepair.workspace.export.v1",
-    app: "pagepair-reader",
+    schema: "synchropage.workspace.export.v1",
+    app: "synchropage-reader",
     schemaVersion: persistenceSchemaVersion,
     exportedAt: Date.now(),
     counts: {
@@ -1291,7 +1291,7 @@ export async function importWorkspace(payload: ExportedWorkspace) {
 
 function validateWorkspaceExportPayload(payload: ExportedWorkspace) {
   assertExport(Boolean(payload && typeof payload === "object"), "corrupt_export", "Invalid workspace export");
-  assertExport(payload.schema === "pagepair.workspace.export.v1", "corrupt_export", "Unsupported workspace export");
+  assertExport(payload.schema === "synchropage.workspace.export.v1", "corrupt_export", "Unsupported workspace export");
   assertExport(Boolean(payload.workspace?.id), "validation", "Workspace export is missing a workspace id");
   if (!Array.isArray(payload.courseProjects)) payload.courseProjects = [];
   assertExport(Array.isArray(payload.documents), "validation", "Workspace export documents must be an array");

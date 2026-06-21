@@ -69,8 +69,8 @@ PDF_FILE_CACHE_MAX_ENTRIES = 8
 PDF_FILE_CACHE_MAX_BYTES = 240_000_000
 PDF_FILE_SUBSET_CACHE_MAX_ENTRIES = 64
 PDF_FILE_SUBSET_CACHE_MAX_BYTES = 120_000_000
-PROMPT_CACHE_VERSION = "pagepair.prompt-cache.v2"
-DOCUMENT_CACHE_PREFIX_VERSION = "pagepair.document-prefix.v2"
+PROMPT_CACHE_VERSION = "synchropage.prompt-cache.v1"
+DOCUMENT_CACHE_PREFIX_VERSION = "synchropage.document-prefix.v1"
 TEACHING_API_CONCURRENCY = 6
 AGENT_RETRY_DELAYS_SECONDS = (0.75, 2.0)
 TEACHING_RETRY_DELAYS_SECONDS = (0.5, 1.5, 3.0)
@@ -84,12 +84,12 @@ _PDF_FILE_SUBSET_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _PDF_FILE_SUBSET_CACHE_BYTES = 0
 LOGGER = logging.getLogger("pdf_agent.server.web_app")
 
-PAGEPAIR_SHARED_INSTRUCTIONS = """You are the model backend for SynchroPage.
+SYNCHROPAGE_SHARED_INSTRUCTIONS = """You are the model backend for SynchroPage.
 Use the provided PDF/page context, selected text, formulas, images, and task-specific instructions as primary evidence.
 Preserve LaTeX formulas, cite page numbers when available, and do not invent facts that are not supported by the provided source material.
 Follow the task-specific instructions included in each request, including any required output format."""
 
-PAGEPAIR_FAST_TEACHING_INSTRUCTIONS = (
+SYNCHROPAGE_FAST_TEACHING_INSTRUCTIONS = (
     "Generate SynchroPage teaching notes from the compact document context and provided page source. "
     "Return strict JSON only, preserve technical tokens/LaTeX, and do not invent unsupported facts."
 )
@@ -232,13 +232,13 @@ class AgentChatGateway:
                         raise
                     fallback_payload = _without_prompt_cache(fallback_payload)
                     text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
-                    fallback_payload["_pagepair_cache_fallback_without_fields"] = True
-                fallback_payload["_pagepair_file_fallback_without_input_file"] = True
+                    fallback_payload["_synchropage_cache_fallback_without_fields"] = True
+                fallback_payload["_synchropage_file_fallback_without_input_file"] = True
                 return text, content_type, fallback_payload
             if _should_retry_without_prompt_cache(exc, payload):
                 fallback_payload = _without_prompt_cache(payload)
                 text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
-                fallback_payload["_pagepair_cache_fallback_without_fields"] = True
+                fallback_payload["_synchropage_cache_fallback_without_fields"] = True
                 return text, content_type, fallback_payload
             raise
 
@@ -389,13 +389,13 @@ class TeachingGenerationGateway:
                         raise
                     fallback_payload = _without_prompt_cache(fallback_payload)
                     text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
-                    fallback_payload["_pagepair_cache_fallback_without_fields"] = True
-                fallback_payload["_pagepair_file_fallback_without_input_file"] = True
+                    fallback_payload["_synchropage_cache_fallback_without_fields"] = True
+                fallback_payload["_synchropage_file_fallback_without_input_file"] = True
                 return text, content_type, fallback_payload
             if _should_retry_without_prompt_cache(exc, payload):
                 fallback_payload = _without_prompt_cache(payload)
                 text, content_type = await self._post_responses_with_retries(url, fallback_payload, headers)
-                fallback_payload["_pagepair_cache_fallback_without_fields"] = True
+                fallback_payload["_synchropage_cache_fallback_without_fields"] = True
                 return text, content_type, fallback_payload
             raise
 
@@ -688,7 +688,7 @@ def _build_responses_payload(body: Mapping[str, Any], *, default_model: str) -> 
         content.append({"type": "input_image", "image_url": image["data_url"]})
     payload: dict[str, Any] = {
         "model": model,
-        "instructions": PAGEPAIR_SHARED_INSTRUCTIONS,
+        "instructions": SYNCHROPAGE_SHARED_INSTRUCTIONS,
         "input": [{"role": "user", "content": content}],
         "reasoning": {"effort": _reasoning_effort(body)},
     }
@@ -717,7 +717,7 @@ def _build_teaching_generation_payload(body: Mapping[str, Any], *, default_model
 
 
 def _teaching_payload_instructions(body: Mapping[str, Any]) -> str:
-    return PAGEPAIR_FAST_TEACHING_INSTRUCTIONS if _is_fast_teaching_generation(body) else PAGEPAIR_SHARED_INSTRUCTIONS
+    return SYNCHROPAGE_FAST_TEACHING_INSTRUCTIONS if _is_fast_teaching_generation(body) else SYNCHROPAGE_SHARED_INSTRUCTIONS
 
 
 def _build_teaching_codex_responses_payload(body: Mapping[str, Any], default_model: str) -> dict[str, Any]:
@@ -1132,7 +1132,7 @@ def _build_document_cache_prefix(body: Mapping[str, Any]) -> str:
     if not context["pages"]:
         return ""
     chunks = [
-        "PAGEPAIR CACHEABLE DOCUMENT CONTEXT",
+        "SYNCHROPAGE CACHEABLE DOCUMENT CONTEXT",
         f"cache_version: {context['cacheVersion']}",
         "This section is intentionally identical for repeated requests for this PDF so prompt caching can reuse it.",
         "Use this compact document context to understand course structure, symbols, terminology, and cross-page dependencies.",
@@ -1513,8 +1513,8 @@ def _prompt_cache_metadata(
         "prompt_cache_retention": payload.get("prompt_cache_retention"),
         "prefix_hash": _sha256_text(prefix)[:24] if prefix else None,
         "prefix_chars": len(prefix),
-        "fallback_without_cache": bool(payload.get("_pagepair_cache_fallback_without_fields")),
-        "fallback_without_file_input": bool(payload.get("_pagepair_file_fallback_without_input_file")),
+        "fallback_without_cache": bool(payload.get("_synchropage_cache_fallback_without_fields")),
+        "fallback_without_file_input": bool(payload.get("_synchropage_file_fallback_without_input_file")),
     }
     if response_text is not None:
         usage = _extract_prompt_cache_usage(response_text, content_type)
@@ -1537,7 +1537,7 @@ def _payload_document_cache_prefix(payload: Mapping[str, Any]) -> str:
     if not isinstance(first_part, Mapping) or first_part.get("type") != "input_text":
         return ""
     text = str(first_part.get("text") or "")
-    return text if text.startswith("PAGEPAIR CACHEABLE DOCUMENT CONTEXT") else ""
+    return text if text.startswith("SYNCHROPAGE CACHEABLE DOCUMENT CONTEXT") else ""
 
 
 def _prompt_cache_key(body: Mapping[str, Any]) -> str:
@@ -1553,7 +1553,7 @@ def _prompt_cache_key(body: Mapping[str, Any]) -> str:
     }
     serialized = json.dumps(stable_context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = _sha256_text(serialized)
-    return f"pagepair:{document_id}:{_cache_key_part(digest)[:32]}"
+    return f"synchropage:{document_id}:{_cache_key_part(digest)[:32]}"
 
 
 def _sha256_text(value: str) -> str:

@@ -1,7 +1,7 @@
 import type { AppCopy } from "../../i18n";
 import type { AgentContextItem } from "../../lib/assistant/agentChatAdapter";
 import type { SelectedContext } from "../../hooks/usePageSelection";
-import { compactText } from "../../lib/workspace/pagePairState";
+import { compactText } from "../../lib/workspace/synchroPageState";
 
 export function contextSourceLabel(context: AgentContextItem, copy: AppCopy) {
   if (context.type === "formula") return copy.agent.contextFormula(context.page_no);

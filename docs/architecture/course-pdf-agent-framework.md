@@ -33,7 +33,7 @@
 - [src/pdf_agent/harness/policy.py](/Users/harry/SynchroPage/src/pdf_agent/harness/policy.py)
 - [src/pdf_agent/harness/session_store.py](/Users/harry/SynchroPage/src/pdf_agent/harness/session_store.py)
 - [config/harness/course_pdf_harness.yaml](/Users/harry/SynchroPage/config/harness/course_pdf_harness.yaml)
-- [docs/workflows/course-pdf-pairpack.md](/Users/harry/SynchroPage/docs/workflows/course-pdf-pairpack.md)
+- [docs/workflows/course-pdf-synchropage.md](/Users/harry/SynchroPage/docs/workflows/course-pdf-synchropage.md)
 
 ## 为什么不是单次大 Prompt
 
@@ -76,7 +76,7 @@ flowchart LR
 - 模型：`gpt-5.5` 或成本更低的同族模型
 - API：Batch API
 - 输入：按页或按章节拆分的 requests
-- 输出：`lecture_pairpack.v1.jsonl`
+- 输出：`synchropage.lecture.v1.jsonl`
 - 用途：整门课程、夜间批量任务、大文件
 
 ## OpenAI OAuth Gateway
@@ -121,7 +121,7 @@ flowchart LR
 
 主产物仍然是：
 
-**`lecture_pairpack.v1.json`**
+**`synchropage.lecture.v1.json`**
 
 它比讲解 PDF 更适合 Agent 框架，因为它支持：
 
@@ -135,8 +135,8 @@ flowchart LR
 
 - Prompt 配置：[config/prompts/course_agent.prompt.yaml](/Users/harry/SynchroPage/config/prompts/course_agent.prompt.yaml)
 - Harness 配置：[config/harness/course_pdf_harness.yaml](/Users/harry/SynchroPage/config/harness/course_pdf_harness.yaml)
-- 输出 Schema：[contracts/schemas/lecture_pairpack/v1.schema.json](/Users/harry/SynchroPage/contracts/schemas/lecture_pairpack/v1.schema.json)
-- 页级批处理 Schema：[contracts/schemas/lecture_pairpack/page_batch.v1.schema.json](/Users/harry/SynchroPage/contracts/schemas/lecture_pairpack/page_batch.v1.schema.json)
+- 输出 Schema：[contracts/schemas/synchropage_lecture/v1.schema.json](/Users/harry/SynchroPage/contracts/schemas/synchropage_lecture/v1.schema.json)
+- 页级批处理 Schema：[contracts/schemas/synchropage_lecture/page_batch.v1.schema.json](/Users/harry/SynchroPage/contracts/schemas/synchropage_lecture/page_batch.v1.schema.json)
 - GPT-5.5 PDF 请求示例：[examples/openai/gpt55_responses_pdf_request.json](/Users/harry/SynchroPage/examples/openai/gpt55_responses_pdf_request.json)
 
 ## 官方资料依据

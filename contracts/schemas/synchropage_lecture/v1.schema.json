@@ -1,31 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.local/schemas/lecture_pairpack.page_batch.v1.schema.json",
-  "title": "Lecture PairPack Page Batch",
+  "$id": "https://example.local/schemas/synchropage.lecture.v1.schema.json",
+  "title": "SynchroPage Lecture",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "document_id", "target_pages", "pages"],
+  "required": ["schema", "document", "pages"],
   "properties": {
     "schema": {
-      "const": "lecture_pairpack.page_batch.v1"
+      "const": "synchropage.lecture.v1"
     },
-    "document_id": {
-      "type": "string"
-    },
-    "target_pages": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "integer",
-        "minimum": 1
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "page_count"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "source_pdf_url": { "type": "string" },
+        "page_count": { "type": "integer", "minimum": 0 },
+        "prompt_version": { "type": "string" },
+        "model": { "type": "string" }
       }
     },
     "pages": {
       "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/page"
-      }
+      "items": { "$ref": "#/$defs/page" }
     }
   },
   "$defs": {
@@ -41,7 +40,7 @@
         "source": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["pdf_page_ref", "text_md", "ocr_used", "parser", "page_type"],
+          "required": ["pdf_page_ref", "text_md", "ocr_used", "parser"],
           "properties": {
             "pdf_page_ref": { "type": "string" },
             "text_md": { "type": "string" },
@@ -60,8 +59,6 @@
             "slide_title",
             "speaker_notes_md",
             "concepts",
-            "prerequisites",
-            "contextual_bridge",
             "visual_explanations",
             "formula_explanations",
             "evidence",
@@ -124,3 +121,4 @@
     }
   }
 }
+

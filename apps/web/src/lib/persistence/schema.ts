@@ -1,7 +1,7 @@
 import type { UiPreferences } from "../../settings";
 
 export const persistenceSchemaVersion = 3;
-export const lastWorkspaceStorageKey = "pagepair.lastWorkspaceId.v1";
+export const lastWorkspaceStorageKey = "synchropage.lastWorkspaceId.v1";
 
 export type PersistedJson = Record<string, unknown>;
 
@@ -199,8 +199,8 @@ export type WorkspaceExportIntegrity = {
 };
 
 export type ExportedWorkspace = {
-  schema: "pagepair.workspace.export.v1";
-  app: "pagepair-reader";
+  schema: "synchropage.workspace.export.v1";
+  app: "synchropage-reader";
   schemaVersion: number;
   exportedAt: number;
   counts: WorkspaceExportCounts;

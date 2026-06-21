@@ -6,7 +6,7 @@
 
 **GPT-5.5 direct PDF understanding + OpenAI Gateway + deterministic SynchroPage Agent workflow + Web 双栏阅读器**
 
-这个方案保留报告里最关键的页级可控性，同时升级模型入口：GPT-5.5 作为主模型直接读取 PDF，Docling/PyMuPDF/MinerU 作为稳定性、缓存和疑难页面兜底。输出从静态文件改成可交互页面：左侧显示原 PDF 当前页，右侧显示该页讲解、概念、图表解释、置信度和结构化 JSON。讲解不再二次生成 PDF，主产物改为可版本化、可编辑、可回放的 `lecture_pairpack.v1.json`。
+这个方案保留报告里最关键的页级可控性，同时升级模型入口：GPT-5.5 作为主模型直接读取 PDF，Docling/PyMuPDF/MinerU 作为稳定性、缓存和疑难页面兜底。输出从静态文件改成可交互页面：左侧显示原 PDF 当前页，右侧显示该页讲解、概念、图表解释、置信度和结构化 JSON。讲解不再二次生成 PDF，主产物改为可版本化、可编辑、可回放的 `synchropage.lecture.v1.json`。
 
 ## 为什么选它
 
@@ -23,7 +23,7 @@ flowchart LR
     A["Upload PDF"] --> B["GPT-5.5 Document Planner"]
     B --> C["Document Plan JSON"]
     C --> D["Page Teaching Agent"]
-    D --> E["Lecture PairPack JSON"]
+    D --> E["SynchroPage Lecture JSON"]
     E --> F["Reviewer Agent"]
     F --> G{Pass?}
     G -- yes --> H["Web Reader"]
@@ -31,7 +31,7 @@ flowchart LR
     I --> D
 ```
 
-详细框架见 [docs/architecture/course-pdf-agent-framework.md](/Users/harry/SynchroPage/docs/architecture/course-pdf-agent-framework.md)，可配置 prompt 见 [config/prompts/course_agent.prompt.yaml](/Users/harry/SynchroPage/config/prompts/course_agent.prompt.yaml)，输出 schema 见 [contracts/schemas/lecture_pairpack/v1.schema.json](/Users/harry/SynchroPage/contracts/schemas/lecture_pairpack/v1.schema.json)。
+详细框架见 [docs/architecture/course-pdf-agent-framework.md](/Users/harry/SynchroPage/docs/architecture/course-pdf-agent-framework.md)，可配置 prompt 见 [config/prompts/course_agent.prompt.yaml](/Users/harry/SynchroPage/config/prompts/course_agent.prompt.yaml)，输出 schema 见 [contracts/schemas/synchropage_lecture/v1.schema.json](/Users/harry/SynchroPage/contracts/schemas/synchropage_lecture/v1.schema.json)。
 
 ## OpenAI OAuth 的落点
 
@@ -75,13 +75,13 @@ flowchart LR
 
 主格式选：
 
-**`lecture_pairpack.v1.json` + Markdown 渲染**
+**`synchropage.lecture.v1.json` + Markdown 渲染**
 
 示例结构：
 
 ```json
 {
-  "schema": "lecture_pairpack.v1",
+  "schema": "synchropage.lecture.v1",
   "document": {
     "id": "doc_001",
     "title": "课程 PDF",

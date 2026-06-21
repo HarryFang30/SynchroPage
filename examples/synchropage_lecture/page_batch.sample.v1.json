@@ -1,5 +1,5 @@
 {
-  "schema": "lecture_pairpack.page_batch.v1",
+  "schema": "synchropage.lecture.page_batch.v1",
   "document_id": "sample-course",
   "target_pages": [1],
   "pages": [

@@ -6,9 +6,9 @@ const net = require("node:net");
 const path = require("node:path");
 
 const HOST = "127.0.0.1";
-const DEFAULT_PORT = Number(process.env.PAGEPAIR_DESKTOP_PORT || 8765);
-const PORT_SCAN_LIMIT = Number(process.env.PAGEPAIR_DESKTOP_PORT_SCAN_LIMIT || 20);
-const BACKEND_START_TIMEOUT_MS = Number(process.env.PAGEPAIR_BACKEND_START_TIMEOUT_MS || 30_000);
+const DEFAULT_PORT = Number(process.env.SYNCHROPAGE_DESKTOP_PORT || 8765);
+const PORT_SCAN_LIMIT = Number(process.env.SYNCHROPAGE_DESKTOP_PORT_SCAN_LIMIT || 20);
+const BACKEND_START_TIMEOUT_MS = Number(process.env.SYNCHROPAGE_BACKEND_START_TIMEOUT_MS || 30_000);
 const DEFAULT_WINDOW_WIDTH = 1680;
 const DEFAULT_WINDOW_HEIGHT = 920;
 const MIN_WINDOW_WIDTH = 1180;
@@ -82,7 +82,7 @@ function createMainWindow(url) {
     shell.openExternal(targetUrl);
   });
 
-  if (process.env.PAGEPAIR_DESKTOP_DEVTOOLS === "1") {
+  if (process.env.SYNCHROPAGE_DESKTOP_DEVTOOLS === "1") {
     win.webContents.openDevTools({ mode: "detach" });
   }
 
@@ -145,7 +145,7 @@ function startBackend(port, webRoot) {
       throw new Error("Packaged app is missing the bundled SynchroPage backend. Rebuild with `npm --prefix apps/desktop run dist`.");
     }
     const repoRoot = resolveRepoRoot();
-    const python = process.env.PAGEPAIR_PYTHON || "python3";
+    const python = process.env.SYNCHROPAGE_PYTHON || "python3";
     command = python;
     args = ["-m", "pdf_agent.server.web_app", "--host", HOST, "--port", String(port), "--web-root", webRoot];
     cwd = repoRoot;
@@ -187,7 +187,7 @@ function resolveWebRoot() {
 
 function resolveBackendBinary() {
   const candidates = [];
-  if (process.env.PAGEPAIR_BACKEND_BINARY) candidates.push(process.env.PAGEPAIR_BACKEND_BINARY);
+  if (process.env.SYNCHROPAGE_BACKEND_BINARY) candidates.push(process.env.SYNCHROPAGE_BACKEND_BINARY);
   if (app.isPackaged) candidates.push(path.join(process.resourcesPath, "backend", "synchropage-backend"));
   candidates.push(path.resolve(__dirname, "bin", "synchropage-backend"));
   for (const candidate of candidates) {

@@ -31,7 +31,7 @@ import { type PdfDirectFileInput } from "../../lib/pdf/directFile";
 import { type PageData, type PagePack } from "../../lib/generation/teachingGeneration";
 import { type SelectedContext } from "../../hooks/usePageSelection";
 import { type OAuthMode } from "../../hooks/useOAuthFlow";
-import { createId, compactText } from "../../lib/workspace/pagePairState";
+import { createId, compactText } from "../../lib/workspace/synchroPageState";
 import { type ThreadMessageLike } from "../../lib/persistence/workspaceStore";
 import { AssistantThread } from "./AssistantThread";
 import { contextSourceLabel, selectedContextSourceLabel } from "./agentLabels";

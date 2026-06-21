@@ -1,6 +1,6 @@
 # SynchroPage
 
-SynchroPage 是工业级课程 PDF 阅读与讲解工作区：将 PDF 转换为页级对齐的 `lecture_pairpack.v1` 结构化产物，提供 React/TypeScript 双栏阅读器，并通过 OpenAI OAuth Gateway 驱动右侧 IDE / Cursor / Codex 风格 AI Agent Panel。
+SynchroPage 是工业级课程 PDF 阅读与讲解工作区：将 PDF 转换为页级对齐的 `synchropage.lecture.v1` 结构化产物，提供 React/TypeScript 双栏阅读器，并通过 OpenAI OAuth Gateway 驱动右侧 IDE / Cursor / Codex 风格 AI Agent Panel。
 
 当前前端是 local-first workspace：PDF Blob、讲解页、Agent 对话、PDF 选区上下文、当前页、设置和布局都会保存到 IndexedDB，刷新后自动恢复。
 
@@ -26,7 +26,7 @@ config/
   harness/                     重试、fallback、批处理、观测策略
   prompts/                     课程 PDF 生成 prompt 契约
 contracts/
-  schemas/lecture_pairpack/    生成器和校验器共用的 JSON Schema
+  schemas/synchropage_lecture/    生成器和校验器共用的 JSON Schema
 data/
   samples/pdfs/                可提交的小样本 PDF
 docs/
@@ -237,8 +237,8 @@ npm --prefix apps/desktop run mas:dist
 如果 profile 不放在默认目录，可以使用环境变量：
 
 ```bash
-PAGEPAIR_MAS_DEV_PROFILE=/path/to/dev.provisionprofile npm --prefix apps/desktop run mas:dev
-PAGEPAIR_MAS_PROFILE=/path/to/appstore.provisionprofile npm --prefix apps/desktop run mas:dist
+SYNCHROPAGE_MAS_DEV_PROFILE=/path/to/dev.provisionprofile npm --prefix apps/desktop run mas:dev
+SYNCHROPAGE_MAS_PROFILE=/path/to/appstore.provisionprofile npm --prefix apps/desktop run mas:dist
 ```
 
 注意：App Store 构建必须启用 Apple App Sandbox。当前 entitlements 开启了本应用需要的最小能力：本地后端 localhost 通信、OpenAI 网络请求、用户选择文件读写、Downloads 导出，以及 Electron 在 MAS 下需要的 JIT 权限。真实提交前需要在一台干净机器上测试 `mas-dev`，确认 PDF 上传、IndexedDB 持久化、OpenAI OAuth、Agent 请求和 Python sidecar 启动都能在 sandbox 下工作。
@@ -252,11 +252,11 @@ PAGEPAIR_MAS_PROFILE=/path/to/appstore.provisionprofile npm --prefix apps/deskto
 可选环境变量：
 
 ```text
-PAGEPAIR_DESKTOP_PORT=8765              默认端口
-PAGEPAIR_DESKTOP_PORT_SCAN_LIMIT=20     端口扫描数量
-PAGEPAIR_BACKEND_START_TIMEOUT_MS=30000 后端启动超时
-PAGEPAIR_DESKTOP_DEVTOOLS=1             打开 Electron DevTools
-PAGEPAIR_BACKEND_BINARY=/path/to/bin    使用指定后端 sidecar
+SYNCHROPAGE_DESKTOP_PORT=8765              默认端口
+SYNCHROPAGE_DESKTOP_PORT_SCAN_LIMIT=20     端口扫描数量
+SYNCHROPAGE_BACKEND_START_TIMEOUT_MS=30000 后端启动超时
+SYNCHROPAGE_DESKTOP_DEVTOOLS=1             打开 Electron DevTools
+SYNCHROPAGE_BACKEND_BINARY=/path/to/bin    使用指定后端 sidecar
 ```
 
 ## 开发模式
@@ -319,7 +319,7 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 页面默认加载示例 SynchroPage 文档。核心工作流：
 
 1. 用上传按钮导入 PDF。
-2. 如果已有生成结果，用 JSON 按钮导入 `lecture_pairpack.v1` 文件。
+2. 如果已有生成结果，用 JSON 按钮导入 `synchropage.lecture.v1` 文件。
 3. 通过左侧页列表或 PDF pane toolbar 切换页面。
 4. 中间区域查看原 PDF 页面；当前实现优先走 PDF.js canvas + transparent text layer，失败时回退原生 PDF 预览。
 5. 讲解区在「讲解 / 结构 / JSON」之间切换。
@@ -343,13 +343,13 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 
 前端使用 Dexie + IndexedDB 作为 local-first persistence layer。不要把 PDF、聊天或生成内容存进 `localStorage`；`localStorage` 只保存很小的 fallback，例如 `lastWorkspaceId` 和 UI preference fallback。
 
-为兼容重命名前已经创建的本地工作区，部分内部存储 key 仍保留历史 `pagepair-*` 名称；用户可见产品名统一为 SynchroPage。
+SynchroPage 使用全新的本地存储命名空间。旧版本地工作区不会迁移，刷新或重新打开后会从新的 IndexedDB / localStorage key 开始保存。
 
 保存位置：
 
 ```text
-IndexedDB database: pagepair-reader
-localStorage key: pagepair.lastWorkspaceId.v1
+IndexedDB database: synchropage-reader
+localStorage key: synchropage.lastWorkspaceId.v1
 ```
 
 主要表：
@@ -450,7 +450,7 @@ npm --prefix apps/web run build
 - [Harness 设计](docs/architecture/agent-harness.md)
 - [OpenAI OAuth Gateway](docs/architecture/openai-oauth-gateway.md)
 - [推荐方案](docs/decisions/recommended-solution.md)
-- [PairPack 工作流](docs/workflows/course-pdf-pairpack.md)
+- [SynchroPage Lecture 工作流](docs/workflows/course-pdf-synchropage.md)
 - [深度研究报告](docs/research/deep-research-report.md)
 - [Readest Reader 调研](docs/research/readest-reader-framework.md)
 
@@ -459,8 +459,8 @@ npm --prefix apps/web run build
 - [config/auth/openai_oauth.yaml](config/auth/openai_oauth.yaml)：OAuth endpoint、本地 token 存储策略、Codex gateway URL、注入 headers、脱敏策略、前端 API 契约。
 - [config/harness/course_pdf_harness.yaml](config/harness/course_pdf_harness.yaml)：parser/generator/fallback、并发、预算、checkpoint、观测默认值。
 - [config/prompts/course_agent.prompt.yaml](config/prompts/course_agent.prompt.yaml)：模型指令和输出 schema 预期。
-- [contracts/schemas/lecture_pairpack/v1.schema.json](contracts/schemas/lecture_pairpack/v1.schema.json)：完整文档输出 schema。
-- [contracts/schemas/lecture_pairpack/page_batch.v1.schema.json](contracts/schemas/lecture_pairpack/page_batch.v1.schema.json)：页级批处理输出 schema。
+- [contracts/schemas/synchropage_lecture/v1.schema.json](contracts/schemas/synchropage_lecture/v1.schema.json)：完整文档输出 schema。
+- [contracts/schemas/synchropage_lecture/page_batch.v1.schema.json](contracts/schemas/synchropage_lecture/page_batch.v1.schema.json)：页级批处理输出 schema。
 
 ## 工业化约定
 

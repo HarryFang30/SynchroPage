@@ -24,7 +24,7 @@ import {
   useAssistantUi,
 } from "../../lib/contexts";
 import { type PageData } from "../../lib/generation/teachingGeneration";
-import { compactText } from "../../lib/workspace/pagePairState";
+import { compactText } from "../../lib/workspace/synchroPageState";
 import { selectedContextSourceLabel } from "./agentLabels";
 
 const MarkdownRenderer = lazy(() => import("../MarkdownRenderer"));

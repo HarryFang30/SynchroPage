@@ -11,7 +11,7 @@ import type { GenerationPageStatus } from "../../lib/generation/generationRuntim
 import {
   compactText,
   formatPageRanges,
-} from "../../lib/workspace/pagePairState";
+} from "../../lib/workspace/synchroPageState";
 
 const MarkdownRenderer = lazy(() => import("../MarkdownRenderer"));
 

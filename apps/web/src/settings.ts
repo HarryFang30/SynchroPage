@@ -29,7 +29,7 @@ export type UiPreferences = {
   debugMode: boolean;
 };
 
-export const uiPreferencesStorageKey = "pagepair.uiPreferences.v1";
+export const uiPreferencesStorageKey = "synchropage.uiPreferences.v1";
 
 export const defaultUiPreferences: UiPreferences = {
   language: "zh-CN",

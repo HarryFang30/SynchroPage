@@ -51,7 +51,7 @@ import {
   generateTargetPageNumbers,
   pagePackFromPersistence,
   type GeneratePageMode,
-} from "../lib/workspace/pagePairState";
+} from "../lib/workspace/synchroPageState";
 import {
   loadDocumentGenerationBundle,
   saveGeneratedPagesFromPack,
@@ -59,7 +59,7 @@ import {
 } from "../lib/persistence";
 import { hasCompletedTeaching } from "../lib/generation/generationRuntime";
 import type { UiPreferences } from "../settings";
-import type { PanelVisibility } from "../lib/workspace/pagePairState";
+import type { PanelVisibility } from "../lib/workspace/synchroPageState";
 import {
   buildRunningPageData,
   buildFailedPageData,
