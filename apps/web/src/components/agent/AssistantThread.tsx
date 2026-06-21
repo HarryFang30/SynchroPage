@@ -25,7 +25,7 @@ import {
 } from "../../lib/contexts";
 import { type PageData } from "../../lib/generation/teachingGeneration";
 import { compactText } from "../../lib/workspace/pagePairState";
-import { selectedContextSourceLabel } from "./AgentPanel";
+import { selectedContextSourceLabel } from "./agentLabels";
 
 const MarkdownRenderer = lazy(() => import("../MarkdownRenderer"));
 

@@ -53,9 +53,9 @@ import { OAuthDeviceDialog } from "./components/OAuthDeviceDialog";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import {
   AgentPanel,
-  selectedContextSourceLabel,
   type QuickSelectionPrompt,
 } from "./components/agent/AgentPanel";
+import { selectedContextSourceLabel } from "./components/agent/agentLabels";
 import {
   FileButton,
   GenerationDetailsPopover,
