@@ -14,6 +14,8 @@ const DEFAULT_WINDOW_HEIGHT = 920;
 const MIN_WINDOW_WIDTH = 1180;
 const MIN_WINDOW_HEIGHT = 720;
 const WORK_AREA_MARGIN = 24;
+const STARTUP_STARTED_AT = Date.now();
+const STARTUP_METRICS_ENABLED = process.env.SYNCHROPAGE_STARTUP_METRICS === "1";
 
 let mainWindow = null;
 let backendProcess = null;
@@ -31,11 +33,13 @@ if (!gotLock) {
 }
 
 app.on("ready", async () => {
+  logStartupMetric("app-ready");
   Menu.setApplicationMenu(null);
   try {
     const webRoot = resolveWebRoot();
     ensureBuiltWebRoot(webRoot);
     const backend = await ensureBackend(webRoot);
+    logStartupMetric("backend-ready", { port: backend.port, external: backend.external });
     mainWindow = createMainWindow(backend.url);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -86,6 +90,9 @@ function createMainWindow(url) {
     win.webContents.openDevTools({ mode: "detach" });
   }
 
+  logStartupMetric("window-created");
+  win.webContents.once("dom-ready", () => logStartupMetric("dom-ready"));
+  win.webContents.once("did-finish-load", () => logStartupMetric("did-finish-load"));
   void win.loadURL(url);
   return win;
 }
@@ -191,7 +198,20 @@ function resolveBackendBinary() {
   if (app.isPackaged) candidates.push(path.join(process.resourcesPath, "backend", "synchropage-backend"));
   candidates.push(path.resolve(__dirname, "bin", "synchropage-backend"));
   for (const candidate of candidates) {
-    if (candidate && fs.existsSync(candidate)) return candidate;
+    const executable = resolveBackendExecutable(candidate);
+    if (executable) return executable;
+  }
+  return null;
+}
+
+function resolveBackendExecutable(candidate) {
+  if (!candidate || !fs.existsSync(candidate)) return null;
+  const stat = fs.statSync(candidate);
+  if (stat.isFile()) return candidate;
+  if (!stat.isDirectory()) return null;
+  const nestedExecutable = path.join(candidate, "synchropage-backend");
+  if (fs.existsSync(nestedExecutable) && fs.statSync(nestedExecutable).isFile()) {
+    return nestedExecutable;
   }
   return null;
 }
@@ -263,6 +283,17 @@ function isPortOccupied(port) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function logStartupMetric(label, detail = {}) {
+  if (!STARTUP_METRICS_ENABLED) return;
+  const elapsedMs = Date.now() - STARTUP_STARTED_AT;
+  console.error(JSON.stringify({
+    type: "synchropage-startup-metric",
+    label,
+    elapsedMs,
+    ...detail
+  }));
 }
 
 function getBackendLogPath() {

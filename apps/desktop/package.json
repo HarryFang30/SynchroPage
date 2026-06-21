@@ -40,7 +40,7 @@
         "from": "bin",
         "to": "backend",
         "filter": [
-          "synchropage-backend*"
+          "synchropage-backend/**"
         ]
       }
     ],

@@ -6,6 +6,9 @@ PYTHON_BIN="${PYTHON:-python3}"
 DIST_DIR="$ROOT_DIR/apps/desktop/bin"
 BUILD_DIR="$ROOT_DIR/build/pyinstaller"
 ENTRYPOINT="$ROOT_DIR/src/pdf_agent/web_app.py"
+BACKEND_NAME="synchropage-backend"
+BACKEND_BUNDLE="$DIST_DIR/$BACKEND_NAME"
+BACKEND_EXE="$BACKEND_BUNDLE/$BACKEND_NAME"
 
 cd "$ROOT_DIR"
 
@@ -25,16 +28,18 @@ fi
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR" "$BUILD_DIR"
 
+# Keep the backend as an onedir bundle. onefile adds a multi-second
+# extraction step on every desktop launch, which dominates app startup.
 PYTHONPATH="$ROOT_DIR/src" "$PYTHON_BIN" -m PyInstaller \
   --clean \
   --noconfirm \
-  --onefile \
-  --name synchropage-backend \
+  --onedir \
+  --name "$BACKEND_NAME" \
   --paths "$ROOT_DIR/src" \
   --distpath "$DIST_DIR" \
   --workpath "$BUILD_DIR/work" \
   --specpath "$BUILD_DIR/spec" \
   "$ENTRYPOINT"
 
-chmod +x "$DIST_DIR/synchropage-backend"
-echo "Built backend sidecar: $DIST_DIR/synchropage-backend"
+chmod +x "$BACKEND_EXE"
+echo "Built backend sidecar: $BACKEND_EXE"
