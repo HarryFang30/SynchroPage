@@ -16,6 +16,7 @@ from pdf_agent.server.web_app import (
     _cache_pdf_file_payload,
     _extract_gateway_text,
     _extract_prompt_cache_usage,
+    _json_bytes_utf8_safe,
     _parse_generated_page,
     _parse_generated_pages,
     _pdf_file_input,
@@ -59,6 +60,24 @@ class WebAppTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.status, 413)
         self.assertEqual(raised.exception.code, "json_body_too_large")
+
+    def test_read_json_repairs_unpaired_surrogates(self) -> None:
+        raw = b'{"text":"bad \\ud835 value"}'
+        handler = PdfAgentRequestHandler.__new__(PdfAgentRequestHandler)
+        handler.headers = {"Content-Length": str(len(raw))}  # type: ignore[assignment]
+        handler.rfile = io.BytesIO(raw)  # type: ignore[assignment]
+
+        value = handler._read_json()
+
+        self.assertEqual(value["text"], "bad \ufffd value")
+
+    def test_json_bytes_repairs_surrogates_before_utf8_encoding(self) -> None:
+        payload = {"text": "valid pair \ud835\udc47 and bad \ud835"}
+
+        data = _json_bytes_utf8_safe(payload, ensure_ascii=False, separators=(",", ":"))
+        decoded = json.loads(data.decode("utf-8"))
+
+        self.assertEqual(decoded["text"], "valid pair 𝑇 and bad \ufffd")
 
     def test_static_path_rejects_symlinked_index_outside_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

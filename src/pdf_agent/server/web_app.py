@@ -86,6 +86,35 @@ _PDF_FILE_SUBSET_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _PDF_FILE_SUBSET_CACHE_BYTES = 0
 LOGGER = logging.getLogger("pdf_agent.server.web_app")
 
+def _repair_unicode_surrogates_text(value: str) -> str:
+    if not any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+        return value
+    return value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+
+
+def _repair_unicode_surrogates(value: Any) -> Any:
+    if isinstance(value, str):
+        return _repair_unicode_surrogates_text(value)
+    if isinstance(value, Mapping):
+        return {
+            _repair_unicode_surrogates(key): _repair_unicode_surrogates(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_repair_unicode_surrogates(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_repair_unicode_surrogates(item) for item in value)
+    return value
+
+
+def _json_dumps_utf8_safe(value: Any, **kwargs: Any) -> str:
+    return json.dumps(_repair_unicode_surrogates(value), **kwargs)
+
+
+def _json_bytes_utf8_safe(value: Any, **kwargs: Any) -> bytes:
+    return _json_dumps_utf8_safe(value, **kwargs).encode("utf-8")
+
+
 SYNCHROPAGE_SHARED_INSTRUCTIONS = """You are the model backend for SynchroPage.
 Use the provided PDF/page context, selected text, formulas, images, and task-specific instructions as primary evidence.
 Preserve LaTeX formulas, cite page numbers when available, and do not invent facts that are not supported by the provided source material.
@@ -260,7 +289,7 @@ class AgentChatGateway:
         raise HttpError(502, "OpenAI gateway returned an empty response", code="empty_gateway_response")
 
     def _post_responses(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, str]:
-        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        data = _json_bytes_utf8_safe(payload, ensure_ascii=False, separators=(",", ":"))
         request = urllib.request.Request(
             url,
             data=data,
@@ -439,7 +468,7 @@ class TeachingGenerationGateway:
             self._rate_limit_cooldown_until = max(self._rate_limit_cooldown_until, until)
 
     def _post_responses(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, str]:
-        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        data = _json_bytes_utf8_safe(payload, ensure_ascii=False, separators=(",", ":"))
         request = urllib.request.Request(
             url,
             data=data,
@@ -583,10 +612,10 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
             raise HttpError(400, f"Invalid JSON: {exc}", code="invalid_json") from exc
         if not isinstance(value, dict):
             raise HttpError(400, "JSON body must be an object", code="invalid_json")
-        return value
+        return _repair_unicode_surrogates(value)
 
     def _send_json(self, value: Any, *, status: int = 200) -> None:
-        data = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        data = _json_bytes_utf8_safe(value, ensure_ascii=False)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
@@ -934,7 +963,7 @@ def _is_fast_teaching_generation(body: Mapping[str, Any]) -> bool:
 
 
 def _teaching_contract_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return _json_dumps_utf8_safe(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _teaching_prompt_rules(body: Mapping[str, Any], *, batch: bool) -> list[str]:
@@ -984,7 +1013,7 @@ def _teaching_fast_page_jsonl(page: Mapping[str, Any], source_text_limit: int) -
     source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
     page_no = _int_value(page.get("page_no"), 1)
     source_text = str(source.get("text_md") or "").strip()
-    return json.dumps(
+    return _json_dumps_utf8_safe(
         {
             "page_no": page_no,
             "pdf_page_ref": _string_value(source.get("pdf_page_ref"), f"#page={page_no}"),
@@ -1571,12 +1600,13 @@ def _prompt_cache_key(body: Mapping[str, Any]) -> str:
         "documentFileSha256": _string_value(document_file.get("sha256"), ""),
         "documentContext": context,
     }
-    serialized = json.dumps(stable_context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    serialized = _json_dumps_utf8_safe(stable_context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = _sha256_text(serialized)
     return f"synchropage:{document_id}:{_cache_key_part(digest)[:32]}"
 
 
 def _sha256_text(value: str) -> str:
+    value = _repair_unicode_surrogates_text(value)
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
@@ -2723,7 +2753,7 @@ def _extract_event_stream_text(text: str) -> str:
             completed = event.get("response") or event
         elif event_type in {"response.failed", "response.error"}:
             error = event.get("error") if isinstance(event.get("error"), Mapping) else event
-            raise HttpError(502, redacted_gateway_error(json.dumps(error, ensure_ascii=False)), code="upstream_error")
+            raise HttpError(502, redacted_gateway_error(_json_dumps_utf8_safe(error, ensure_ascii=False)), code="upstream_error")
 
     if chunks:
         return "".join(chunks).strip()
