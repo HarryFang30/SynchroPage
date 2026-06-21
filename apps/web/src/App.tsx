@@ -494,6 +494,12 @@ const fullPanelVisibility: PanelVisibility = {
   agent: true,
 };
 
+const defaultPanelVisibility: PanelVisibility = {
+  rail: true,
+  notes: true,
+  agent: false,
+};
+
 const samplePack: PagePack = {
   schema: "lecture_pairpack.v1",
   document: {
@@ -2631,7 +2637,7 @@ export default function App() {
   const [currentPageNo, setCurrentPageNo] = useState(1);
   const [pdfUrl, setPdfUrl] = useState("");
   const [activeTab, setActiveTab] = useState<"notes" | "structure" | "json">("notes");
-  const [panels, setPanels] = useState<PanelVisibility>(fullPanelVisibility);
+  const [panels, setPanels] = useState<PanelVisibility>(defaultPanelVisibility);
   const [query, setQuery] = useState("");
   const [oauthMode, setOauthMode] = useState<OAuthMode>("unknown");
   const [oauthAccount, setOauthAccount] = useState<string | null>(null);
@@ -2683,6 +2689,7 @@ export default function App() {
   const oauthPollTimerRef = useRef<number | null>(null);
   const oauthCountdownTimerRef = useRef<number | null>(null);
   const fullscreenIntentRef = useRef(false);
+  const panelsBeforePdfFocusRef = useRef<PanelVisibility>(defaultPanelVisibility);
   const restoredOnceRef = useRef(false);
   const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false);
 
@@ -2810,10 +2817,11 @@ export default function App() {
     if (document.fullscreenElement) {
       await document.exitFullscreen().catch(() => undefined);
     }
-    setPanels(fullPanelVisibility);
+    setPanels(panelsBeforePdfFocusRef.current);
   }, []);
 
   const enterPdfFullscreen = useCallback(async () => {
+    panelsBeforePdfFocusRef.current = panels;
     setPanels({ rail: false, notes: false, agent: false });
     fullscreenIntentRef.current = true;
 
@@ -2830,7 +2838,7 @@ export default function App() {
         setJobStatus("浏览器未允许全屏，已切换到 PDF 专注模式");
       });
     }
-  }, []);
+  }, [panels]);
 
   const togglePdfOnly = useCallback(() => {
     if (isBrowserFullscreen || pdfOnly) {
@@ -3420,7 +3428,7 @@ export default function App() {
 
       if (!document.fullscreenElement && fullscreenIntentRef.current) {
         fullscreenIntentRef.current = false;
-        setPanels(fullPanelVisibility);
+        setPanels(panelsBeforePdfFocusRef.current);
       }
     };
 
@@ -4942,6 +4950,15 @@ export default function App() {
             <p>{pack.document.title}</p>
           </div>
         </div>
+        <PageNavigator
+          className="topbar-page-nav"
+          currentPage={currentPdfPageNo}
+          pageCount={pdfNavigationPageCount}
+          previousLabel={copy.pdf.previousPage}
+          nextLabel={copy.pdf.nextPage}
+          onPrevious={() => movePage(-1)}
+          onNext={() => movePage(1)}
+        />
         <div className="topbar-actions">
           <button
             className={`save-status-pill ${isRestoringWorkspace ? "saving" : saveState.kind}`}
@@ -5153,7 +5170,7 @@ export default function App() {
             preferences={uiPreferences}
             onPreferenceChange={updatePreference}
             onResetLayout={() => {
-              setPanels(fullPanelVisibility);
+              setPanels(defaultPanelVisibility);
               setJobStatus(copy.status.layoutReset);
             }}
             onResetPreferences={resetPreferences}
@@ -5208,7 +5225,7 @@ export default function App() {
 
       <main className="workspace" data-pane-count={visiblePaneCount}>
         <PanelGroup orientation="horizontal" className="workspace-panels">
-          <Panel className="workspace-panel" hidden={!panels.rail} defaultSize={22} minSize={18}>
+          <Panel className="workspace-panel" hidden={!panels.rail} defaultSize={20} minSize={16}>
             <aside className="page-rail document-rail">
               <div className="rail-top">
                 <div className="rail-header">
@@ -5424,26 +5441,26 @@ export default function App() {
 
           {panels.rail && <WorkspaceResizeHandle />}
 
-          <Panel className="workspace-panel" defaultSize={pdfOnly ? 100 : panels.notes && panels.agent ? 36 : 52} minSize={30}>
+          <Panel className="workspace-panel" defaultSize={pdfOnly ? 100 : panels.notes && panels.agent ? 32 : 52} minSize={30}>
             <section className="pdf-pane">
               <PaneToolbar
                 title={pdfUrl ? copy.common.sourcePdfPage(currentPdfPageNo) : copy.pdf.samplePdfPage}
-                right={
+                right={isBrowserFullscreen ? (
                   <div className="toolbar-actions">
-                    <IconButton label={copy.pdf.previousPage} onClick={() => movePage(-1)} disabled={currentPdfPageNo <= 1}>
-                      <ChevronLeft />
+                    <PageNavigator
+                      className="pane-page-nav"
+                      currentPage={currentPdfPageNo}
+                      pageCount={pdfNavigationPageCount}
+                      previousLabel={copy.pdf.previousPage}
+                      nextLabel={copy.pdf.nextPage}
+                      onPrevious={() => movePage(-1)}
+                      onNext={() => movePage(1)}
+                    />
+                    <IconButton label={copy.topbar.exitPdfFocus} onClick={togglePdfOnly}>
+                      <Minimize2 />
                     </IconButton>
-                    <output>{currentPdfPageNo} / {pdfNavigationPageCount}</output>
-                    <IconButton label={copy.pdf.nextPage} onClick={() => movePage(1)} disabled={currentPdfPageNo >= pdfNavigationPageCount}>
-                      <ChevronRight />
-                    </IconButton>
-                    {isBrowserFullscreen && (
-                      <IconButton label={copy.topbar.exitPdfFocus} onClick={togglePdfOnly}>
-                        <Minimize2 />
-                      </IconButton>
-                    )}
                   </div>
-                }
+                ) : undefined}
               />
               <div className={`pdf-frame ${pdfUrl ? "has-pdf" : ""}`}>
                 {pdfUrl ? (
@@ -5472,7 +5489,7 @@ export default function App() {
 
           {(panels.notes || panels.agent) && <WorkspaceResizeHandle />}
 
-          <Panel className="workspace-panel" hidden={!panels.notes} defaultSize={panels.agent ? 26 : 42} minSize={22}>
+          <Panel className="workspace-panel" hidden={!panels.notes} defaultSize={panels.agent ? 18 : 42} minSize={18}>
             <section className="notes-pane">
               <PaneToolbar
                 title={copy.notes.title}
@@ -5531,7 +5548,7 @@ export default function App() {
 
           {panels.notes && panels.agent && <WorkspaceResizeHandle />}
 
-          <Panel className="workspace-panel" hidden={!panels.agent} defaultSize={panels.notes ? 22 : 32} minSize={20}>
+          <Panel className="workspace-panel" hidden={!panels.agent} defaultSize={panels.notes ? 30 : 34} minSize={22}>
             {panels.agent && (
               <AgentPanel
                 key={agentRuntimeKey}
@@ -5733,7 +5750,12 @@ function AgentPanelLoaded(props: AgentPanelProps) {
         {props.contexts.map((context) => (
           <span className="context-pill" key={context.id} title={context.text}>
             <span>{contextSourceLabel(context, copy)}</span>
-            <button type="button" onClick={() => props.setContexts((items) => items.filter((item) => item.id !== context.id))} aria-label={copy.agent.removeContext}>
+            <button
+              type="button"
+              onClick={() => props.setContexts((items) => items.filter((item) => item.id !== context.id))}
+              aria-label={copy.agent.removeContext}
+              title={copy.agent.removeContext}
+            >
               <X />
             </button>
           </span>
@@ -6138,7 +6160,7 @@ const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewerProps>(
                 data-page-container-number={pageNo}
                 role="listitem"
               >
-                <div className="pdf-page-label">PDF p.{pageNo}</div>
+                <div className="pdf-page-label">PDF · p.{pageNo}</div>
                 {shouldRenderPage ? (
                   <PdfPageLayer
                     pdfDocument={pdfDocument}
@@ -6413,7 +6435,7 @@ function OAuthDeviceDialog(props: {
           <p>{copy.oauth.kicker}</p>
           <h2 id="oauth-device-title">{copy.oauth.title}</h2>
         </div>
-        <button className="oauth-device-close" type="button" aria-label={copy.oauth.cancel} onClick={props.onCancel}>
+        <button className="oauth-device-close" type="button" aria-label={copy.oauth.cancel} title={copy.oauth.cancel} onClick={props.onCancel}>
           <X />
         </button>
       </div>
@@ -6544,7 +6566,7 @@ function UserMessage() {
       </div>
       <ActionBarPrimitive.Root className="message-actions" hideWhenRunning autohide="not-last">
         <ActionBarPrimitive.Edit asChild>
-          <button type="button" aria-label={copy.agent.edit}><RefreshCw /></button>
+          <button type="button" aria-label={copy.agent.edit} title={copy.agent.edit}><RefreshCw /></button>
         </ActionBarPrimitive.Edit>
       </ActionBarPrimitive.Root>
     </MessagePrimitive.Root>
@@ -6593,19 +6615,19 @@ function AgentMessage() {
       <div className="assistant-footer">
         <BranchPickerPrimitive.Root hideWhenSingleBranch className="branch-picker">
           <BranchPickerPrimitive.Previous asChild>
-            <button type="button"><ChevronLeft /></button>
+            <button type="button" aria-label={copy.pdf.previousPage} title={copy.pdf.previousPage}><ChevronLeft /></button>
           </BranchPickerPrimitive.Previous>
           <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
           <BranchPickerPrimitive.Next asChild>
-            <button type="button"><ChevronRight /></button>
+            <button type="button" aria-label={copy.pdf.nextPage} title={copy.pdf.nextPage}><ChevronRight /></button>
           </BranchPickerPrimitive.Next>
         </BranchPickerPrimitive.Root>
         <ActionBarPrimitive.Root className="message-actions" hideWhenRunning autohide="not-last">
           <ActionBarPrimitive.Copy asChild>
-            <button type="button" aria-label={copy.agent.copy}><Copy /></button>
+            <button type="button" aria-label={copy.agent.copy} title={copy.agent.copy}><Copy /></button>
           </ActionBarPrimitive.Copy>
           <ActionBarPrimitive.Reload asChild>
-            <button type="button" aria-label={copy.agent.regenerate}><RefreshCw /></button>
+            <button type="button" aria-label={copy.agent.regenerate} title={copy.agent.regenerate}><RefreshCw /></button>
           </ActionBarPrimitive.Reload>
         </ActionBarPrimitive.Root>
       </div>
@@ -6657,7 +6679,7 @@ function AssistantComposer({
             <figure className="composer-image-preview" key={attachment.id} title={attachment.name}>
               <img src={attachment.data_url} alt={attachment.name} />
               <figcaption>{compactText(attachment.name, 24)}</figcaption>
-              <button type="button" onClick={() => onRemoveAttachment(attachment.id)} aria-label={copy.agent.removeImage}>
+              <button type="button" onClick={() => onRemoveAttachment(attachment.id)} aria-label={copy.agent.removeImage} title={copy.agent.removeImage}>
                 <X />
               </button>
             </figure>
@@ -6682,7 +6704,7 @@ function AssistantComposer({
         />
         <div className="aui-composer-actions">
           <ComposerPrimitive.Send asChild>
-            <button className="composer-send" type="button" aria-label={copy.agent.send}><Send /></button>
+            <button className="composer-send" type="button" aria-label={copy.agent.send} title={copy.agent.send}><Send /></button>
           </ComposerPrimitive.Send>
         </div>
       </ComposerPrimitive.Root>
@@ -6734,7 +6756,7 @@ function SelectedSourcePreview({ context, onRemove }: { context: SelectedContext
         <span className="selected-source-label">{selectedContextSourceLabel(context, copy)}</span>
         <span className="selected-source-text">{compactText(context.text, expanded ? 520 : 220)}</span>
       </button>
-      <button className="selected-source-remove" type="button" onClick={onRemove} aria-label={copy.agent.removeSelectedContent}>
+      <button className="selected-source-remove" type="button" onClick={onRemove} aria-label={copy.agent.removeSelectedContent} title={copy.agent.removeSelectedContent}>
         <X />
       </button>
     </div>
@@ -6749,6 +6771,36 @@ function PaneToolbar({ title, badge, right }: { title: string; badge?: string; r
         <span>{title}</span>
       </div>
       {right}
+    </div>
+  );
+}
+
+function PageNavigator({
+  className = "",
+  currentPage,
+  pageCount,
+  previousLabel,
+  nextLabel,
+  onPrevious,
+  onNext,
+}: {
+  className?: string;
+  currentPage: number;
+  pageCount: number;
+  previousLabel: string;
+  nextLabel: string;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <div className={`page-navigator ${className}`} role="group" aria-label={`${previousLabel} / ${nextLabel}`}>
+      <IconButton label={previousLabel} onClick={onPrevious} disabled={currentPage <= 1}>
+        <ChevronLeft />
+      </IconButton>
+      <output>{currentPage} / {pageCount}</output>
+      <IconButton label={nextLabel} onClick={onNext} disabled={currentPage >= pageCount}>
+        <ChevronRight />
+      </IconButton>
     </div>
   );
 }

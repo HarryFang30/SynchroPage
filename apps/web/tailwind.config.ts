@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import tailwindThemer from "tailwindcss-themer";
 
 const config: Config = {
   content: ["./index.html", "./src/**/*.{js,jsx,ts,tsx}"],
@@ -82,6 +83,22 @@ const config: Config = {
       },
     },
   },
+  plugins: [
+    tailwindThemer({
+      themes: [
+        {
+          name: "theme-light",
+          selectors: [':root[data-pagepair-resolved-theme="light"]'],
+          extend: {},
+        },
+        {
+          name: "theme-dark",
+          selectors: [':root[data-pagepair-resolved-theme="dark"]'],
+          extend: {},
+        },
+      ],
+    }),
+  ],
 };
 
 export default config;

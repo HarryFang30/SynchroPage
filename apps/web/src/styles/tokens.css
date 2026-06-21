@@ -62,7 +62,7 @@
   --button-compact-height: 30px;
   --button-height: 36px;
   --button-large-height: 40px;
-  --icon-button-size: 36px;
+  --icon-button-size: 32px;
   --input-height: 36px;
   --chat-composer-min-height: 104px;
   --pp-topbar-height: var(--topbar-height);
@@ -74,18 +74,18 @@
 }
 
 :root[data-pagepair-resolved-theme="dark"] {
-  --pp-bg-app: oklch(0.145 0.006 86);
-  --pp-bg-rail: oklch(0.158 0.006 86);
-  --pp-bg-sidebar: oklch(0.170 0.006 86);
-  --pp-bg-main: oklch(0.135 0.005 86);
-  --pp-bg-panel: oklch(0.165 0.006 86);
-  --pp-bg-panel-2: oklch(0.210 0.007 86);
-  --pp-bg-elevated: oklch(0.230 0.008 86);
-  --pp-bg-hover: oklch(0.245 0.008 86);
-  --pp-bg-selected: oklch(0.275 0.010 78);
-  --pp-bg-input: oklch(0.185 0.006 86);
-  --pp-bg-input-hover: oklch(0.220 0.007 86);
-  --pp-bg-pdf-stage: oklch(0.115 0.005 86);
+  --pp-bg-app: oklch(0.185 0.007 86);
+  --pp-bg-rail: oklch(0.195 0.007 86);
+  --pp-bg-sidebar: oklch(0.190 0.007 86);
+  --pp-bg-main: oklch(0.180 0.006 86);
+  --pp-bg-panel: oklch(0.205 0.007 86);
+  --pp-bg-panel-2: oklch(0.250 0.008 86);
+  --pp-bg-elevated: oklch(0.270 0.009 86);
+  --pp-bg-hover: oklch(0.295 0.009 86);
+  --pp-bg-selected: oklch(0.325 0.011 78);
+  --pp-bg-input: oklch(0.230 0.007 86);
+  --pp-bg-input-hover: oklch(0.265 0.008 86);
+  --pp-bg-pdf-stage: oklch(0.175 0.006 86);
   --pp-bg-pdf-page: oklch(0.985 0.002 86);
   --pp-text-primary: oklch(0.900 0.010 86);
   --pp-text-secondary: oklch(0.760 0.010 86);
@@ -107,16 +107,16 @@
   --pp-danger: oklch(0.690 0.130 28);
   --pp-danger-soft: oklch(0.690 0.130 28 / 0.10);
   --pp-danger-border: oklch(0.690 0.130 28 / 0.26);
-  --pp-border: oklch(0.285 0.008 86);
-  --pp-border-subtle: oklch(0.235 0.007 86);
-  --pp-border-strong: oklch(0.370 0.010 86);
+  --pp-border: oklch(0.335 0.009 86);
+  --pp-border-subtle: oklch(0.285 0.008 86);
+  --pp-border-strong: oklch(0.420 0.011 86);
   --pp-ring-color: oklch(0.665 0.130 39 / 0.34);
   --pp-ring: 0 0 0 3px oklch(0.665 0.130 39 / 0.20);
   --pp-shadow-xs: 0 1px 2px oklch(0 0 0 / 0.20);
   --pp-shadow-sm: 0 8px 24px oklch(0 0 0 / 0.22);
   --pp-shadow-md: 0 18px 48px oklch(0 0 0 / 0.34);
-  --pp-shadow-panel: 0 1px 2px oklch(0 0 0 / 0.26);
-  --pp-shadow-popover: 0 22px 58px oklch(0 0 0 / 0.44);
-  --pp-shadow-pdf: 0 1px 2px oklch(0 0 0 / 0.34), 0 22px 56px oklch(0 0 0 / 0.30);
+  --pp-shadow-panel: 0 1px 2px oklch(0 0 0 / 0.20);
+  --pp-shadow-popover: 0 22px 58px oklch(0 0 0 / 0.36);
+  --pp-shadow-pdf: 0 1px 2px oklch(0 0 0 / 0.28), 0 22px 56px oklch(0 0 0 / 0.24);
   --pp-shadow-inset: inset 0 1px 0 oklch(1 0 0 / 0.055);
 }
