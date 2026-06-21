@@ -214,6 +214,12 @@ output {
 }
 
 .pdf-text-layer {
+  --scale-factor: 1;
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
   color-scheme: only light;
   position: absolute;
   z-index: 2;
@@ -228,21 +234,19 @@ output {
   forced-color-adjust: none;
   text-size-adjust: none;
   transform-origin: 0 0;
+  pointer-events: none;
 }
 
 .pdf-text-layer :is(span, br) {
   position: absolute;
   color: transparent;
+  -webkit-text-fill-color: transparent;
   cursor: text;
   transform-origin: 0% 0%;
   user-select: text;
   white-space: pre;
-}
-
-.pdf-text-layer {
-  --min-font-size: 1;
-  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
-  --min-font-size-inv: calc(1 / var(--min-font-size));
+  pointer-events: auto;
+  text-shadow: none;
 }
 
 .pdf-text-layer > :not(.markedContent),
@@ -262,6 +266,7 @@ output {
 .pdf-text-layer span[role="img"] {
   cursor: default;
   user-select: none;
+  pointer-events: none;
 }
 
 .pdf-text-layer .endOfContent {
@@ -270,15 +275,21 @@ output {
   inset: 100% 0 0;
   cursor: default;
   user-select: none;
+  pointer-events: none;
 }
 
 .pdf-text-layer.selecting .endOfContent {
   top: 0;
 }
 
+.pdf-text-layer ::-moz-selection,
 .pdf-text-layer ::selection,
+.pdf-text-layer br::-moz-selection,
 .pdf-text-layer br::selection {
   background: color-mix(in oklch, var(--brand) 28%, transparent);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  text-shadow: none;
 }
 
 .pdf-layer-note {

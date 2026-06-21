@@ -193,6 +193,9 @@ function PdfPageLayer({
       canvas.style.height = `${viewport.height}px`;
       textLayerElement.style.width = `${viewport.width}px`;
       textLayerElement.style.height = `${viewport.height}px`;
+      textLayerElement.style.setProperty("--scale-factor", String(scale));
+      textLayerElement.style.setProperty("--total-scale-factor", String(scale));
+      textLayerElement.style.setProperty("--user-unit", "1");
       setViewportMeta({
         width: viewport.width,
         height: viewport.height,
@@ -231,6 +234,9 @@ function PdfPageLayer({
         });
 
         await textLayer!.render();
+        textLayerElement.style.setProperty("--scale-factor", String(scale));
+        textLayerElement.style.setProperty("--total-scale-factor", String(scale));
+        textLayerElement.style.setProperty("--user-unit", "1");
       } catch (error) {
         if (!cancelled && !isPdfRenderCancel(error)) {
           textLayerElement.replaceChildren();
