@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { createCourse, resetStorage, uploadPdfFromRail } from "./helpers";
+import { createCourse, openRailActionMenu, readFixture, resetStorage, uploadPdfFromRail } from "./helpers";
 
 test.describe("Workspace", () => {
   test.beforeEach(async ({ page }) => {
@@ -24,5 +24,27 @@ test.describe("Workspace", () => {
     await expect(documentItem).toBeVisible();
     await expect(documentItem).toContainText(/2\s*(页|pages?)/i, { timeout: 10_000 });
     await expect(page.locator(".pdf-js-viewer")).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("can upload multiple PDFs into the current course", async ({ page }) => {
+    await createCourse(page, "Batch Course");
+    await openRailActionMenu(page);
+    const pdfInput = page.locator('.rail-action-menu input[type="file"][accept="application/pdf"]');
+    await expect(pdfInput).toHaveAttribute("multiple", "");
+
+    const pdf = readFixture("two-page.pdf");
+    await pdfInput.setInputFiles([
+      { name: "batch-first.pdf", mimeType: "application/pdf", buffer: pdf },
+      { name: "batch-second.pdf", mimeType: "application/pdf", buffer: pdf },
+    ]);
+
+    const firstDocument = page.locator(".document-item").filter({ hasText: "batch-first" });
+    const secondDocument = page.locator(".document-item").filter({ hasText: "batch-second" });
+    await expect(firstDocument).toBeVisible({ timeout: 10_000 });
+    await expect(secondDocument).toBeVisible({ timeout: 10_000 });
+    await expect(secondDocument).toHaveClass(/active/);
+    await expect(page.locator(".course-item").filter({ hasText: "Batch Course" })).toContainText(
+      /2\s*(个文档|documents?)/i,
+    );
   });
 });

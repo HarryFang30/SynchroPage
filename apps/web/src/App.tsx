@@ -1191,9 +1191,12 @@ export default function App() {
     window.localStorage.setItem(uiPreferencesStorageKey, JSON.stringify(uiPreferences));
   }, [uiPreferences]);
 
-  const loadPdf = (file: File) => {
-    const url = URL.createObjectURL(file);
-    replacePdfObjectUrl(url);
+  const loadPdfFiles = useCallback((files: File[]) => {
+    const pdfFiles = files.filter((file) => file.type === "application/pdf" || /\.pdf$/i.test(file.name));
+    const lastFile = pdfFiles[pdfFiles.length - 1];
+    if (!lastFile) return;
+
+    replacePdfObjectUrl("");
     setDocumentId(null);
     setThreadId(null);
     setPdfPageCount(null);
@@ -1205,17 +1208,24 @@ export default function App() {
     setAttachments([]);
     setPersistedMessages([]);
     setDocumentItems((items) => items.map((item) => ({ ...item, isActive: false })));
-    const title = file.name.replace(/\.pdf$/i, "") || file.name || "Untitled PDF";
-    setPack(createDraftPagePack(title, file.name, 1));
+    const title = lastFile.name.replace(/\.pdf$/i, "") || lastFile.name || "Untitled PDF";
+    setPack(createDraftPagePack(title, lastFile.name, 1));
 
     void persistOperation(async () => {
-      const saved = await savePdfBlob({
-        workspaceId,
-        projectId: activeProjectId,
-        file,
-        settingsSnapshot: uiPreferences,
-        layoutState: currentLayoutState(),
-      });
+      let nextWorkspaceId = workspaceId;
+      let saved: Awaited<ReturnType<typeof savePdfBlob>> | null = null;
+      for (const file of pdfFiles) {
+        saved = await savePdfBlob({
+          workspaceId: nextWorkspaceId,
+          projectId: activeProjectId,
+          file,
+          settingsSnapshot: uiPreferences,
+          layoutState: currentLayoutState(),
+        });
+        nextWorkspaceId = saved.workspace.id;
+      }
+      if (!saved) return null;
+
       setWorkspaceId(saved.workspace.id);
       setActiveProjectId(saved.workspace.activeProjectId || saved.document.projectId || null);
       setDocumentId(saved.document.id);
@@ -1224,11 +1234,22 @@ export default function App() {
       setPersistedMessages([]);
       setAgentRuntimeKey(`${saved.thread.id}:0:${Date.now()}`);
       setPack(createDraftPagePack(saved.document.title, saved.document.fileName, Math.max(saved.document.pageCount || 1, 1), saved.document.id));
+      replacePdfObjectUrl(URL.createObjectURL(saved.fileBlob.blob));
       return saved;
     }, copy.persistence.uploadSaved).catch((error) => {
       setJobStatus((error as Error).message || copy.persistence.failed);
     });
-  };
+  }, [
+    activeProjectId,
+    copy.persistence.failed,
+    copy.persistence.uploadSaved,
+    currentLayoutState,
+    persistOperation,
+    refreshDocumentItems,
+    replacePdfObjectUrl,
+    uiPreferences,
+    workspaceId,
+  ]);
 
   const handlePdfDocumentReady = useCallback((pageCount: number) => {
     setPdfPageCount(pageCount);
@@ -2037,9 +2058,10 @@ export default function App() {
                         <FileButton
                           label={copy.rail.uploadDocument}
                           accept="application/pdf"
-                          onFile={(file) => {
+                          multiple
+                          onFiles={(files) => {
                             setRailActionMenuOpen(false);
-                            loadPdf(file);
+                            loadPdfFiles(files);
                           }}
                         >
                           <Upload />

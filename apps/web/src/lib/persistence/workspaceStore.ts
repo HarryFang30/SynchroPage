@@ -558,7 +558,6 @@ export async function savePdfBlob(input: {
   const documentId = createRecordId("doc");
   const blobId = createRecordId("blob");
   const threadId = createRecordId("thread");
-  const hash = await hashBlob(input.file).catch(() => undefined);
   const document: DocumentRecord = {
     id: documentId,
     workspaceId: workspace.id,
@@ -567,7 +566,7 @@ export async function savePdfBlob(input: {
     fileName: input.file.name || `${title}.pdf`,
     mimeType: input.file.type || "application/pdf",
     size: input.file.size || 0,
-    hash,
+    hash: undefined,
     pageCount: 0,
     uploadedAt: now,
     updatedAt: now,
@@ -627,6 +626,12 @@ export async function savePdfBlob(input: {
       lastOpenedAt: now,
     });
   });
+  void hashBlob(input.file)
+    .then((hash) => {
+      if (!hash) return undefined;
+      return synchroPageDb.documents.update(documentId, { hash, updatedAt: Date.now() });
+    })
+    .catch(() => undefined);
   setLastWorkspaceId(workspace.id);
   return { workspace: { ...workspace, activeProjectId: projectId, activeDocumentId: document.id, activeThreadId: thread.id }, document, fileBlob, thread };
 }

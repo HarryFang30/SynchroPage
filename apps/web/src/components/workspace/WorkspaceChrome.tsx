@@ -204,21 +204,36 @@ export function FileButton({
   label,
   accept,
   onFile,
+  onFiles,
+  multiple = false,
   children,
 }: {
   label: string;
   accept: string;
-  onFile: (file: File) => void;
+  onFile?: (file: File) => void;
+  onFiles?: (files: File[]) => void;
+  multiple?: boolean;
   children: ReactNode;
 }) {
   return (
     <label className="mini-button" title={label} aria-label={label}>
       {children}
-      <input type="file" accept={accept} onChange={(event: ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (file) onFile(file);
-        event.currentTarget.value = "";
-      }} />
+      <input
+        type="file"
+        accept={accept}
+        multiple={multiple}
+        onChange={(event: ChangeEvent<HTMLInputElement>) => {
+          const files = Array.from(event.target.files || []);
+          if (files.length) {
+            if (onFiles) {
+              onFiles(files);
+            } else {
+              onFile?.(files[0]);
+            }
+          }
+          event.currentTarget.value = "";
+        }}
+      />
     </label>
   );
 }
