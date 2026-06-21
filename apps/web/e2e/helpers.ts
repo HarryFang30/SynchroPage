@@ -1,4 +1,4 @@
-import { type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -53,4 +53,43 @@ export function fixturePath(name: string): string {
 
 export function readFixture(name: string): Buffer {
   return fs.readFileSync(fixturePath(name));
+}
+
+export async function openRailActionMenu(page: Page) {
+  const menuButton = page.locator(".rail-header-actions .rail-icon-button").first();
+  await expect(menuButton).toBeVisible();
+  await menuButton.click();
+  await expect(page.locator(".rail-action-menu")).toBeVisible();
+}
+
+export async function createCourse(page: Page, name: string) {
+  await openRailActionMenu(page);
+  await page.getByRole("menuitem", { name: /新建课程|New course/i }).click();
+  const dialog = page.locator(".course-dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.locator("input").fill(name);
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".course-item").filter({ hasText: name })).toBeVisible();
+}
+
+export async function uploadPdfFromRail(page: Page, fileName = "two-page.pdf") {
+  await openRailActionMenu(page);
+  const pdfInput = page.locator('.rail-action-menu input[type="file"][accept="application/pdf"]');
+  await expect(pdfInput).toHaveCount(1);
+  await pdfInput.setInputFiles(fixturePath(fileName));
+  await expect(page.locator(".document-item").filter({ hasText: "two-page" })).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".pdf-pane")).toContainText(/PDF|Source|来源/i, { timeout: 10_000 });
+}
+
+export async function activateAgent(page: Page) {
+  let panel = page.locator(".agent-panel");
+  if ((await panel.count()) === 0) {
+    await page.getByRole("button", { name: /显示助手|Show assistant/i }).click();
+    panel = page.locator(".agent-panel");
+  }
+  await expect(panel).toBeVisible();
+  await panel.hover();
+  const composer = page.locator(".aui-composer-input");
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+  return composer;
 }

@@ -10,6 +10,7 @@ python3 scripts/validate_project_files.py
 python3 -m ruff check src tests scripts
 npm --prefix apps/web run check
 npm --prefix apps/web run build
+npm --prefix apps/web run test:e2e
 npm --prefix apps/web audit --audit-level=high --omit=dev
 
 echo "checks ok"

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { resetStorage, mockApi, fixturePath } from "./helpers";
+import { resetStorage, mockApi, uploadPdfFromRail } from "./helpers";
 
 test.describe("Teaching Generation (mocked)", () => {
   test.beforeEach(async ({ page }) => {
@@ -49,66 +49,35 @@ test.describe("Teaching Generation (mocked)", () => {
   });
 
   test("generate button exists in toolbar", async ({ page }) => {
-    // Look for the generate button — may only appear when a PDF is loaded
-    const genBtn = page.locator("button:has-text('Generate'), .generate-main-button, button[aria-label*='generate' i]").first();
-    const genCount = await genBtn.count();
-    // Generate button should exist somewhere in the DOM
-    expect(genCount).toBeGreaterThanOrEqual(0);
+    await expect(page.locator(".generate-main-button")).toBeVisible();
+    await expect(page.locator(".generate-menu-button")).toBeVisible();
   });
 
   test("notes pane exists in layout", async ({ page }) => {
-    const notesPane = page.locator(".notes-pane");
-    // Notes pane should be in the DOM
-    const paneCount = await notesPane.count();
-    expect(paneCount).toBeGreaterThanOrEqual(0);
+    await expect(page.locator(".notes-pane")).toBeVisible();
+    await expect(page.locator(".notes-content")).toBeVisible();
   });
 
-  test("upload PDF then mock generate does not crash", async ({ page }) => {
-    // Upload a PDF first
-    const fileInput = page.locator('input[type="file"]').first();
-    const fileInputCount = await fileInput.count();
+  test("upload PDF then mock generate updates notes content", async ({ page }) => {
+    await uploadPdfFromRail(page);
 
-    if (fileInputCount > 0) {
-      await fileInput.setInputFiles(fixturePath("two-page.pdf"));
-      await page.waitForTimeout(3000);
-    }
+    await page.locator(".generate-main-button").click();
 
-    // Try clicking generate button
-    const genBtn = page.locator("button:has-text('Generate'), .generate-main-button, button[aria-label*='generate' i]").first();
-    const genCount = await genBtn.count();
-
-    if (genCount > 0) {
-      const genVisible = await genBtn.isVisible().catch(() => false);
-      if (genVisible) {
-        await genBtn.click();
-        await page.waitForTimeout(2000);
-
-        // After generation, notes pane should show content
-        const notesContent = page.locator(".notes-content, .note-markdown, .markdown-body").first();
-        const contentCount = await notesContent.count();
-        if (contentCount > 0) {
-          await notesContent.isVisible({ timeout: 5_000 }).catch(() => {
-            // Content may not appear with mocked response
-          });
-        }
-      }
-    }
-
-    // App should not crash
-    await expect(page.locator(".app-shell")).toBeVisible();
+    const notes = page.locator(".notes-content");
+    await expect(notes).toContainText(/Mocked notes|mocked teaching notes/i, { timeout: 10_000 });
+    await page.locator(".generation-progress-trigger").click();
+    await expect(page.locator(".generation-details-popover")).toContainText(/1\/2|1\s*\/\s*2/, { timeout: 10_000 });
+    await expect(page.locator(".generation-details-popover")).toContainText(/已生成|Generated/i);
   });
 
   test("structure panel tab exists", async ({ page }) => {
-    const tabGroup = page.locator(".tab-group, .tab-button");
-    const tabCount = await tabGroup.count();
-    // Tab group should exist in the DOM
-    expect(tabCount).toBeGreaterThanOrEqual(0);
+    await expect(page.locator(".tab-group")).toBeVisible();
+    await expect(page.locator(".tab-button")).toHaveCount(3);
   });
 
-  test("job status bar shows in app", async ({ page }) => {
-    const statusBar = page.locator(".statusbar, .job-status");
-    const statusCount = await statusBar.count();
-    // Status bar should exist in the DOM
-    expect(statusCount).toBeGreaterThanOrEqual(0);
+  test("generation details popover opens from the progress control", async ({ page }) => {
+    await page.locator(".generation-progress-trigger").click();
+    await expect(page.locator(".generation-details-popover")).toBeVisible();
+    await expect(page.locator(".generation-details-popover")).toContainText(/生成情况|Generation status/i);
   });
 });

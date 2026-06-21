@@ -1624,6 +1624,7 @@ export default function App() {
   const movePage = (delta: number) => {
     const targetPage = Math.min(Math.max(currentPdfPageNo + delta, 1), pdfNavigationPageCount);
     if (pdfUrl && pdfScrollViewerRef.current && pdfViewMode === "continuous") {
+      setCurrentPageNo(targetPage);
       pdfScrollViewerRef.current.scrollToPage(targetPage, "smooth");
       return;
     }

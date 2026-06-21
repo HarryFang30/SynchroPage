@@ -1,68 +1,71 @@
 import { test, expect } from "@playwright/test";
-import { resetStorage, mockApi } from "./helpers";
+import { activateAgent, resetStorage, mockApi } from "./helpers";
 
 test.describe("Agent Panel", () => {
   test.beforeEach(async ({ page }) => {
     await resetStorage(page);
     // Mock all API calls so the agent doesn't need a real backend
-    await mockApi(page);
+    await mockApi(page, {
+      "/api/agent/chat": { content: "Mock assistant reply from e2e." },
+    });
   });
 
   test("agent panel is present", async ({ page }) => {
-    const agentPanel = page.locator(".agent-panel");
-    // Panel may be lazy-loaded, but should exist once app is ready
-    const count = await agentPanel.count();
-    expect(count).toBeGreaterThanOrEqual(0);
+    await activateAgent(page);
+    await expect(page.locator(".agent-panel")).toBeVisible();
   });
 
   test("agent toolbar shows model label", async ({ page }) => {
+    await activateAgent(page);
     const toolbar = page.locator(".agent-toolbar");
-    const toolbarCount = await toolbar.count();
-    if (toolbarCount > 0) {
-      const title = page.locator(".toolbar-title, .agent-model").first();
-      await expect(title).toBeVisible();
-    }
+    await expect(toolbar).toBeVisible();
+    await expect(toolbar.locator(".toolbar-title")).toBeVisible();
+    await expect(toolbar.locator(".agent-model")).toHaveText(/OAuth|Local/);
   });
 
   test("composer input accepts text", async ({ page }) => {
-    // The composer input is inside the agent panel
-    const composer = page.locator(".aui-composer-input, [role='textbox']").first();
-    const composerCount = await composer.count();
-
-    if (composerCount > 0) {
-      await composer.click();
-      await composer.fill("Hello, this is a test message");
-      await expect(composer).toHaveValue("Hello, this is a test message");
-    }
+    const composer = await activateAgent(page);
+    await composer.click();
+    await composer.fill("Hello, this is a test message");
+    await expect(composer).toHaveValue("Hello, this is a test message");
   });
 
   test("composer send button exists", async ({ page }) => {
-    const sendBtn = page.locator(".composer-send, button[aria-label*='send' i], button[aria-label*='Send' i]").first();
-    const sendCount = await sendBtn.count();
-    // Send button should be in the DOM (may be visually hidden when composer is empty)
-    expect(sendCount).toBeGreaterThanOrEqual(0);
+    await activateAgent(page);
+    await expect(page.locator(".composer-send")).toBeVisible();
   });
 
   test("agent welcome message is shown when empty", async ({ page }) => {
-    // The welcome section appears when there are no messages
-    const welcome = page.locator(".aui-welcome");
-    // Welcome message should be present in the DOM initially
-    const welcomeCount = await welcome.count();
-    expect(welcomeCount).toBeGreaterThanOrEqual(0);
+    await activateAgent(page);
+    await expect(page.locator(".aui-welcome")).toBeVisible();
+    await expect(page.locator(".prompt-suggestions button")).toHaveCount(4);
   });
 
-  test("sending a message via Enter does not crash", async ({ page }) => {
-    const composer = page.locator(".aui-composer-input, [role='textbox']").first();
-    const composerCount = await composer.count();
+  test("sending a message via Enter renders mocked assistant reply", async ({ page }) => {
+    const composer = await activateAgent(page);
+    await composer.click();
+    await composer.fill("Test message from e2e");
+    await page.keyboard.press("Enter");
 
-    if (composerCount > 0) {
-      await composer.click();
-      await composer.fill("Test message from e2e");
-      await page.keyboard.press("Enter");
-      await page.waitForTimeout(1500);
+    await expect(page.locator(".user-message")).toContainText("Test message from e2e");
+    await expect(page.locator(".assistant-message")).toContainText("Mock assistant reply from e2e.", { timeout: 10_000 });
+  });
 
-      // After sending, the app should still be functional
-      await expect(page.locator(".app-shell")).toBeVisible();
-    }
+  test("adding an image shows the preview inside the composer", async ({ page }) => {
+    await activateAgent(page);
+    const imageInput = page.locator('.agent-action-button input[type="file"][accept="image/*"]');
+    await expect(imageInput).toHaveCount(1);
+    await imageInput.setInputFiles({
+      name: "image.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lL+J+wAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    });
+
+    const composerShell = page.locator(".composer-shell");
+    await expect(composerShell.locator(".composer-attachment-preview")).toBeVisible();
+    await expect(composerShell.locator(".composer-image-preview")).toContainText("image.png");
   });
 });
