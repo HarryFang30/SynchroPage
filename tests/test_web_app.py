@@ -352,6 +352,44 @@ class WebAppTest(unittest.TestCase):
         subset_reader = PdfReader(io.BytesIO(base64.b64decode(second["file_data"])))
         self.assertEqual(len(subset_reader.pages), 1)
 
+    def test_pdf_file_input_does_not_fallback_to_full_pdf_when_subset_fails(self) -> None:
+        file_input = _pdf_file_input(
+            {"filename": "broken.pdf", "fileData": "not-a-pdf"},
+            page_numbers=[2],
+            fallback_to_original_on_subset_failure=False,
+        )
+
+        self.assertIsNone(file_input)
+
+    def test_agent_payload_omits_pdf_file_when_required_subset_fails(self) -> None:
+        payload = _build_responses_payload(
+            {
+                "model": "gpt-5.5",
+                "document": {"id": "doc_long", "title": "Long PDF", "page_count": 303},
+                "documentFile": {"filename": "broken.pdf", "fileData": "not-a-pdf", "sha256": "broken"},
+                "pdfContext": {
+                    "documentId": "doc_long",
+                    "documentTitle": "Long PDF",
+                    "pageCount": 303,
+                    "fullPageLimit": 50,
+                    "edgePageCount": 10,
+                    "truncated": True,
+                    "includedPageNumbers": [1, 2, 3, 301, 302, 303],
+                    "pages": [
+                        {"page_no": 1, "title": "Intro", "text_md": "intro"},
+                        {"page_no": 303, "title": "End", "text_md": "end"},
+                    ],
+                },
+                "page": {"page_no": 9, "source": {"text_md": "selected page"}, "teaching": {}},
+                "input": "解释选中内容",
+            },
+            default_model="fallback",
+        )
+
+        content = payload["input"][0]["content"]
+        self.assertFalse(any(part.get("type") == "input_file" for part in content))
+        self.assertTrue(str(payload["prompt_cache_key"]).startswith("pagepair:doc_long:"))
+
     def test_teaching_generation_payload_subsets_pdf_file_to_batch_pages(self) -> None:
         from PyPDF2 import PdfReader, PdfWriter
 

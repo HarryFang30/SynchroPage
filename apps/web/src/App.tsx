@@ -2328,9 +2328,14 @@ function createPdfAgentAdapter(args: {
           throw error;
         }
         if (!args.isBackendOffline()) {
-          persistPartial((error as Error).message, "failed", true);
+          const failureText = agentFailureText(error, args.copy);
+          persistPartial(failureText, "failed", true);
           await persistQueue;
-          throw error;
+          yield {
+            content: [{ type: "text", text: failureText }] satisfies ThreadAssistantMessagePart[],
+            status: { type: "running" },
+          };
+          throw new Error(failureText);
         }
         try {
           const local = [
@@ -2381,6 +2386,26 @@ async function* streamAssistantText(text: string, signal: AbortSignal, stopMessa
 function chunkAssistantText(text: string) {
   const chunks = text.match(/[\s\S]{1,24}/g);
   return chunks?.length ? chunks : [text];
+}
+
+function agentFailureText(error: unknown, copy: AppCopy) {
+  const message = error instanceof Error ? error.message.trim() : String(error || "").trim();
+  if (!message || message === copy.agent.generationFailed) return copy.agent.generationFailed;
+  return `${copy.agent.generationFailed}\n\n${message}`;
+}
+
+function assistantContentText(content: unknown) {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (!part || typeof part !== "object") return "";
+      const value = part as { text?: unknown };
+      return typeof value.text === "string" ? value.text : "";
+    })
+    .join("\n")
+    .trim();
 }
 
 type GeneratedTeachingPageResponse = {
@@ -6539,6 +6564,9 @@ function AgentMessage() {
   const content = assistantUi.useAuiState((state) => state.message.content);
   const isThinking = status?.type === "running" && content.length === 0;
   const isStopped = status?.type === "incomplete" && status.reason === "cancelled";
+  const failureText = status?.type === "incomplete" && status.reason === "error"
+    ? assistantContentText(content)
+    : "";
 
   return (
     <MessagePrimitive.Root className="aui-message assistant-message">
@@ -6546,13 +6574,21 @@ function AgentMessage() {
       <div className="message-bubble assistant-bubble">
         {isThinking && <AssistantThinkingIndicator />}
         {isStopped && <MessageStatusNote>{copy.agent.generationStopped}</MessageStatusNote>}
-        <MessagePrimitive.Parts components={{ Text: MarkdownPart }} />
-        <MessagePrimitive.Error>
-          <ErrorPrimitive.Root className="message-error">
-            <strong>{copy.agent.generationFailed}</strong>
-            <ErrorPrimitive.Message />
-          </ErrorPrimitive.Root>
-        </MessagePrimitive.Error>
+        {failureText ? (
+          <div className="message-error">
+            <MarkdownRenderer className="message-error-detail" text={failureText} />
+          </div>
+        ) : (
+          <>
+            <MessagePrimitive.Parts components={{ Text: MarkdownPart }} />
+            <MessagePrimitive.Error>
+              <ErrorPrimitive.Root className="message-error">
+                <strong>{copy.agent.generationFailed}</strong>
+                <ErrorPrimitive.Message />
+              </ErrorPrimitive.Root>
+            </MessagePrimitive.Error>
+          </>
+        )}
       </div>
       <div className="assistant-footer">
         <BranchPickerPrimitive.Root hideWhenSingleBranch className="branch-picker">

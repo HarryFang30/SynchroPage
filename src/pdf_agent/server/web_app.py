@@ -604,7 +604,11 @@ def _build_responses_payload(body: Mapping[str, Any], *, default_model: str) -> 
     cache_prefix = _build_document_cache_prefix(body)
     if cache_prefix:
         content.append({"type": "input_text", "text": cache_prefix})
-    pdf_file = _pdf_file_input(body.get("documentFile"), page_numbers=_agent_pdf_file_page_numbers(body))
+    pdf_file = _pdf_file_input(
+        body.get("documentFile"),
+        page_numbers=_agent_pdf_file_page_numbers(body),
+        fallback_to_original_on_subset_failure=False,
+    )
     if pdf_file:
         content.append(pdf_file)
     content.append({"type": "input_text", "text": _build_agent_interaction_prompt(body)})
@@ -1125,7 +1129,12 @@ def _normalized_document_cache_context(body: Mapping[str, Any]) -> dict[str, Any
     }
 
 
-def _pdf_file_input(value: Any, *, page_numbers: Sequence[int] | None = None) -> dict[str, Any] | None:
+def _pdf_file_input(
+    value: Any,
+    *,
+    page_numbers: Sequence[int] | None = None,
+    fallback_to_original_on_subset_failure: bool = True,
+) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     file_data = str(value.get("fileData") or value.get("file_data") or "").strip()
@@ -1145,7 +1154,12 @@ def _pdf_file_input(value: Any, *, page_numbers: Sequence[int] | None = None) ->
     if not filename.lower().endswith(".pdf"):
         filename = f"{filename}.pdf"
     if page_numbers:
-        file_data = _cached_or_subset_pdf_file_data(file_data, page_numbers, sha256=sha256) or file_data
+        subset_file_data = _cached_or_subset_pdf_file_data(file_data, page_numbers, sha256=sha256)
+        if not subset_file_data:
+            if not fallback_to_original_on_subset_failure:
+                return None
+        else:
+            file_data = subset_file_data
     return {
         "type": "input_file",
         "filename": filename,
