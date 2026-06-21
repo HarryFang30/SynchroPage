@@ -173,6 +173,12 @@ export function teachingGenerationQualityPlan(
     complexTextLike &&
     (sourceText.length < TEACHING_COMPLEX_TEXT_FAST_MIN_CHARS ||
       complexitySignalCount >= TEACHING_COMPLEX_TEXT_BALANCED_SIGNAL_COUNT);
+  const textGroundedFormulaPage =
+    formulaLike &&
+    !tableLike &&
+    !codeLike &&
+    !visualLike &&
+    sourceText.length >= TEACHING_FILE_INPUT_MIN_TEXT_CHARS;
   const previousWeak =
     page.status === "failed" ||
     Boolean(page.teaching.needs_review) ||
@@ -208,6 +214,14 @@ export function teachingGenerationQualityPlan(
     requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, "medium");
     retryOnWeakOutput = true;
     if (!denseComplexText) reasons.push("light-complex-text-balanced-path");
+  }
+
+  if (textGroundedFormulaPage) {
+    reasons.push("formula-text-balanced-no-pdf-retry");
+    requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, "medium");
+    attachPdf = false;
+    batchable = true;
+    retryOnWeakOutput = false;
   }
 
   if (visualLike && sourceText.length <= TEACHING_VISUAL_TEXT_MAX_CHARS) {

@@ -73,7 +73,7 @@ function preprocessMarkdownTextSegment(text: string) {
     .map((segment) => {
       if (segment.startsWith("`") && segment.endsWith("`")) return repairInlineCodeMath(segment);
       const normalized = normalizeDisplayMathBlocks(repairDisplayMathDelimiterSpillover(
-        repairBinaryTransitionMathSpillover(normalizeMathDelimiters(escapeCurrencyDollarsPreservingMath(repairMalformedInlineMath(repairMalformedProseMath(normalizeEscapedMarkdownNewlines(segment)))))),
+        repairBinaryTransitionMathSpillover(repairInlineDisplayMathDelimiters(normalizeMathDelimiters(escapeCurrencyDollarsPreservingMath(repairMalformedInlineMath(repairMalformedProseMath(normalizeEscapedMarkdownNewlines(segment))))))),
       ));
       return normalized
         .split(markdownMathSpan)
@@ -112,6 +112,24 @@ function repairDisplayMathDelimiterSpillover(text: string) {
       /(^|\n)([ \t]*(?:\\frac|\\begin\{cases\})[\s\S]*?\\end\{cases\})\$\$/g,
       (_match, lead: string, body: string) => `${lead}$$${body.trim()}$$`,
     );
+}
+
+function repairInlineDisplayMathDelimiters(text: string) {
+  return text.replace(/\$\$([^\n$]{1,80})\$\$/g, (match, body: string, offset: number, source: string) => {
+    const normalizedBody = body.trim();
+    if (!normalizedBody || !isLikelyInlineMathBody(normalizedBody)) return match;
+    if (!hasSameLineTextAround(source, offset, offset + match.length)) return match;
+    return `$${normalizedBody}$`;
+  });
+}
+
+function hasSameLineTextAround(source: string, start: number, end: number) {
+  const lineStart = source.lastIndexOf("\n", start - 1) + 1;
+  const lineEndIndex = source.indexOf("\n", end);
+  const lineEnd = lineEndIndex === -1 ? source.length : lineEndIndex;
+  const before = source.slice(lineStart, start).trim();
+  const after = source.slice(end, lineEnd).trim();
+  return Boolean(before || after);
 }
 
 function normalizeDisplayMathBlocks(text: string) {
