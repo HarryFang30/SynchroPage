@@ -7,27 +7,36 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pdf_agent.server.web_app import (
-    HttpError,
-    PdfAgentRequestHandler,
-    _build_responses_payload,
-    _build_teaching_generation_prompt,
-    _build_teaching_generation_payload,
-    _cache_pdf_file_payload,
-    _extract_gateway_text,
-    _extract_prompt_cache_usage,
-    _json_bytes_utf8_safe,
+from pdf_agent.server.document_context import _pdf_file_input
+from pdf_agent.server.errors import HttpError
+from pdf_agent.server.generation_parsing import (
     _parse_generated_page,
     _parse_generated_pages,
-    _pdf_file_input,
-    _request_etag_matches,
+)
+from pdf_agent.server.json_utils import json_bytes_utf8_safe as _json_bytes_utf8_safe
+from pdf_agent.server.prompt_cache import (
     _retry_after_seconds,
+    _transient_retry_delay_seconds,
+    _without_file_input,
+)
+from pdf_agent.server.response_parsing import (
+    _extract_event_stream_text,
+    _extract_gateway_text,
+    _extract_prompt_cache_usage,
+)
+from pdf_agent.server.payload_builders import (
+    _build_responses_payload,
+    _build_teaching_generation_payload,
+    _build_teaching_generation_prompt,
+    _teaching_generation_candidate_bodies,
+)
+from pdf_agent.server.web_app import (
+    PdfAgentRequestHandler,
+    _cache_pdf_file_payload,
+    _request_etag_matches,
     _resolve_static_path,
     _static_cache_control,
     _static_file_etag,
-    _teaching_generation_candidate_bodies,
-    _transient_retry_delay_seconds,
-    _without_file_input,
 )
 from pdf_agent.gateway.openai_gateway import redacted_gateway_error
 
@@ -103,14 +112,14 @@ class WebAppTest(unittest.TestCase):
         self.assertIsNone(_retry_after_seconds("not a date"))
 
     def test_transient_retry_delay_respects_retry_after_and_cap(self) -> None:
-        original_uniform = __import__("pdf_agent.server.web_app", fromlist=["random"]).random.uniform
-        module = __import__("pdf_agent.server.web_app", fromlist=["random"])
+        import pdf_agent.server.prompt_cache as prompt_cache_module
+        original_uniform = prompt_cache_module.random.uniform
         try:
-            module.random.uniform = lambda _start, _end: 0.0
+            prompt_cache_module.random.uniform = lambda _start, _end: 0.0
             self.assertEqual(_transient_retry_delay_seconds(HttpError(429, "rate limited", retry_after_seconds=2.0), 0), 2.0)
             self.assertEqual(_transient_retry_delay_seconds(HttpError(429, "rate limited", retry_after_seconds=120.0), 0), 12.0)
         finally:
-            module.random.uniform = original_uniform
+            prompt_cache_module.random.uniform = original_uniform
 
     def test_gateway_usage_limit_error_is_readable(self) -> None:
         message = redacted_gateway_error(
@@ -1032,6 +1041,74 @@ class WebAppTest(unittest.TestCase):
                 "total_tokens": 2306,
             },
         )
+
+    # -- SSE response.failed error redaction ---------------------------------
+
+    def test_sse_response_failed_redacts_bearer_token_in_error(self) -> None:
+        """``response.failed`` events must redact Bearer tokens before raising HttpError."""
+        stream = (
+            'data: {"type":"response.failed","error":{"code":"auth_error",'
+            '"message":"Invalid auth: Bearer sk-secret123"}}\n'
+            "data: [DONE]\n"
+        )
+        with self.assertRaises(HttpError) as raised:
+            _extract_event_stream_text(stream)
+        self.assertEqual(raised.exception.code, "upstream_error")
+        self.assertNotIn("sk-secret123", str(raised.exception))
+        self.assertIn("<redacted>", str(raised.exception))
+        self.assertIn("auth_error", str(raised.exception).lower())
+
+    def test_sse_response_failed_falls_back_to_event_body(self) -> None:
+        """When ``error`` is not a dict the whole event is used."""
+        stream = (
+            'data: {"type":"response.failed","message":"internal error"}\n'
+            "data: [DONE]\n"
+        )
+        with self.assertRaises(HttpError) as raised:
+            _extract_event_stream_text(stream)
+        self.assertEqual(raised.exception.code, "upstream_error")
+
+    # -- prompt cache usage edge cases ---------------------------------------
+
+    def test_extracts_prompt_cache_with_legacy_cached_input_tokens(self) -> None:
+        text = json.dumps({
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "total_tokens": 1200,
+                "cached_input_tokens": 500,
+            }
+        })
+        usage = _extract_prompt_cache_usage(text, "application/json")
+        self.assertTrue(usage["cache_hit"])
+        self.assertEqual(usage["cached_tokens"], 500)
+
+    def test_extracts_prompt_cache_miss_when_cached_is_zero(self) -> None:
+        text = json.dumps({
+            "usage": {
+                "prompt_tokens": 1024,
+                "completion_tokens": 128,
+                "total_tokens": 1152,
+                "prompt_tokens_details": {"cached_tokens": 0},
+            }
+        })
+        usage = _extract_prompt_cache_usage(text, "application/json")
+        self.assertFalse(usage["cache_hit"])
+        self.assertEqual(usage["cached_tokens"], 0)
+
+    def test_extracts_prompt_cache_from_plain_text_returns_empty(self) -> None:
+        usage = _extract_prompt_cache_usage("not json", "text/plain")
+        self.assertEqual(usage, {})
+
+    def test_extracts_prompt_cache_from_sse_with_usage_at_top_level(self) -> None:
+        stream = (
+            'data: {"usage":{"input_tokens":500,"output_tokens":50,'
+            '"total_tokens":550,"input_tokens_details":{"cached_tokens":300}}}\n'
+            "data: [DONE]\n"
+        )
+        usage = _extract_prompt_cache_usage(stream, "text/event-stream")
+        self.assertTrue(usage["cache_hit"])
+        self.assertEqual(usage["cached_tokens"], 300)
 
     def test_static_path_rejects_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -33,5 +33,8 @@ jobs:
       - name: Install web dependencies
         run: npm --prefix apps/web ci
 
+      - name: Install Playwright browsers
+        run: npx --prefix apps/web playwright install chromium
+
       - name: Run checks
         run: ./scripts/check.sh
