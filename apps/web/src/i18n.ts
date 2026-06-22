@@ -22,6 +22,8 @@ export type AppCopy = {
     description: string;
     sections: {
       general: string;
+      providers: string;
+      models: string;
       appearance: string;
       agent: string;
       pdf: string;
@@ -461,6 +463,8 @@ const zhCN: AppCopy = {
     description: "管理低频配置，保持阅读工作区干净。",
     sections: {
       general: "通用",
+      providers: "模型供应商",
+      models: "默认模型",
       appearance: "外观",
       agent: "助手",
       pdf: "PDF 阅读器",
@@ -900,6 +904,8 @@ const enUS: AppCopy = {
     description: "Manage low-frequency options without cluttering the reading workspace.",
     sections: {
       general: "General",
+      providers: "Model Providers",
+      models: "Default Models",
       appearance: "Appearance",
       agent: "Assistant",
       pdf: "PDF Reader",

@@ -82,14 +82,19 @@ import {
   type GenerationPageStatus,
 } from "./lib/generation/generationRuntime";
 import { cachedPdfDirectFileInputFromUrl } from "./lib/pdf/directFile";
+import { requestJson } from "./lib/http/requestJson";
 import {
   buildPdfContextFromPack,
   type PdfContextPage,
   type PdfContextPayload,
 } from "./lib/pdf/textExtraction";
 import {
+  defaultModelApiConfig,
   defaultUiPreferences,
   loadUiPreferences,
+  normalizeModelApiConfig,
+  type ModelApiConfig,
+  type ModelApiProvider,
   type UiPreferences,
   uiPreferencesStorageKey,
 } from "./settings";
@@ -155,6 +160,8 @@ import {
 
 type SettingsSection =
   | "general"
+  | "providers"
+  | "models"
   | "appearance"
   | "agent"
   | "pdf"
@@ -361,6 +368,8 @@ function generationStatusLabel(status: GenerationPageStatus, copy: AppCopy) {
 
 export default function App() {
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(() => loadUiPreferences());
+  const [modelApiConfig, setModelApiConfig] = useState<ModelApiConfig>(defaultModelApiConfig);
+  const [modelApiStatus, setModelApiStatus] = useState("Model API: OpenAI OAuth");
   const copy = useMemo(() => getAppCopy(uiPreferences.language), [uiPreferences.language]);
   const [pack, setPack] = useState<PagePack>(() => samplePacks[uiPreferences.language]);
   const [currentPageNo, setCurrentPageNo] = useState(1);
@@ -631,6 +640,62 @@ export default function App() {
     setJobStatus(getAppCopy(defaultUiPreferences.language).status.preferencesReset);
   }, []);
 
+  useEffect(() => {
+    let canceled = false;
+    void requestJson<ModelApiConfig>("/api/model-config")
+      .then((config) => {
+        if (canceled) return;
+        const normalized = normalizeModelApiConfig(config);
+        setModelApiConfig(normalized);
+        const provider = normalized.providers.find((item) => item.id === normalized.selectedProviderId);
+        setModelApiStatus(`Model API: ${provider?.name || "OpenAI OAuth"}`);
+      })
+      .catch(() => {
+        if (!canceled) setModelApiStatus("Model API: backend offline, using OpenAI OAuth");
+      });
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  const updateModelApiConfig = useCallback((next: ModelApiConfig | ((current: ModelApiConfig) => ModelApiConfig)) => {
+    setModelApiConfig((current) => normalizeModelApiConfig(typeof next === "function" ? next(current) : next));
+    setModelApiStatus("Model API: unsaved changes");
+  }, []);
+
+  const saveModelApiConfig = useCallback(async (config = modelApiConfig) => {
+    const normalized = normalizeModelApiConfig(config);
+    const saved = await requestJson<ModelApiConfig>("/api/model-config", {
+      method: "POST",
+      body: JSON.stringify(normalized),
+    });
+    const nextConfig = normalizeModelApiConfig(saved);
+    setModelApiConfig(nextConfig);
+    const provider = nextConfig.providers.find((item) => item.id === nextConfig.selectedProviderId);
+    setModelApiStatus(`Model API: saved${provider ? ` · ${provider.name}` : ""}`);
+    return nextConfig;
+  }, [modelApiConfig]);
+
+  const fetchProviderModels = useCallback(async (provider: ModelApiProvider) => {
+    const response = await requestJson<{ models?: Array<{ id?: string; owned_by?: string }> }>("/api/model-config/models", {
+      method: "POST",
+      body: JSON.stringify({ provider }),
+    });
+    const models = Array.from(new Set<string>(
+      (response.models || []).flatMap((item) => {
+        const model = typeof item.id === "string" ? item.id.trim() : "";
+        return model ? [model] : [];
+      }),
+    ));
+    if (!models.length) throw new Error("Provider returned no models");
+    setModelApiConfig((current) => normalizeModelApiConfig({
+      ...current,
+      providers: current.providers.map((item) => item.id === provider.id ? { ...item, models, enabled: true } : item),
+    }));
+    setModelApiStatus(`Model API: fetched ${models.length} models from ${provider.name}`);
+    return models;
+  }, []);
+
   const getSnapshot = useCallback(
     () => ({
       contexts,
@@ -639,8 +704,9 @@ export default function App() {
       pdfContext: pdfUrl ? pdfTextContext : buildPdfContextFromPack(pack, uiPreferences),
       answerMode: uiPreferences.agentAnswerMode,
       reasoningEffort: agentAnswerModeReasoningEffort(uiPreferences.agentAnswerMode),
+      assistantModel: modelApiConfig.defaults.assistant,
     }),
-    [attachments, contexts, pack, pdfTextContext, pdfUrl, selectedContext, uiPreferences],
+    [attachments, contexts, modelApiConfig.defaults.assistant, pack, pdfTextContext, pdfUrl, selectedContext, uiPreferences],
   );
   const getDocumentFile = useCallback(async () => {
     if (!pdfUrl) return null;
@@ -1765,6 +1831,7 @@ export default function App() {
     documentItems,
     copy,
     uiPreferences,
+    modelApiConfig,
     generationAbortControllerRef,
     setJobStatus,
     setPanels,
@@ -1772,14 +1839,17 @@ export default function App() {
     refreshDocumentItems,
   });
 
+  const activeModelProvider = modelApiConfig.providers.find((provider) => provider.id === modelApiConfig.selectedProviderId);
   const authText =
-    oauthMode === "connected"
-      ? copy.auth.gatewayConnected(oauthAccount)
-      : oauthMode === "polling"
-        ? copy.auth.gatewayWaiting
-        : oauthMode === "offline"
-          ? copy.auth.gatewayOffline
-          : copy.auth.gatewayDisconnected;
+    activeModelProvider && activeModelProvider.type !== "codex-oauth"
+      ? `Model API: ${activeModelProvider.name}${activeModelProvider.enabled ? "" : " · disabled"}`
+      : oauthMode === "connected"
+        ? copy.auth.gatewayConnected(oauthAccount)
+        : oauthMode === "polling"
+          ? copy.auth.gatewayWaiting
+          : oauthMode === "offline"
+            ? copy.auth.gatewayOffline
+            : copy.auth.gatewayDisconnected;
   const connectionText =
     oauthMode === "connected"
       ? copy.auth.connectionConnected
@@ -2034,6 +2104,11 @@ export default function App() {
             onSectionChange={setSettingsSection}
             preferences={uiPreferences}
             onPreferenceChange={updatePreference}
+            modelApiConfig={modelApiConfig}
+            modelApiStatus={modelApiStatus}
+            onModelApiConfigChange={updateModelApiConfig}
+            onSaveModelApiConfig={saveModelApiConfig}
+            onFetchProviderModels={fetchProviderModels}
             onResetLayout={() => {
               setPanels(defaultPanelVisibility);
               setJobStatus(copy.status.layoutReset);

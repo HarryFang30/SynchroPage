@@ -94,7 +94,9 @@ export function buildSinglePageRequestBody(params: SinglePageRequestParams) {
   return {
     method: "POST" as const,
     body: JSON.stringify({
+      modelProviderId: plan.providerId,
       model: plan.model,
+      fallbackModelProviderId: plan.fallbackProviderId,
       fallbackModel: plan.fallbackModel,
       reasoningEffort: plan.reasoningEffort,
       qualityPlan: teachingQualityPlanPayload(plan),
@@ -129,7 +131,9 @@ export function buildBatchPagesRequestBody(params: BatchPagesRequestParams) {
   return {
     method: "POST" as const,
     body: JSON.stringify({
+      modelProviderId: plan.providerId,
       model: plan.model,
+      fallbackModelProviderId: plan.fallbackProviderId,
       fallbackModel: plan.fallbackModel,
       reasoningEffort: plan.reasoningEffort,
       qualityPlan: teachingQualityPlanPayload(plan),

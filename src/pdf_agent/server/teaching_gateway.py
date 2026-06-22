@@ -9,7 +9,6 @@ from typing import Any
 from pdf_agent.auth import OpenAIOAuthManager
 from pdf_agent.gateway import (
     build_chatgpt_codex_auth,
-    codex_responses_url,
 )
 from pdf_agent.server.constants import (
     DEFAULT_AGENT_MODEL,
@@ -18,26 +17,28 @@ from pdf_agent.server.constants import (
     TEACHING_UPSTREAM_TIMEOUT_SECONDS,
 )
 from pdf_agent.server.errors import HttpError
-from pdf_agent.server.gateway_fallback import post_payload_with_cache_fallback
 from pdf_agent.server.gateway_transport import post_json_responses
 from pdf_agent.server.generation_parsing import (
     _parse_generated_page,
     _parse_generated_pages,
 )
+from pdf_agent.server.model_config import ModelConfigStore
+from pdf_agent.server.model_gateway import (
+    extract_provider_text,
+    post_responses_payload_for_body,
+    provider_cache_metadata,
+)
 from pdf_agent.server.payload_builders import (
-    _build_teaching_codex_responses_payload,
+    _build_teaching_generation_payload,
     _teaching_generation_candidate_bodies,
 )
 from pdf_agent.server.prompt_cache import (
     TEACHING_MAX_RETRY_DELAY_SECONDS,
     TEACHING_RETRY_DELAYS_SECONDS,
-    _prompt_cache_metadata,
     _should_retry_transient_upstream_error,
     _should_try_next_teaching_generation_candidate,
     _transient_retry_delay_seconds,
 )
-from pdf_agent.server.response_parsing import _extract_gateway_text
-from pdf_agent.server.value_utils import string_or_none as _string_or_none
 
 
 class TeachingGenerationGateway:
@@ -50,26 +51,25 @@ class TeachingGenerationGateway:
         model: str = DEFAULT_AGENT_MODEL,
         timeout_seconds: float = float(TEACHING_UPSTREAM_TIMEOUT_SECONDS),
         api_concurrency: int = TEACHING_API_CONCURRENCY,
+        config_store: ModelConfigStore | None = None,
     ) -> None:
         self.manager = manager
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.config_store = config_store
         self._api_semaphore = asyncio.Semaphore(max(1, api_concurrency))
         self._rate_limit_lock = asyncio.Lock()
         self._rate_limit_cooldown_until = 0.0
 
     async def generate_page(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        auth = await build_chatgpt_codex_auth(self.manager, session_id=_string_or_none(body.get("session_id")))
-        content, payload, document_file_used, cache_metadata = await self._generate_content_with_fallback(
-            codex_responses_url(base_url=auth.upstream_base_url),
-            body,
-            auth.headers,
-        )
+        content, result, document_file_used, cache_metadata = await self._generate_content_with_fallback(body)
         page = _parse_generated_page(content, body)
         return {
             "page": page,
-            "account_id": auth.account_id,
-            "model": payload.get("model"),
+            "account_id": result.account_id,
+            "provider_id": result.provider_id,
+            "provider": result.provider_name,
+            "model": result.payload.get("model"),
             "cache": {
                 **cache_metadata,
                 "document_file_input": document_file_used,
@@ -77,17 +77,14 @@ class TeachingGenerationGateway:
         }
 
     async def generate_pages(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        auth = await build_chatgpt_codex_auth(self.manager, session_id=_string_or_none(body.get("session_id")))
-        content, payload, document_file_used, cache_metadata = await self._generate_content_with_fallback(
-            codex_responses_url(base_url=auth.upstream_base_url),
-            body,
-            auth.headers,
-        )
+        content, result, document_file_used, cache_metadata = await self._generate_content_with_fallback(body)
         pages = _parse_generated_pages(content, body)
         return {
             "pages": pages,
-            "account_id": auth.account_id,
-            "model": payload.get("model"),
+            "account_id": result.account_id,
+            "provider_id": result.provider_id,
+            "provider": result.provider_name,
+            "model": result.payload.get("model"),
             "cache": {
                 **cache_metadata,
                 "document_file_input": document_file_used,
@@ -96,32 +93,33 @@ class TeachingGenerationGateway:
 
     async def _generate_content_with_fallback(
         self,
-        url: str,
         body: Mapping[str, Any],
-        headers: dict[str, str],
-    ) -> tuple[str, dict[str, Any], bool, dict[str, Any]]:
+    ):
         candidate_bodies = _teaching_generation_candidate_bodies(body)
 
         last_error: HttpError | None = None
         for candidate_index, (candidate_body, document_file_used) in enumerate(candidate_bodies):
-            payload = await asyncio.to_thread(
-                _build_teaching_codex_responses_payload,
-                candidate_body,
-                self.model,
-            )
+            payload = await asyncio.to_thread(_build_teaching_generation_payload, candidate_body, default_model=self.model)
             try:
-                text, content_type, payload = await post_payload_with_cache_fallback(
-                    self._post_with_retries,
-                    url, payload, headers,
+                result = await post_responses_payload_for_body(
+                    manager=self.manager,
+                    config_store=self.config_store,
+                    body=candidate_body,
+                    default_key="teachingQuality",
+                    legacy_model=self.model,
+                    responses_payload=payload,
+                    post_with_retries=self._post_with_retries,
+                    codex_include_reasoning_encrypted_content=False,
+                    codex_auth_builder=build_chatgpt_codex_auth,
                 )
-                content = _extract_gateway_text(text, content_type)
+                content = extract_provider_text(result.text, result.content_type)
                 if not content:
-                    raise HttpError(502, "OpenAI gateway returned an empty generation response", code="empty_gateway_response")
+                    raise HttpError(502, "Model provider returned an empty generation response", code="empty_gateway_response")
                 return (
                     content,
-                    payload,
+                    result,
                     document_file_used,
-                    _prompt_cache_metadata(payload, response_text=text, content_type=content_type),
+                    provider_cache_metadata(result.payload, response_text=result.text, content_type=result.content_type),
                 )
             except HttpError as exc:
                 last_error = exc

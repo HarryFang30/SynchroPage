@@ -57,7 +57,7 @@ import {
   type DocumentSidebarItem,
 } from "../lib/persistence";
 import { hasCompletedTeaching } from "../lib/generation/generationRuntime";
-import type { UiPreferences } from "../settings";
+import type { ModelApiConfig, UiPreferences } from "../settings";
 import type { PanelVisibility } from "../lib/workspace/synchroPageState";
 import {
   buildRunningPageData,
@@ -109,6 +109,7 @@ export interface GenerationEngineParams {
   documentItems: DocumentSidebarItem[];
   copy: AppCopy;
   uiPreferences: UiPreferences;
+  modelApiConfig: ModelApiConfig;
   generationAbortControllerRef: React.MutableRefObject<AbortController | null>;
   setJobStatus: (status: string) => void;
   setPanels: (fn: PanelVisibility | ((prev: PanelVisibility) => PanelVisibility)) => void;
@@ -264,7 +265,9 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                     method: "POST",
                     signal: requestSignal,
                     body: JSON.stringify({
+                      modelProviderId: plan.providerId,
                       model: plan.model,
+                      fallbackModelProviderId: plan.fallbackProviderId,
                       fallbackModel: plan.fallbackModel,
                       reasoningEffort: plan.reasoningEffort,
                       qualityPlan: teachingQualityPlanPayload(plan),
@@ -298,7 +301,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
 
           const generateSinglePage = async (
             runningPage: PageData,
-            plan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort),
+            plan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "initial", p.modelApiConfig),
             fallbackOnFailure?: PageData,
           ) => {
             const pageNo = runningPage.page_no;
@@ -307,6 +310,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               runningPage,
               initialPlan: plan,
               preference: p.uiPreferences.modelReasoningEffort,
+              modelApiConfig: p.modelApiConfig,
               outputLanguage: pageOutputLanguage,
               copy: p.copy,
               signal: generationSignal,
@@ -330,7 +334,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             });
           };
 
-          const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort);
+          const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort, p.modelApiConfig);
           await runWithConcurrencyLimit(pageBatches, TEACHING_GENERATION_CONCURRENCY, async (pageBatch) => {
             const runningPages = pageBatch.pages.map(markRunningPage);
             if (runningPages.length === 1) {
@@ -349,7 +353,9 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                       method: "POST",
                       signal: requestSignal,
                       body: JSON.stringify({
+                        modelProviderId: pageBatch.plan.providerId,
                         model: pageBatch.plan.model,
+                        fallbackModelProviderId: pageBatch.plan.fallbackProviderId,
                         fallbackModel: pageBatch.plan.fallbackModel,
                         reasoningEffort: pageBatch.plan.reasoningEffort,
                         qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
@@ -389,7 +395,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                   },
                 };
                 if (pageBatch.plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
-                  const retryPlan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "retry");
+                  const retryPlan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "retry", p.modelApiConfig);
                   retryPages.push({ runningPage, retryPlan, fallback: generatedPage });
                   continue;
                 }
@@ -498,6 +504,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
     p.generatePageMode,
     p.generateRangeDraft,
     p.isGeneratingNotes,
+    p.modelApiConfig,
     p.pack,
     p.pdfExtractedPages,
     p.pdfPageCount,
@@ -728,7 +735,9 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                       method: "POST",
                       signal: requestSignal,
                       body: JSON.stringify({
+                        modelProviderId: plan.providerId,
                         model: plan.model,
+                        fallbackModelProviderId: plan.fallbackProviderId,
                         fallbackModel: plan.fallbackModel,
                         reasoningEffort: plan.reasoningEffort,
                         qualityPlan: teachingQualityPlanPayload(plan),
@@ -769,7 +778,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
 
             const generateSinglePage = async (
               runningPage: PageData,
-              plan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort),
+              plan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "initial", p.modelApiConfig),
               fallbackOnFailure?: PageData,
             ) => {
               const pageNo = runningPage.page_no;
@@ -778,6 +787,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 runningPage,
                 initialPlan: plan,
                 preference: p.uiPreferences.modelReasoningEffort,
+                modelApiConfig: p.modelApiConfig,
                 outputLanguage: p.teachingOutputLanguage,
                 copy: p.copy,
                 signal: generationSignal,
@@ -801,7 +811,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               });
             };
 
-            const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort);
+            const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort, p.modelApiConfig);
             await runWithConcurrencyLimit(pageBatches, TEACHING_GENERATION_CONCURRENCY, async (pageBatch) => {
               const runningPages = pageBatch.pages.map(markRunningPage);
               if (runningPages.length === 1) {
@@ -822,7 +832,9 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                         method: "POST",
                         signal: requestSignal,
                         body: JSON.stringify({
+                          modelProviderId: pageBatch.plan.providerId,
                           model: pageBatch.plan.model,
+                          fallbackModelProviderId: pageBatch.plan.fallbackProviderId,
                           fallbackModel: pageBatch.plan.fallbackModel,
                           reasoningEffort: pageBatch.plan.reasoningEffort,
                           qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
@@ -862,7 +874,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                     },
                   };
                   if (pageBatch.plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
-                    const retryPlan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "retry");
+                    const retryPlan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "retry", p.modelApiConfig);
                     retryPages.push({ runningPage, retryPlan, fallback: generatedPage });
                     continue;
                   }
@@ -950,6 +962,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
     p.documentId,
     p.documentItems,
     p.isGeneratingNotes,
+    p.modelApiConfig,
     p.pack.document.page_count,
     p.pdfExtractedPages,
     p.pdfPageCount,
@@ -967,6 +980,7 @@ type GeneratePageWithAutoRetryOptions = {
   runningPage: PageData;
   initialPlan: TeachingGenerationQualityPlan;
   preference: UiPreferences["modelReasoningEffort"];
+  modelApiConfig: ModelApiConfig;
   outputLanguage: TeachingOutputLanguage;
   copy: AppCopy;
   signal: AbortSignal;
@@ -981,6 +995,7 @@ async function generatePageWithAutoRetry({
   runningPage,
   initialPlan,
   preference,
+  modelApiConfig,
   outputLanguage,
   copy,
   signal,
@@ -997,7 +1012,7 @@ async function generatePageWithAutoRetry({
     if (signal.aborted) return;
     const plan = attempt === 1
       ? initialPlan
-      : teachingGenerationQualityPlan(runningPage, preference, "retry");
+      : teachingGenerationQualityPlan(runningPage, preference, "retry", modelApiConfig);
 
     try {
       const generatedPage = await requestGeneratedPage(runningPage, plan);

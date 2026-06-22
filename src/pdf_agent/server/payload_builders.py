@@ -704,11 +704,15 @@ def _build_teaching_codex_responses_payload(body: Mapping[str, Any], default_mod
 def _teaching_generation_candidate_bodies(body: Mapping[str, Any]) -> list[tuple[Mapping[str, Any], bool]]:
     requested_model = _clean_model(body.get("model"))
     fallback_model = _clean_model(body.get("fallbackModel"))
+    fallback_provider_id = _clean_model(body.get("fallbackModelProviderId"))
     model_bodies: list[Mapping[str, Any]] = [body]
     if fallback_model and fallback_model != requested_model:
         fallback_body = dict(body)
         fallback_body["model"] = fallback_model
+        if fallback_provider_id:
+            fallback_body["modelProviderId"] = fallback_provider_id
         fallback_body.pop("fallbackModel", None)
+        fallback_body.pop("fallbackModelProviderId", None)
         model_bodies.append(fallback_body)
 
     has_pdf_file = bool(

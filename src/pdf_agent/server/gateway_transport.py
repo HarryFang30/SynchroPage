@@ -8,6 +8,7 @@ timeout / Retry-After handling.
 
 from __future__ import annotations
 
+import json
 import socket
 import urllib.error
 import urllib.request
@@ -70,3 +71,42 @@ def post_json_responses(
         ) from exc
     except urllib.error.URLError as exc:
         raise HttpError(502, redacted_gateway_error(str(exc)), code="network_error") from exc
+
+
+def get_json(
+    url: str,
+    headers: dict[str, str],
+    *,
+    timeout_seconds: float,
+) -> Any:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            **headers,
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            text = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HttpError(
+            exc.code,
+            redacted_gateway_error(detail),
+            code="upstream_error",
+            retry_after_seconds=_retry_after_seconds(exc.headers.get("Retry-After")),
+        ) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise HttpError(
+            504,
+            f"Model provider request timed out after {timeout_seconds:.0f}s",
+            code="upstream_timeout",
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise HttpError(502, redacted_gateway_error(str(exc)), code="network_error") from exc
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise HttpError(502, redacted_gateway_error(text), code="invalid_upstream_json") from exc

@@ -9,21 +9,18 @@ from typing import Any
 from pdf_agent.auth import OpenAIOAuthManager
 from pdf_agent.gateway import (
     build_chatgpt_codex_auth,
-    build_codex_responses_payload,
-    codex_responses_url,
 )
 from pdf_agent.server.constants import AGENT_RETRY_DELAYS_SECONDS, DEFAULT_AGENT_MODEL
 from pdf_agent.server.errors import HttpError
-from pdf_agent.server.gateway_fallback import post_payload_with_cache_fallback
 from pdf_agent.server.gateway_transport import post_json_responses
-from pdf_agent.server.payload_builders import _build_responses_payload
-from pdf_agent.server.prompt_cache import (
-    _prompt_cache_metadata,
-    _should_retry_transient_upstream_error,
-    _transient_retry_delay_seconds,
+from pdf_agent.server.model_config import ModelConfigStore
+from pdf_agent.server.model_gateway import (
+    extract_provider_text,
+    post_responses_payload_for_body,
+    provider_cache_metadata,
 )
-from pdf_agent.server.response_parsing import _extract_gateway_text
-from pdf_agent.server.value_utils import string_or_none as _string_or_none
+from pdf_agent.server.payload_builders import _build_responses_payload
+from pdf_agent.server.prompt_cache import _should_retry_transient_upstream_error, _transient_retry_delay_seconds
 
 
 class AgentChatGateway:
@@ -35,36 +32,38 @@ class AgentChatGateway:
         *,
         model: str = DEFAULT_AGENT_MODEL,
         timeout_seconds: float = 120.0,
+        config_store: ModelConfigStore | None = None,
     ) -> None:
         self.manager = manager
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.config_store = config_store
 
     async def chat(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        auth = await build_chatgpt_codex_auth(self.manager, session_id=_string_or_none(body.get("session_id")))
-        payload = build_codex_responses_payload(
-            _build_responses_payload(body, default_model=self.model),
-            force_stream=True,
-            include_reasoning_encrypted_content=True,
-            strip_unsupported_fields=True,
+        result = await post_responses_payload_for_body(
+            manager=self.manager,
+            config_store=self.config_store,
+            body=body,
+            default_key="assistant",
+            legacy_model=self.model,
+            responses_payload=_build_responses_payload(body, default_model=self.model),
+            post_with_retries=self._post_with_retries,
+            codex_include_reasoning_encrypted_content=True,
+            codex_auth_builder=build_chatgpt_codex_auth,
         )
-        text, content_type, payload = await post_payload_with_cache_fallback(
-            self._post_with_retries,
-            codex_responses_url(base_url=auth.upstream_base_url),
-            payload,
-            auth.headers,
-        )
-        content = _extract_gateway_text(text, content_type)
+        content = extract_provider_text(result.text, result.content_type)
         if not content:
-            raise HttpError(502, "OpenAI gateway returned an empty response", code="empty_gateway_response")
+            raise HttpError(502, "Model provider returned an empty response", code="empty_gateway_response")
         return {
             "message": {
                 "role": "assistant",
                 "content": content,
             },
-            "account_id": auth.account_id,
-            "model": payload.get("model"),
-            "cache": _prompt_cache_metadata(payload, response_text=text, content_type=content_type),
+            "account_id": result.account_id,
+            "provider_id": result.provider_id,
+            "provider": result.provider_name,
+            "model": result.payload.get("model"),
+            "cache": provider_cache_metadata(result.payload, response_text=result.text, content_type=result.content_type),
         }
 
     async def _post_with_retries(

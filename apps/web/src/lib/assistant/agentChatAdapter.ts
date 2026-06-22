@@ -1,5 +1,5 @@
 import type { AppCopy } from "../../i18n";
-import type { UiPreferences } from "../../settings";
+import type { ModelRef, UiPreferences } from "../../settings";
 import type { SelectedContext } from "../../hooks/usePageSelection";
 import { requestJson } from "../http/requestJson";
 import type { PdfDirectFileInput } from "../pdf/directFile";
@@ -54,6 +54,7 @@ export type AgentSnapshot = {
   pdfContext: PdfContextPayload | null;
   answerMode: UiPreferences["agentAnswerMode"];
   reasoningEffort: UiPreferences["modelReasoningEffort"];
+  assistantModel: ModelRef;
 };
 
 export type ChatPersistInput = {
@@ -205,7 +206,8 @@ export function createPdfAgentAdapter(args: {
       ].filter(Boolean);
 
       const payload = {
-        model: "gpt-5.5",
+        modelProviderId: snapshot.assistantModel.providerId,
+        model: snapshot.assistantModel.model,
         answerMode: snapshot.answerMode,
         reasoningEffort: snapshot.reasoningEffort,
         document: pack.document,

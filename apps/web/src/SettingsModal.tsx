@@ -1,25 +1,33 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Bot,
+  Box,
+  Cloud,
   Database,
   FileText,
   FolderOpen,
+  KeyRound,
   Palette,
+  Plus,
   RefreshCcw,
+  RefreshCw,
   RotateCcw,
   Settings2,
+  Trash2,
   UserCircle,
   Wrench,
   X,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { getAppCopy } from "./i18n";
-import type { UiPreferences } from "./settings";
+import type { ModelApiConfig, ModelApiProvider, ModelRef, UiPreferences } from "./settings";
 
 type OAuthMode = "unknown" | "ready" | "connected" | "polling" | "offline" | "mock";
 
 export type SettingsSection =
   | "general"
+  | "providers"
+  | "models"
   | "appearance"
   | "agent"
   | "pdf"
@@ -45,6 +53,11 @@ type SettingsModalProps = {
   onSectionChange: (section: SettingsSection) => void;
   preferences: UiPreferences;
   onPreferenceChange: <K extends keyof UiPreferences>(key: K, value: UiPreferences[K]) => void;
+  modelApiConfig: ModelApiConfig;
+  modelApiStatus: string;
+  onModelApiConfigChange: (next: ModelApiConfig | ((current: ModelApiConfig) => ModelApiConfig)) => void;
+  onSaveModelApiConfig: (config?: ModelApiConfig) => Promise<ModelApiConfig>;
+  onFetchProviderModels: (provider: ModelApiProvider) => Promise<string[]>;
   onResetLayout: () => void;
   onResetPreferences: () => void;
   onConnectOAuth: () => void;
@@ -76,6 +89,8 @@ export function SettingsModal(props: SettingsModalProps) {
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const sections: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
     { id: "general", label: copy.settings.sections.general, icon: <Settings2 /> },
+    { id: "providers", label: copy.settings.sections.providers, icon: <Cloud /> },
+    { id: "models", label: copy.settings.sections.models, icon: <Box /> },
     { id: "appearance", label: copy.settings.sections.appearance, icon: <Palette /> },
     { id: "agent", label: copy.settings.sections.agent, icon: <Bot /> },
     { id: "pdf", label: copy.settings.sections.pdf, icon: <FileText /> },
@@ -145,6 +160,25 @@ export function SettingsModal(props: SettingsModalProps) {
                     <SettingsButton onClick={props.onResetLayout}>{copy.settings.general.resetLayoutButton}</SettingsButton>
                   </SettingsRow>
                 </SettingsGroup>
+              )}
+
+              {section === "providers" && (
+                <ProviderSettingsPanel
+                  config={props.modelApiConfig}
+                  status={props.modelApiStatus}
+                  onChange={props.onModelApiConfigChange}
+                  onSave={props.onSaveModelApiConfig}
+                  onFetchModels={props.onFetchProviderModels}
+                />
+              )}
+
+              {section === "models" && (
+                <DefaultModelSettingsPanel
+                  config={props.modelApiConfig}
+                  status={props.modelApiStatus}
+                  onChange={props.onModelApiConfigChange}
+                  onSave={props.onSaveModelApiConfig}
+                />
               )}
 
               {section === "appearance" && (
@@ -484,6 +518,256 @@ export function SettingsModal(props: SettingsModalProps) {
   );
 }
 
+type ModelDefaultKey = "assistant" | "teachingFast" | "teachingBalanced" | "teachingQuality";
+
+function ProviderSettingsPanel(props: {
+  config: ModelApiConfig;
+  status: string;
+  onChange: (next: ModelApiConfig | ((current: ModelApiConfig) => ModelApiConfig)) => void;
+  onSave: (config?: ModelApiConfig) => Promise<ModelApiConfig>;
+  onFetchModels: (provider: ModelApiProvider) => Promise<string[]>;
+}) {
+  const [selectedProviderId, setSelectedProviderId] = useState(props.config.selectedProviderId);
+  const [panelStatus, setPanelStatus] = useState("");
+  const selectedProvider =
+    props.config.providers.find((provider) => provider.id === selectedProviderId) ||
+    props.config.providers.find((provider) => provider.id === props.config.selectedProviderId) ||
+    props.config.providers[0];
+
+  const updateProvider = (patch: Partial<ModelApiProvider>) => {
+    if (!selectedProvider) return;
+    props.onChange((current) => ({
+      ...current,
+      selectedProviderId: selectedProvider.id,
+      providers: current.providers.map((provider) => provider.id === selectedProvider.id ? { ...provider, ...patch } : provider),
+    }));
+  };
+  const addProvider = () => {
+    const id = `provider_${Date.now().toString(36)}`;
+    const provider: ModelApiProvider = {
+      id,
+      name: "Custom Provider",
+      type: "openai-compatible",
+      apiHost: "https://api.example.com",
+      apiKeyRequired: true,
+      enabled: false,
+      models: ["custom-model"],
+    };
+    props.onChange((current) => ({
+      ...current,
+      selectedProviderId: id,
+      providers: [...current.providers, provider],
+    }));
+    setSelectedProviderId(id);
+  };
+  const removeProvider = () => {
+    if (!selectedProvider || selectedProvider.type === "codex-oauth") return;
+    props.onChange((current) => {
+      const providers = current.providers.filter((provider) => provider.id !== selectedProvider.id);
+      const nextProviderId = providers[0]?.id || "codex_oauth";
+      return {
+        ...current,
+        selectedProviderId: nextProviderId,
+        providers,
+      };
+    });
+    setSelectedProviderId(props.config.providers[0]?.id || "codex_oauth");
+  };
+  const fetchModels = async () => {
+    if (!selectedProvider) return;
+    setPanelStatus("Fetching models...");
+    try {
+      const models = await props.onFetchModels(selectedProvider);
+      updateProvider({ models, enabled: true });
+      setPanelStatus(`Fetched ${models.length} models`);
+    } catch (error) {
+      setPanelStatus((error as Error).message || "Model fetch failed");
+    }
+  };
+  const save = async () => {
+    setPanelStatus("Saving...");
+    try {
+      await props.onSave();
+      setPanelStatus("Saved");
+    } catch (error) {
+      setPanelStatus((error as Error).message || "Save failed");
+    }
+  };
+
+  if (!selectedProvider) return null;
+  return (
+    <div className="settings-provider-panel">
+      <div className="settings-provider-list">
+        <div className="settings-provider-list-header">
+          <span>Providers</span>
+          <SettingsIconButton label="Add provider" onClick={addProvider}>
+            <Plus />
+          </SettingsIconButton>
+        </div>
+        <div className="settings-provider-list-items">
+          {props.config.providers.map((provider) => (
+            <button
+              key={provider.id}
+              type="button"
+              className={`settings-provider-item ${selectedProvider.id === provider.id ? "active" : ""}`}
+              onClick={() => {
+                setSelectedProviderId(provider.id);
+                props.onChange((current) => ({ ...current, selectedProviderId: provider.id }));
+              }}
+            >
+              <span className="settings-provider-avatar">{provider.name.slice(0, 1).toUpperCase()}</span>
+              <span>
+                <strong>{provider.name}</strong>
+                <small>{provider.enabled ? "Enabled" : "Disabled"}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="settings-provider-detail">
+        <div className="settings-provider-detail-header">
+          <div>
+            <h3>{selectedProvider.name}</h3>
+            <p>{providerPreviewUrl(selectedProvider)}</p>
+          </div>
+          <SettingsSwitch checked={selectedProvider.enabled} onCheckedChange={(enabled) => updateProvider({ enabled })} />
+        </div>
+
+        <SettingsGroup>
+          <SettingsRow label="Provider name" description="Shown in model selectors and request status.">
+            <SettingsTextInput value={selectedProvider.name} onChange={(name) => updateProvider({ name })} />
+          </SettingsRow>
+          <SettingsRow label="API type" description="Use Chat Completions for most OpenAI-compatible providers.">
+            <SettingsSelect
+              value={selectedProvider.type}
+              onChange={(type) => updateProvider({
+                type: type as ModelApiProvider["type"],
+                apiKeyRequired: type !== "codex-oauth",
+              })}
+              options={[
+                ["codex-oauth", "OpenAI OAuth"],
+                ["openai-compatible", "OpenAI-compatible Chat"],
+                ["openai-responses", "OpenAI Responses"],
+              ]}
+            />
+          </SettingsRow>
+          <SettingsRow label="API Key" description={selectedProvider.hasApiKey ? "A key is saved on the backend. Leave blank to keep it." : "Stored by the local backend model config."}>
+            <div className="settings-secret-control">
+              <KeyRound />
+              <input
+                className="settings-text-input"
+                type="password"
+                value={selectedProvider.apiKey || ""}
+                placeholder={selectedProvider.hasApiKey ? "Saved, leave blank to keep" : "sk-..."}
+                onChange={(event) => updateProvider({ apiKey: event.target.value || undefined })}
+                disabled={selectedProvider.type === "codex-oauth"}
+              />
+            </div>
+          </SettingsRow>
+          <SettingsRow label="API Host" description="Preview follows the selected API type.">
+            <SettingsTextInput
+              value={selectedProvider.apiHost}
+              onChange={(apiHost) => updateProvider({ apiHost })}
+              disabled={selectedProvider.type === "codex-oauth"}
+            />
+          </SettingsRow>
+          <SettingsRow label="Models" description="Comma or newline separated. Fetching replaces this list.">
+            <SettingsTextArea value={selectedProvider.models.join("\n")} onChange={(value) => updateProvider({ models: splitModels(value) })} />
+          </SettingsRow>
+          <SettingsRow label="Actions" description={panelStatus || props.status}>
+            <div className="settings-inline-actions">
+              <SettingsButton onClick={() => void fetchModels()}>
+                <RefreshCw />
+                Fetch models
+              </SettingsButton>
+              <SettingsButton variant="primary" onClick={() => void save()}>Save</SettingsButton>
+              <SettingsIconButton disabled={selectedProvider.type === "codex-oauth"} label="Delete provider" onClick={removeProvider}>
+                <Trash2 />
+              </SettingsIconButton>
+            </div>
+          </SettingsRow>
+        </SettingsGroup>
+      </div>
+    </div>
+  );
+}
+
+function DefaultModelSettingsPanel(props: {
+  config: ModelApiConfig;
+  status: string;
+  onChange: (next: ModelApiConfig | ((current: ModelApiConfig) => ModelApiConfig)) => void;
+  onSave: (config?: ModelApiConfig) => Promise<ModelApiConfig>;
+}) {
+  const [panelStatus, setPanelStatus] = useState("");
+  const rows: Array<{ key: ModelDefaultKey; label: string; description: string }> = [
+    { key: "assistant", label: "Default Assistant Model", description: "Used by the right-side Q&A assistant." },
+    { key: "teachingQuality", label: "Quality Notes Model", description: "Used for sparse, visual, or retry-heavy PDF pages." },
+    { key: "teachingBalanced", label: "Balanced Notes Model", description: "Used for formula, table, and medium-complexity pages." },
+    { key: "teachingFast", label: "Quick Notes Model", description: "Used for dense text pages and batch generation." },
+  ];
+  const updateRef = (key: ModelDefaultKey, ref: ModelRef) => {
+    props.onChange((current) => ({
+      ...current,
+      defaults: {
+        ...current.defaults,
+        [key]: ref,
+      },
+    }));
+  };
+  const save = async () => {
+    setPanelStatus("Saving...");
+    try {
+      await props.onSave();
+      setPanelStatus("Saved");
+    } catch (error) {
+      setPanelStatus((error as Error).message || "Save failed");
+    }
+  };
+  return (
+    <SettingsGroup>
+      {rows.map((row) => (
+        <SettingsRow key={row.key} label={row.label} description={row.description}>
+          <ModelRefControl config={props.config} value={props.config.defaults[row.key]} onChange={(ref) => updateRef(row.key, ref)} />
+        </SettingsRow>
+      ))}
+      <SettingsRow label="Model config status" description={panelStatus || props.status}>
+        <SettingsButton variant="primary" onClick={() => void save()}>Save defaults</SettingsButton>
+      </SettingsRow>
+    </SettingsGroup>
+  );
+}
+
+function ModelRefControl({ config, value, onChange }: { config: ModelApiConfig; value: ModelRef; onChange: (value: ModelRef) => void }) {
+  const provider = config.providers.find((item) => item.id === value.providerId) || config.providers[0];
+  const listId = `models-${value.providerId}`;
+  return (
+    <div className="settings-model-ref-control">
+      <select
+        className="settings-select settings-provider-select"
+        value={provider?.id || value.providerId}
+        onChange={(event) => {
+          const nextProvider = config.providers.find((item) => item.id === event.target.value) || config.providers[0];
+          onChange({ providerId: nextProvider.id, model: nextProvider.models[0] || value.model });
+        }}
+      >
+        {config.providers.map((item) => (
+          <option key={item.id} value={item.id}>{item.name}</option>
+        ))}
+      </select>
+      <input
+        className="settings-text-input settings-model-input"
+        list={listId}
+        value={value.model}
+        onChange={(event) => onChange({ ...value, model: event.target.value })}
+      />
+      <datalist id={listId}>
+        {(provider?.models || []).map((model) => <option key={model} value={model} />)}
+      </datalist>
+    </div>
+  );
+}
+
 function SettingsGroup({ children }: { children: ReactNode }) {
   return <div className="settings-group">{children}</div>;
 }
@@ -500,6 +784,28 @@ function SettingsRow({ label, description, children }: { label: string; descript
   );
 }
 
+function SettingsTextInput(props: { value: string; onChange: (value: string) => void; disabled?: boolean }) {
+  return (
+    <input
+      className="settings-text-input"
+      value={props.value}
+      disabled={props.disabled}
+      onChange={(event) => props.onChange(event.target.value)}
+    />
+  );
+}
+
+function SettingsTextArea(props: { value: string; onChange: (value: string) => void }) {
+  return (
+    <textarea
+      className="settings-text-area"
+      value={props.value}
+      rows={4}
+      onChange={(event) => props.onChange(event.target.value)}
+    />
+  );
+}
+
 function SettingsSelect(props: { value: string; options: Array<[string, string]>; onChange: (value: string) => void }) {
   return (
     <select className="settings-select" value={props.value} onChange={(event) => props.onChange(event.target.value)}>
@@ -509,6 +815,24 @@ function SettingsSelect(props: { value: string; options: Array<[string, string]>
         </option>
       ))}
     </select>
+  );
+}
+
+function SettingsIconButton({
+  children,
+  disabled,
+  label,
+  onClick,
+}: {
+  children: ReactNode;
+  disabled?: boolean;
+  label: string;
+  onClick?: () => void;
+}) {
+  return (
+    <button className="settings-icon-button" type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick}>
+      {children}
+    </button>
   );
 }
 
@@ -597,4 +921,25 @@ function formatBytes(value: number) {
     unit += 1;
   }
   return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
+}
+
+function splitModels(value: string) {
+  const seen = new Set<string>();
+  return value
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter((item) => {
+      if (!item || seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+}
+
+function providerPreviewUrl(provider: ModelApiProvider) {
+  if (provider.type === "codex-oauth") return "https://chatgpt.com/backend-api/codex/responses";
+  const host = provider.apiHost.trim().replace(/\/+$/, "");
+  if (!host) return "";
+  const hasVersion = /\/v1$/i.test(host);
+  const base = hasVersion ? host : `${host}/v1`;
+  return `${base}/${provider.type === "openai-responses" ? "responses" : "chat/completions"}`;
 }

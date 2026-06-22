@@ -257,6 +257,21 @@
     justify-content: flex-start;
   }
 
+  .settings-provider-panel,
+  .settings-model-ref-control {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-provider-detail-header {
+    align-items: flex-start;
+  }
+
+  .settings-text-input,
+  .settings-text-area,
+  .settings-secret-control {
+    width: 100%;
+  }
+
   .settings-status-value {
     text-align: left;
   }

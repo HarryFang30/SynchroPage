@@ -31,6 +31,8 @@ from pdf_agent.server.json_utils import (
     repair_unicode_surrogates as _repair_unicode_surrogates,
 )
 from pdf_agent.server.errors import HttpError
+from pdf_agent.server.model_config import ModelConfigStore
+from pdf_agent.server.model_gateway import fetch_provider_models, provider_endpoint_preview
 from pdf_agent.server.pdf_file_cache import (
     PdfFileCache,
     raw_pdf_file_data as _raw_pdf_file_data,
@@ -118,6 +120,7 @@ class PdfAgentHttpServer(ThreadingHTTPServer):
         oauth_api: OpenAIOAuthApi,
         chat_gateway: AgentChatGateway,
         teaching_gateway: TeachingGenerationGateway,
+        model_config_store: ModelConfigStore,
         runner: AsyncRunner,
     ) -> None:
         super().__init__(server_address, handler_class)
@@ -125,6 +128,7 @@ class PdfAgentHttpServer(ThreadingHTTPServer):
         self.oauth_api = oauth_api
         self.chat_gateway = chat_gateway
         self.teaching_gateway = teaching_gateway
+        self.model_config_store = model_config_store
         self.runner = runner
 
 
@@ -138,6 +142,8 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "service": "pdf-agent"})
             elif path == "/auth/openai/status":
                 self._send_json(self.server.runner.run(self.server.oauth_api.status()))
+            elif path == "/api/model-config":
+                self._send_json(self.server.model_config_store.load_public())
             else:
                 self._send_static(path)
         except Exception as exc:
@@ -163,6 +169,25 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
             elif path == "/auth/openai/default":
                 body = self._read_json()
                 self._send_json(self.server.runner.run(self.server.oauth_api.set_default_account(str(body.get("account_id", "")))))
+            elif path == "/api/model-config":
+                body = self._read_json()
+                self._send_json(self.server.model_config_store.save(body))
+            elif path == "/api/model-config/models":
+                body = self._read_json()
+                provider = body.get("provider")
+                if not isinstance(provider, Mapping):
+                    raise HttpError(400, "Model provider is required", code="model_provider_required")
+                self._send_json(self.server.runner.run(fetch_provider_models(
+                    manager=self.server.oauth_api.manager,
+                    config_store=self.server.model_config_store,
+                    provider_value=provider,
+                )))
+            elif path == "/api/model-config/preview":
+                body = self._read_json()
+                provider = body.get("provider")
+                if not isinstance(provider, Mapping):
+                    raise HttpError(400, "Model provider is required", code="model_provider_required")
+                self._send_json({"url": provider_endpoint_preview(provider)})
             elif path == "/api/agent/chat":
                 body = self._read_json()
                 self._send_json(self.server.runner.run(self.server.chat_gateway.chat(body)))
@@ -274,10 +299,11 @@ def create_server(
     model: str = DEFAULT_AGENT_MODEL,
 ) -> PdfAgentHttpServer:
     manager = OpenAIOAuthManager(config=oauth_config_path if oauth_config_path.exists() else None)
+    model_config_store = ModelConfigStore()
     runner = AsyncRunner()
     oauth_api = OpenAIOAuthApi(manager)
-    chat_gateway = AgentChatGateway(manager, model=model)
-    teaching_gateway = TeachingGenerationGateway(manager, model=model)
+    chat_gateway = AgentChatGateway(manager, model=model, config_store=model_config_store)
+    teaching_gateway = TeachingGenerationGateway(manager, model=model, config_store=model_config_store)
     return PdfAgentHttpServer(
         (host, port),
         PdfAgentRequestHandler,
@@ -285,6 +311,7 @@ def create_server(
         oauth_api=oauth_api,
         chat_gateway=chat_gateway,
         teaching_gateway=teaching_gateway,
+        model_config_store=model_config_store,
         runner=runner,
     )
 

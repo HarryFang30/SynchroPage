@@ -1,4 +1,4 @@
-import type { UiPreferences } from "../../settings";
+import type { ModelApiConfig, ModelRef, UiPreferences } from "../../settings";
 import type { PdfContextPage, PdfContextPayload } from "../pdf/textExtraction";
 
 export type TeachingOutputLanguage = "zh-CN" | "en-US";
@@ -48,7 +48,9 @@ export type AsyncLimiterPriority = "now" | "next" | "later";
 export type TeachingGenerationAttempt = "initial" | "retry";
 
 export type TeachingGenerationQualityPlan = {
+  providerId: string;
   model: string;
+  fallbackProviderId?: string;
   fallbackModel?: string;
   reasoningEffort: UiPreferences["modelReasoningEffort"];
   attachPdf: boolean;
@@ -157,6 +159,7 @@ export function teachingGenerationQualityPlan(
   page: PageData,
   preference: UiPreferences["modelReasoningEffort"],
   attempt: TeachingGenerationAttempt = "initial",
+  modelApiConfig?: ModelApiConfig,
 ): TeachingGenerationQualityPlan {
   const text = pageTextForSignals(page);
   const sourceText = page.source.text_md.trim();
@@ -251,15 +254,24 @@ export function teachingGenerationQualityPlan(
   if (attachPdf) batchable = false;
 
   if (!reasons.length) reasons.push("text-fast-path");
-  const model =
+  const modelDefaults = teachingModelDefaults(modelApiConfig);
+  const selectedRef =
     attachPdf || requestedReasoning === "high"
-      ? TEACHING_QUALITY_MODEL
+      ? modelDefaults.quality
       : requestedReasoning === "medium"
-        ? TEACHING_BALANCED_MODEL
-        : TEACHING_FAST_MODEL;
+        ? modelDefaults.balanced
+        : modelDefaults.fast;
+  const fallbackRef = modelDefaults.quality;
   return {
-    model,
-    fallbackModel: model === TEACHING_QUALITY_MODEL ? undefined : TEACHING_QUALITY_MODEL,
+    providerId: selectedRef.providerId,
+    model: selectedRef.model,
+    fallbackProviderId:
+      selectedRef.providerId === fallbackRef.providerId && selectedRef.model === fallbackRef.model
+        ? undefined
+        : fallbackRef.providerId,
+    fallbackModel: selectedRef.providerId === fallbackRef.providerId && selectedRef.model === fallbackRef.model
+      ? undefined
+      : fallbackRef.model,
     reasoningEffort: teachingGenerationReasoningEffort(preference, requestedReasoning),
     attachPdf,
     batchable,
@@ -272,12 +284,29 @@ export function teachingGenerationQualityPlan(
 export function teachingQualityPlanPayload(plan: TeachingGenerationQualityPlan) {
   return {
     attempt: plan.attempt,
+    providerId: plan.providerId,
     model: plan.model,
+    fallbackProviderId: plan.fallbackProviderId,
     fallbackModel: plan.fallbackModel,
     reasoningEffort: plan.reasoningEffort,
     attachPdf: plan.attachPdf,
     batchable: plan.batchable,
     reasons: plan.reasons,
+  };
+}
+
+function teachingModelDefaults(config?: ModelApiConfig): { fast: ModelRef; balanced: ModelRef; quality: ModelRef } {
+  if (!config) {
+    return {
+      fast: { providerId: "codex_oauth", model: TEACHING_FAST_MODEL },
+      balanced: { providerId: "codex_oauth", model: TEACHING_BALANCED_MODEL },
+      quality: { providerId: "codex_oauth", model: TEACHING_QUALITY_MODEL },
+    };
+  }
+  return {
+    fast: config.defaults.teachingFast,
+    balanced: config.defaults.teachingBalanced,
+    quality: config.defaults.teachingQuality,
   };
 }
 
@@ -462,7 +491,11 @@ export function lightPdfContextForFastTeachingGeneration(
   };
 }
 
-export function batchTeachingPages(pages: PageData[], preference: UiPreferences["modelReasoningEffort"]) {
+export function batchTeachingPages(
+  pages: PageData[],
+  preference: UiPreferences["modelReasoningEffort"],
+  modelApiConfig?: ModelApiConfig,
+) {
   const batches: TeachingGenerationBatch[] = [];
   let currentBatch: PageData[] = [];
   let currentPlan: TeachingGenerationQualityPlan | null = null;
@@ -470,7 +503,7 @@ export function batchTeachingPages(pages: PageData[], preference: UiPreferences[
 
   const flushCurrentBatch = () => {
     if (!currentBatch.length) return;
-    const plan = currentPlan || teachingGenerationQualityPlan(currentBatch[0], preference);
+    const plan = currentPlan || teachingGenerationQualityPlan(currentBatch[0], preference, "initial", modelApiConfig);
     if (!emittedFastWarmupBatch && isFastTextTeachingPlan(plan) && currentBatch.length > TEACHING_TEXT_FIRST_BATCH_SIZE) {
       batches.push({ pages: currentBatch.slice(0, TEACHING_TEXT_FIRST_BATCH_SIZE), plan });
       batches.push({ pages: currentBatch.slice(TEACHING_TEXT_FIRST_BATCH_SIZE), plan });
@@ -483,7 +516,7 @@ export function batchTeachingPages(pages: PageData[], preference: UiPreferences[
   };
 
   for (const page of pages) {
-    const plan = teachingGenerationQualityPlan(page, preference);
+    const plan = teachingGenerationQualityPlan(page, preference, "initial", modelApiConfig);
     if (!plan.batchable) {
       flushCurrentBatch();
       batches.push({ pages: [page], plan });
@@ -594,6 +627,7 @@ function truncateGenerationRequestText(value: string, maxChars: number) {
 
 function teachingPlansCanShareBatch(left: TeachingGenerationQualityPlan, right: TeachingGenerationQualityPlan) {
   return (
+    left.providerId === right.providerId &&
     left.model === right.model &&
     left.reasoningEffort === right.reasoningEffort &&
     left.attachPdf === right.attachPdf &&
