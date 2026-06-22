@@ -381,23 +381,30 @@ export function SettingsModal(props: SettingsModalProps) {
                       </SettingsButton>
                     </div>
                   </SettingsRow>
-                  <SettingsRow label={copy.settings.storage.dataDirectoryLabel} description={copy.settings.storage.dataDirectoryDescription}>
+                  <SettingsRow className="settings-row-directory" label={copy.settings.storage.dataDirectoryLabel} description={copy.settings.storage.dataDirectoryDescription}>
                     <div className="settings-directory-control">
                       <div className="settings-directory-paths">
-                        <span className="settings-directory-caption">
-                          {props.desktopStorageConfig ? copy.settings.storage.currentDataDirectory : copy.settings.storage.dataDirectoryBrowserManaged}
-                        </span>
-                        <code>{props.desktopStorageConfig?.currentDataDir || copy.settings.storage.defaultDirectory}</code>
+                        {props.desktopStorageConfig ? (
+                          <div className="settings-directory-path-row">
+                            <span className="settings-directory-caption">{copy.settings.storage.currentDataDirectory}</span>
+                            <code title={props.desktopStorageConfig.currentDataDir || copy.settings.storage.defaultDirectory}>
+                              {props.desktopStorageConfig.currentDataDir || copy.settings.storage.defaultDirectory}
+                            </code>
+                          </div>
+                        ) : (
+                          <span className="settings-directory-caption">{copy.settings.storage.dataDirectoryBrowserManaged}</span>
+                        )}
                         {props.desktopStorageConfig?.pendingDataDir && (
-                          <span className="settings-directory-pending">
-                            {copy.settings.storage.pendingDataDirectory(props.desktopStorageConfig.pendingDataDir)}
-                          </span>
+                          <div className="settings-directory-path-row pending">
+                            <span className="settings-directory-caption">{copy.settings.storage.pendingDataDirectoryLabel}</span>
+                            <code title={props.desktopStorageConfig.pendingDataDir}>{props.desktopStorageConfig.pendingDataDir}</code>
+                          </div>
                         )}
                         {props.desktopStorageConfig?.dataDirManagedByEnv && (
                           <span className="settings-directory-pending">{copy.settings.storage.dataDirectoryManagedByEnv}</span>
                         )}
                       </div>
-                      <div className="settings-inline-actions">
+                      <div className="settings-directory-actions">
                         <SettingsButton
                           disabled={!props.desktopStorageConfig || props.desktopStorageBusy || props.desktopStorageConfig.dataDirManagedByEnv}
                           onClick={props.onChooseDesktopDataDirectory}
@@ -772,9 +779,9 @@ function SettingsGroup({ children }: { children: ReactNode }) {
   return <div className="settings-group">{children}</div>;
 }
 
-function SettingsRow({ label, description, children }: { label: string; description?: string; children: ReactNode }) {
+function SettingsRow({ label, description, children, className = "" }: { label: string; description?: string; children: ReactNode; className?: string }) {
   return (
-    <div className="settings-row">
+    <div className={`settings-row ${className}`}>
       <div className="settings-row-copy">
         <div className="settings-row-label">{label}</div>
         {description && <p>{description}</p>}

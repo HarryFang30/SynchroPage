@@ -135,6 +135,7 @@ export type AppCopy = {
       dataDirectoryLabel: string;
       dataDirectoryDescription: string;
       currentDataDirectory: string;
+      pendingDataDirectoryLabel: string;
       pendingDataDirectory: (path: string) => string;
       dataDirectoryBrowserManaged: string;
       dataDirectoryManagedByEnv: string;
@@ -577,6 +578,7 @@ const zhCN: AppCopy = {
       dataDirectoryLabel: "保存目录",
       dataDirectoryDescription: "桌面端工作区、PDF Blob、设置和后端 OAuth 数据的保存位置。更改后需重启应用生效。",
       currentDataDirectory: "当前目录",
+      pendingDataDirectoryLabel: "重启后目录",
       pendingDataDirectory: (path) => `重启后使用：${path}`,
       dataDirectoryBrowserManaged: "浏览器模式由当前浏览器 profile 管理",
       dataDirectoryManagedByEnv: "由启动环境变量管理",
@@ -1019,6 +1021,7 @@ const enUS: AppCopy = {
       dataDirectoryLabel: "Save folder",
       dataDirectoryDescription: "Desktop location for workspaces, PDF blobs, settings, and backend OAuth data. Changes apply after restart.",
       currentDataDirectory: "Current folder",
+      pendingDataDirectoryLabel: "After restart",
       pendingDataDirectory: (path) => `After restart: ${path}`,
       dataDirectoryBrowserManaged: "Browser mode is managed by the current browser profile",
       dataDirectoryManagedByEnv: "Managed by startup environment variable",

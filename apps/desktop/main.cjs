@@ -360,12 +360,6 @@ function registerDesktopIpcHandlers() {
     saveDesktopConfig({ ...desktopRuntime.configValues, dataDir: nextDataDir });
     desktopRuntime.configuredDataDir = nextDataDir;
     desktopRuntime.dataDirManagedByEnv = Boolean(process.env.SYNCHROPAGE_DESKTOP_DATA_DIR);
-    if (!process.env.SYNCHROPAGE_BACKEND_DATA_DIR) {
-      desktopRuntime.backendDataDir = path.join(nextDataDir, "backend");
-    }
-    if (!desktopRuntime.oauthStoragePathExplicit) {
-      desktopRuntime.oauthStoragePath = path.join(desktopRuntime.backendDataDir || path.join(nextDataDir, "backend"), "openai_oauth.json");
-    }
     return desktopStorageConfigPayload();
   });
   ipcMain.handle("synchropage:storage-config:reset-data-dir", () => {
@@ -378,12 +372,6 @@ function registerDesktopIpcHandlers() {
     saveDesktopConfig(nextValues);
     desktopRuntime.configuredDataDir = null;
     desktopRuntime.dataDirManagedByEnv = Boolean(process.env.SYNCHROPAGE_DESKTOP_DATA_DIR);
-    if (!process.env.SYNCHROPAGE_BACKEND_DATA_DIR) {
-      desktopRuntime.backendDataDir = null;
-    }
-    if (!desktopRuntime.oauthStoragePathExplicit) {
-      desktopRuntime.oauthStoragePath = null;
-    }
     return desktopStorageConfigPayload();
   });
   ipcMain.handle("synchropage:storage-config:restart", () => {
