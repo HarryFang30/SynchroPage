@@ -275,3 +275,53 @@ def _page_payload(page_no: int) -> dict[str, Any]:
             "needs_parser_fallback": False,
         },
     }
+
+
+class FailingModel:
+    """Model that always raises to exercise telemetry traceback collection."""
+
+    async def run_agent(self, params: AgentRunParams, signal: Any) -> AgentRunResult:
+        raise ValueError("simulated model crash")
+
+
+class HarnessErrorObservabilityTest(unittest.TestCase):
+    """Verify that harness errors produce telemetry with traceback info."""
+
+    def test_run_failure_logs_error_type_and_traceback(self) -> None:
+        async def scenario() -> None:
+            telemetry = CollectingTelemetry()
+            harness = CoursePdfHarness(
+                HarnessPorts(
+                    model=FailingModel(),
+                    parser=FakeParser(),
+                    validator=PassThroughValidator(),
+                    journal=JsonlJournalStore("/tmp"),
+                    runs=InMemoryRunStore(),
+                    progress=InMemoryProgressBus(),
+                    policy=DeterministicPolicyGate(),
+                    telemetry=telemetry,
+                ),
+                prompts={
+                    "document_planner": "plan",
+                    "page_teacher": "teach",
+                    "page_reviewer": "review",
+                    "page_repairer": "repair",
+                },
+                schemas={"document_plan": {"type": "object"}, "page_batch": {"type": "object"}},
+            )
+
+            with self.assertRaises(ValueError):
+                await harness.run_to_completion(_input())
+
+            self.assertTrue(
+                any(
+                    name == "run_lifecycle_error" and attrs
+                    and attrs.get("error_type") == "ValueError"
+                    and "traceback" in attrs
+                    and "simulated model crash" in str(attrs.get("error"))
+                    for name, attrs in telemetry.warnings
+                ),
+                f"No run_lifecycle_error warning with traceback found in {telemetry.warnings}",
+            )
+
+        asyncio.run(scenario())

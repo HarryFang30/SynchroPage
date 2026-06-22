@@ -19,6 +19,16 @@ from pdf_agent.server.errors import HttpError
 from pdf_agent.server.json_utils import json_bytes_utf8_safe
 from pdf_agent.server.prompt_cache import _retry_after_seconds
 
+# Hard cap on raw upstream response text before redaction to prevent
+# unbounded error-detail leaks (e.g. HTML error pages, non-JSON bodies).
+_MAX_RAW_UPSTREAM_CHARS = 2000
+
+
+def _redacted_upstream_detail(raw_text: str) -> str:
+    """Truncate *raw_text* then apply gateway redaction."""
+    truncated = raw_text[:_MAX_RAW_UPSTREAM_CHARS]
+    return redacted_gateway_error(truncated)
+
 
 def post_json_responses(
     url: str,
@@ -57,7 +67,7 @@ def post_json_responses(
         detail = exc.read().decode("utf-8", errors="replace")
         raise HttpError(
             exc.code,
-            redacted_gateway_error(detail),
+            _redacted_upstream_detail(detail),
             code="upstream_error",
             retry_after_seconds=_retry_after_seconds(exc.headers.get("Retry-After")),
         ) from exc
@@ -70,7 +80,7 @@ def post_json_responses(
             code="upstream_timeout",
         ) from exc
     except urllib.error.URLError as exc:
-        raise HttpError(502, redacted_gateway_error(str(exc)), code="network_error") from exc
+        raise HttpError(502, _redacted_upstream_detail(str(exc)), code="network_error") from exc
 
 
 def get_json(
@@ -94,7 +104,7 @@ def get_json(
         detail = exc.read().decode("utf-8", errors="replace")
         raise HttpError(
             exc.code,
-            redacted_gateway_error(detail),
+            _redacted_upstream_detail(detail),
             code="upstream_error",
             retry_after_seconds=_retry_after_seconds(exc.headers.get("Retry-After")),
         ) from exc
@@ -105,8 +115,8 @@ def get_json(
             code="upstream_timeout",
         ) from exc
     except urllib.error.URLError as exc:
-        raise HttpError(502, redacted_gateway_error(str(exc)), code="network_error") from exc
+        raise HttpError(502, _redacted_upstream_detail(str(exc)), code="network_error") from exc
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:
-        raise HttpError(502, redacted_gateway_error(text), code="invalid_upstream_json") from exc
+        raise HttpError(502, _redacted_upstream_detail(text), code="invalid_upstream_json") from exc

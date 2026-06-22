@@ -19,6 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 from email.utils import parsedate_to_datetime
 from typing import Any
 
+from pdf_agent.server.constants import MODEL_GPT_54, MODEL_GPT_55
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.json_utils import (
     json_dumps_utf8_safe,
@@ -122,7 +123,7 @@ def _apply_prompt_cache_fields(
 
 def _supports_prompt_cache(model: str) -> bool:
     """Return True when *model* is known to support prompt caching."""
-    return model.startswith(("gpt-5.5", "gpt-5.4"))
+    return model.startswith((MODEL_GPT_55, MODEL_GPT_54))
 
 
 # ---------------------------------------------------------------------------

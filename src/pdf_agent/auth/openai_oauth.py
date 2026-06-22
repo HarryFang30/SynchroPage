@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import re
+import secrets
 import time
 import urllib.error
 import urllib.parse
@@ -18,6 +19,15 @@ DEFAULT_PROVIDER_ID = "codex_oauth"
 OAUTH_CLIENT_ID_ENV_VARS = ("PDF_AGENT_OPENAI_OAUTH_CLIENT_ID", "OPENAI_OAUTH_CLIENT_ID")
 OAUTH_STORAGE_PATH_ENV_VAR = "PDF_AGENT_OPENAI_OAUTH_STORAGE_PATH"
 DATA_DIR_ENV_VAR = "PDF_AGENT_HOME"
+# Public OAuth client id for the Codex device-code flow.  This is NOT a
+# secret / access token / refresh token — it only identifies the application
+# to the OpenAI device-auth endpoint.  Keeping it compiled into the module
+# lets the desktop app refresh an existing OAuth session after restart
+# without requiring shell environment variables.
+#
+# Source: ChatGPT Codex public device-flow registration.
+# Set ``PDF_AGENT_OPENAI_OAUTH_CLIENT_ID`` or ``OPENAI_OAUTH_CLIENT_ID`` to
+# override at runtime (see ``_default_oauth_client_id``).
 DEFAULT_CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 DEVICE_AUTH_USERCODE_URL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
 DEVICE_AUTH_TOKEN_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
@@ -634,7 +644,7 @@ def default_data_dir() -> Path:
 def atomic_write_secret(path: Path, content: str) -> None:
     path = path.expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.tmp.{time.time_ns()}")
+    tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     fd = os.open(tmp_path, flags, 0o600)
     try:
@@ -672,61 +682,15 @@ def _loads_mapping_document(text: str, source: Path) -> dict[str, Any]:
             raise OpenAIOAuthError("config_parse_failed", "OAuth config root must be an object")
         return value
 
-    try:
-        import yaml  # type: ignore[import-not-found]
-    except ImportError:
-        return _loads_simple_yaml_mapping(text)
+    import yaml
 
     try:
         value = yaml.safe_load(text)
-    except Exception as exc:  # pragma: no cover - depends on optional dependency
+    except Exception as exc:
         raise OpenAIOAuthError("config_parse_failed", f"Invalid OAuth config YAML {source}: {exc}") from exc
     if not isinstance(value, dict):
         raise OpenAIOAuthError("config_parse_failed", "OAuth config root must be an object")
     return value
-
-
-def _loads_simple_yaml_mapping(text: str) -> dict[str, Any]:
-    root: dict[str, Any] = {}
-    stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
-
-    for raw_line in text.splitlines():
-        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
-            continue
-        stripped = raw_line.strip()
-        if stripped.startswith("- "):
-            continue
-        key, separator, raw_value = stripped.partition(":")
-        if not separator:
-            continue
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        while stack and indent <= stack[-1][0]:
-            stack.pop()
-        parent = stack[-1][1] if stack else root
-        key = key.strip()
-        raw_value = raw_value.strip()
-        if not raw_value:
-            child: dict[str, Any] = {}
-            parent[key] = child
-            stack.append((indent, child))
-        else:
-            parent[key] = _parse_simple_yaml_scalar(raw_value)
-
-    return root
-
-
-def _parse_simple_yaml_scalar(value: str) -> Any:
-    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-        return value[1:-1]
-    lowered = value.lower()
-    if lowered in {"true", "false"}:
-        return lowered == "true"
-    if lowered in {"null", "none", "~"}:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return value
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -752,9 +716,7 @@ def _default_oauth_client_id() -> str:
         value = os.environ.get(name, "").strip()
         if value:
             return value
-    # Public OAuth client id used by the Codex device-code flow. This is not an
-    # access token or refresh token; keeping it bundled lets the desktop app
-    # refresh an existing OAuth session after restart without requiring shell env.
+    # See comment on :data:`DEFAULT_CODEX_OAUTH_CLIENT_ID` above.
     return DEFAULT_CODEX_OAUTH_CLIENT_ID
 
 

@@ -9,6 +9,7 @@ export type PersistenceErrorKind =
   | "not_found"
   | "validation"
   | "corrupt_export"
+  | "too_large"
   | "transaction_failed"
   | "unavailable"
   | "unknown";

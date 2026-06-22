@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from pdf_agent.server.constants import MODEL_GPT_55
+
 AgentRole = Literal[
     "document_planner",
     "page_teacher",
@@ -62,7 +64,7 @@ class HarnessInput:
     pdf: PdfReference
     prompt_version: str
     schema_version: str
-    model: str = "gpt-5.5"
+    model: str = MODEL_GPT_55
     title: str | None = None
     target_pages: list[int] | None = None
     max_concurrency: int = 3

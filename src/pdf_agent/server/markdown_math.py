@@ -251,6 +251,33 @@ def json_loads_with_latex_repair(text: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _split_code_fences(value: str) -> list[str]:
+    """Split *value* into segments, keeping fenced code blocks intact.
+
+    Uses a linear scan so large inputs with many code fences do not trigger
+    worst-case regex backtracking.
+    """
+    segments: list[str] = []
+    cursor = 0
+    while cursor < len(value):
+        fence_start = value.find("```", cursor)
+        if fence_start == -1:
+            segments.append(value[cursor:])
+            break
+        # Include text before the fence as a non-code segment.
+        if fence_start > cursor:
+            segments.append(value[cursor:fence_start])
+        fence_end = value.find("```", fence_start + 3)
+        if fence_end == -1:
+            # Unclosed fence — treat the rest as a code segment.
+            segments.append(value[fence_start:])
+            break
+        fence_end += 3  # include the closing backticks
+        segments.append(value[fence_start:fence_end])
+        cursor = fence_end
+    return segments
+
+
 def normalize_markdown_math(value: str) -> str:
     """Repair common Markdown/LaTeX issues in model-generated text.
 
@@ -258,7 +285,7 @@ def normalize_markdown_math(value: str) -> str:
     """
     if not value:
         return value
-    segments = re.split(r"(```[\s\S]*?```)", value)
+    segments = _split_code_fences(value)
     return "".join(
         segment if segment.startswith("```") else _normalize_markdown_math_segment(segment)
         for segment in segments

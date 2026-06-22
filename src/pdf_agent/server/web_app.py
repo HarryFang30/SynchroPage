@@ -44,8 +44,6 @@ from pdf_agent.server.value_utils import (
 from pdf_agent.server.document_context import (
     set_pdf_file_cache,
 )
-
-
 from pdf_agent.server.agent_gateway import AgentChatGateway
 from pdf_agent.server.teaching_gateway import TeachingGenerationGateway
 
@@ -57,8 +55,6 @@ WEB_ROOT = DIST_WEB_ROOT if DIST_WEB_ROOT.exists() else SOURCE_WEB_ROOT
 OAUTH_CONFIG_PATH = PROJECT_ROOT / "config" / "auth" / "openai_oauth.yaml"
 DEFAULT_MAX_JSON_BODY_BYTES = 100_000_000
 MAX_JSON_BODY_BYTES = _env_positive_int("PDF_AGENT_MAX_JSON_BODY_BYTES", DEFAULT_MAX_JSON_BODY_BYTES)
-_PDF_FILE_CACHE = PdfFileCache()
-set_pdf_file_cache(_PDF_FILE_CACHE)
 LOGGER = logging.getLogger("pdf_agent.server.web_app")
 
 
@@ -122,6 +118,7 @@ class PdfAgentHttpServer(ThreadingHTTPServer):
         teaching_gateway: TeachingGenerationGateway,
         model_config_store: ModelConfigStore,
         runner: AsyncRunner,
+        pdf_file_cache: PdfFileCache,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.web_root = web_root
@@ -130,6 +127,7 @@ class PdfAgentHttpServer(ThreadingHTTPServer):
         self.teaching_gateway = teaching_gateway
         self.model_config_store = model_config_store
         self.runner = runner
+        self.pdf_file_cache = pdf_file_cache
 
 
 class PdfAgentRequestHandler(BaseHTTPRequestHandler):
@@ -193,7 +191,7 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.server.runner.run(self.server.chat_gateway.chat(body)))
             elif path == "/api/pdf/cache":
                 body = self._read_json()
-                self._send_json(_cache_pdf_file_payload(body.get("documentFile") or body))
+                self._send_json(self._cache_pdf_file_payload(body.get("documentFile") or body))
             elif path == "/api/generate/page":
                 body = self._read_json()
                 self._send_json(self.server.runner.run(self.server.teaching_gateway.generate_page(body)))
@@ -289,6 +287,33 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": "internal_error", "message": redacted_gateway_error(str(exc))}, status=500)
 
+    def _cache_pdf_file_payload(self, value: Any) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise HttpError(400, "PDF cache request did not include a document file", code="invalid_pdf_cache")
+        file_data = _raw_pdf_file_data(value.get("fileData") or value.get("file_data"))
+        if not file_data or len(file_data) > MAX_PDF_FILE_DATA_CHARS:
+            raise HttpError(400, "PDF cache request did not include usable PDF data", code="invalid_pdf_cache")
+        try:
+            pdf_bytes = base64.b64decode(file_data, validate=False)
+        except Exception as exc:
+            raise HttpError(400, "PDF cache request contained invalid base64 data", code="invalid_pdf_cache") from exc
+        if not pdf_bytes:
+            raise HttpError(400, "PDF cache request contained an empty PDF", code="invalid_pdf_cache")
+
+        sha256 = _string_value(value.get("sha256"), "") or hashlib.sha256(pdf_bytes).hexdigest()
+        filename = _string_value(value.get("filename") or value.get("fileName"), "document.pdf")
+        if not filename.lower().endswith(".pdf"):
+            filename = f"{filename}.pdf"
+        record = {
+            "filename": filename,
+            "mimeType": _string_value(value.get("mimeType"), "application/pdf"),
+            "size": len(pdf_bytes),
+            "sha256": sha256,
+            "fileData": file_data,
+        }
+        self.server.pdf_file_cache.store(record)
+        return {key: record[key] for key in ("filename", "mimeType", "size", "sha256")}
+
 
 def create_server(
     host: str = "127.0.0.1",
@@ -302,6 +327,10 @@ def create_server(
     model_config_store = ModelConfigStore()
     runner = AsyncRunner()
     oauth_api = OpenAIOAuthApi(manager)
+    pdf_file_cache = PdfFileCache()
+    # Register the cache for document_context helpers that still use the
+    # module-level reference (set_pdf_file_cache / _pdf_file_cache).
+    set_pdf_file_cache(pdf_file_cache)
     chat_gateway = AgentChatGateway(manager, model=model, config_store=model_config_store)
     teaching_gateway = TeachingGenerationGateway(manager, model=model, config_store=model_config_store)
     return PdfAgentHttpServer(
@@ -313,6 +342,7 @@ def create_server(
         teaching_gateway=teaching_gateway,
         model_config_store=model_config_store,
         runner=runner,
+        pdf_file_cache=pdf_file_cache,
     )
 
 
@@ -339,33 +369,6 @@ def main(argv: list[str] | None = None) -> int:
         server.runner.shutdown()
         server.server_close()
     return 0
-
-def _cache_pdf_file_payload(value: Any) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
-        raise HttpError(400, "PDF cache request did not include a document file", code="invalid_pdf_cache")
-    file_data = _raw_pdf_file_data(value.get("fileData") or value.get("file_data"))
-    if not file_data or len(file_data) > MAX_PDF_FILE_DATA_CHARS:
-        raise HttpError(400, "PDF cache request did not include usable PDF data", code="invalid_pdf_cache")
-    try:
-        pdf_bytes = base64.b64decode(file_data, validate=False)
-    except Exception as exc:
-        raise HttpError(400, "PDF cache request contained invalid base64 data", code="invalid_pdf_cache") from exc
-    if not pdf_bytes:
-        raise HttpError(400, "PDF cache request contained an empty PDF", code="invalid_pdf_cache")
-
-    sha256 = _string_value(value.get("sha256"), "") or hashlib.sha256(pdf_bytes).hexdigest()
-    filename = _string_value(value.get("filename") or value.get("fileName"), "document.pdf")
-    if not filename.lower().endswith(".pdf"):
-        filename = f"{filename}.pdf"
-    record = {
-        "filename": filename,
-        "mimeType": _string_value(value.get("mimeType"), "application/pdf"),
-        "size": len(pdf_bytes),
-        "sha256": sha256,
-        "fileData": file_data,
-    }
-    _PDF_FILE_CACHE.store(record)
-    return {key: record[key] for key in ("filename", "mimeType", "size", "sha256")}
 
 
 def _resolve_static_path(web_root: Path, request_path: str) -> Path:

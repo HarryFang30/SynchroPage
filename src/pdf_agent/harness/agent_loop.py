@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import traceback
 from dataclasses import asdict
 from typing import Any
 
@@ -53,7 +54,13 @@ class CoursePdfHarness:
         await self.ports.policy.assert_can_start_run(input)
         run_id, signal = await self.ports.runs.create(input)
         self.ports.progress.emit({"type": "run_started", "runId": run_id, "workflowName": "course_pdf_synchropage"})
-        asyncio.create_task(self._run_lifecycle(run_id, signal, input, raise_errors=False))
+        task = asyncio.create_task(self._run_lifecycle(run_id, signal, input, raise_errors=False))
+        task.add_done_callback(
+            lambda t: self.ports.telemetry.warn(
+                "background_task_unhandled",
+                {"run_id": run_id, "error": str(t.exception())},
+            ) if t.exception() else None
+        )
         return run_id
 
     async def run_to_completion(self, input: HarnessInput) -> str:
@@ -71,6 +78,16 @@ class CoursePdfHarness:
             await self.ports.runs.update_status(run_id, "canceled")
             self.ports.progress.emit({"type": "run_done", "runId": run_id, "status": "canceled"})
         except Exception as exc:
+            tb_text = traceback.format_exc()
+            self.ports.telemetry.warn(
+                "run_lifecycle_error",
+                {
+                    "run_id": run_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "traceback": tb_text[:3000],
+                },
+            )
             await self.ports.runs.update_status(run_id, "failed", str(exc))
             self.ports.progress.emit({"type": "run_done", "runId": run_id, "status": "failed", "error": str(exc)})
             if raise_errors:

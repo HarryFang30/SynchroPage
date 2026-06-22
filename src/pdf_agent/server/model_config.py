@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from pdf_agent.auth.openai_oauth import atomic_write_secret, default_data_dir
+from pdf_agent.server.constants import MODEL_GPT_54, MODEL_GPT_54_MINI, MODEL_GPT_55
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.json_utils import json_dumps_utf8_safe
 from pdf_agent.server.value_utils import string_value
@@ -33,7 +34,7 @@ def default_model_config() -> dict[str, Any]:
                 "apiHost": "https://chatgpt.com/backend-api/codex/",
                 "apiKeyRequired": False,
                 "enabled": True,
-                "models": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
+                "models": [MODEL_GPT_55, MODEL_GPT_54, MODEL_GPT_54_MINI],
             },
             {
                 "id": "openai_api",
@@ -82,10 +83,10 @@ def default_model_config() -> dict[str, Any]:
             },
         ],
         "defaults": {
-            "assistant": {"providerId": DEFAULT_CODEX_PROVIDER_ID, "model": "gpt-5.5"},
-            "teachingFast": {"providerId": DEFAULT_CODEX_PROVIDER_ID, "model": "gpt-5.4-mini"},
-            "teachingBalanced": {"providerId": DEFAULT_CODEX_PROVIDER_ID, "model": "gpt-5.4"},
-            "teachingQuality": {"providerId": DEFAULT_CODEX_PROVIDER_ID, "model": "gpt-5.5"},
+            "assistant": {"providerId": DEFAULT_CODEX_PROVIDER_ID, "model": MODEL_GPT_55},
+            "teachingFast": {"providerId": DEFAULT_CODEX_PROVIDER_ID, "model": MODEL_GPT_54_MINI},
+            "teachingBalanced": {"providerId": DEFAULT_CODEX_PROVIDER_ID, "model": MODEL_GPT_54},
+            "teachingQuality": {"providerId": DEFAULT_CODEX_PROVIDER_ID, "model": MODEL_GPT_55},
         },
     }
 

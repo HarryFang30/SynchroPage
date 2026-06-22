@@ -89,7 +89,15 @@ Escape LaTeX backslashes in JSON strings, for example write \\\\frac and \\\\to.
 # Gateway defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_AGENT_MODEL = os.environ.get("PDF_AGENT_MODEL", "gpt-5.5")
+# Canonical model identifiers used across backend modules.
+# Update these constants when model names change rather than hunting through
+# string literals in gateway / prompt-cache / payload-builder code.
+MODEL_GPT_55 = "gpt-5.5"
+MODEL_GPT_54 = "gpt-5.4"
+MODEL_GPT_54_MINI = "gpt-5.4-mini"
+
+DEFAULT_AGENT_MODEL = os.environ.get("PDF_AGENT_MODEL", MODEL_GPT_55)
+
 TEACHING_API_CONCURRENCY = 6
 TEACHING_UPSTREAM_TIMEOUT_SECONDS = _env_positive_int("PDF_AGENT_TEACHING_TIMEOUT_SECONDS", 90)
 AGENT_RETRY_DELAYS_SECONDS: tuple[float, ...] = (0.75, 2.0)

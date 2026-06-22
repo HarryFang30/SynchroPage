@@ -31,14 +31,28 @@ from pdf_agent.server.payload_builders import (
     _teaching_generation_candidate_bodies,
 )
 from pdf_agent.server.web_app import (
+    PdfAgentHttpServer,
     PdfAgentRequestHandler,
-    _cache_pdf_file_payload,
     _request_etag_matches,
     _resolve_static_path,
     _static_cache_control,
     _static_file_etag,
 )
 from pdf_agent.gateway.openai_gateway import redacted_gateway_error
+from pdf_agent.server.document_context import set_pdf_file_cache
+from pdf_agent.server.pdf_file_cache import PdfFileCache
+from pdf_agent.server.gateway_transport import _redacted_upstream_detail
+
+
+def _handler_with_cache() -> PdfAgentRequestHandler:
+    """Return a bare handler with a server that has a fresh PdfFileCache."""
+    handler = PdfAgentRequestHandler.__new__(PdfAgentRequestHandler)
+    server = PdfAgentHttpServer.__new__(PdfAgentHttpServer)
+    cache = PdfFileCache()
+    server.pdf_file_cache = cache
+    set_pdf_file_cache(cache)
+    handler.server = server  # type: ignore[assignment]
+    return handler
 
 
 def _decode_pdf_file_data(value: str) -> bytes:
@@ -526,7 +540,7 @@ class WebAppTest(unittest.TestCase):
         pdf_buffer = io.BytesIO()
         writer.write(pdf_buffer)
         file_data = base64.b64encode(pdf_buffer.getvalue()).decode("ascii")
-        cached = _cache_pdf_file_payload({"filename": "cached.pdf", "fileData": file_data})
+        cached = _handler_with_cache()._cache_pdf_file_payload({"filename": "cached.pdf", "fileData": file_data})
 
         payload = _build_teaching_generation_payload(
             {
@@ -1137,6 +1151,20 @@ class WebAppTest(unittest.TestCase):
             self.assertEqual(_static_cache_control(root, index), "no-cache")
             self.assertEqual(_static_cache_control(root, app), "public, max-age=31536000, immutable")
             self.assertEqual(_static_cache_control(root, plain), "no-cache")
+
+    # -- gateway transport truncation ---------------------------------------
+
+    def test_gateway_redaction_truncates_long_raw_upstream_text(self) -> None:
+        long_html = "<html>" + ("X" * 4000) + "</html>"
+        result = _redacted_upstream_detail(long_html)
+        self.assertLessEqual(len(result), 2100)  # 2000 + small redaction overhead
+        self.assertIn("XXX", result)
+        self.assertNotIn("</html>", result)
+
+    def test_gateway_redaction_preserves_short_error(self) -> None:
+        short = '{"error": "bad request"}'
+        result = _redacted_upstream_detail(short)
+        self.assertIn("bad request", result)
 
 
 if __name__ == "__main__":

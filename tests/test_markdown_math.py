@@ -7,6 +7,7 @@ import unittest
 
 from pdf_agent.server.json_utils import repair_unicode_surrogates_text
 from pdf_agent.server.markdown_math import (
+    _split_code_fences,
     json_loads_with_latex_repair,
     normalize_markdown_math,
     repair_json_string_backslashes,
@@ -200,6 +201,37 @@ class JsonLatexRepairTest(unittest.TestCase):
         self.assertIn(r"$\lvert{}Y(\omega)\rvert{}^2$", result)
         self.assertNotIn(r"$|X(\omega)|^2$", result)
         self.assertEqual(result.splitlines()[-1].count("|"), 4)
+
+    # -- code fence splitter -------------------------------------------------
+
+    def test_split_code_fences_keeps_fenced_block_intact(self) -> None:
+        segments = _split_code_fences("before\n```\n$not math$\n```\nafter")
+        self.assertEqual(segments, ["before\n", "```\n$not math$\n```", "\nafter"])
+
+    def test_split_code_fences_handles_multiple_blocks(self) -> None:
+        segments = _split_code_fences("a\n```\n1\n```\nb\n```\n2\n```\nc")
+        self.assertEqual(len(segments), 5)
+        self.assertEqual(segments[1], "```\n1\n```")
+        self.assertEqual(segments[3], "```\n2\n```")
+
+    def test_split_code_fences_handles_unclosed_fence(self) -> None:
+        segments = _split_code_fences("text\n```\nunclosed block")
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(segments[0], "text\n")
+        self.assertTrue(segments[1].startswith("```"))
+
+    def test_split_code_fences_no_fences_returns_single_segment(self) -> None:
+        segments = _split_code_fences("plain text $math$ here")
+        self.assertEqual(segments, ["plain text $math$ here"])
+
+    def test_split_code_fences_empty_string(self) -> None:
+        self.assertEqual(_split_code_fences(""), [])
+
+    def test_large_text_with_many_fences_is_handled(self) -> None:
+        value = "\n".join(["text"] + ["```\ncode\n```"] * 100 + ["end"])
+        result = normalize_markdown_math(value)
+        self.assertTrue(result.startswith("text\n"))
+        self.assertIn("end", result)
 
 
 if __name__ == "__main__":

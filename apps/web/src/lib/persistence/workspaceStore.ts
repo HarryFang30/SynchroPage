@@ -1213,6 +1213,28 @@ export async function exportWorkspace(workspaceId: string): Promise<ExportedWork
     synchroPageDb.selectedContexts.where("workspaceId").equals(workspaceId).toArray(),
     loadSettings(workspaceId),
   ]);
+
+  // Guard against memory exhaustion when converting large PDF blobs to
+  // data URLs (base64 adds ~33% overhead on top of the raw blob size).
+  const MAX_SINGLE_BLOB_BYTES = 50 * 1024 * 1024; // 50 MB
+  const MAX_TOTAL_BLOB_BYTES = 100 * 1024 * 1024; // 100 MB
+  const totalBlobBytes = fileBlobRecords.reduce((sum, r) => sum + (r.size || r.blob.size), 0);
+  if (totalBlobBytes > MAX_TOTAL_BLOB_BYTES) {
+    throw new PersistenceError(
+      "too_large",
+      `Total PDF size (${(totalBlobBytes / 1024 / 1024).toFixed(0)} MB) exceeds the export limit of 100 MB.`,
+    );
+  }
+  for (const record of fileBlobRecords) {
+    const size = record.size || record.blob.size;
+    if (size > MAX_SINGLE_BLOB_BYTES) {
+      throw new PersistenceError(
+        "too_large",
+        `PDF "${record.fileName || record.id}" (${(size / 1024 / 1024).toFixed(0)} MB) exceeds the single-file export limit of 50 MB.`,
+      );
+    }
+  }
+
   const fileBlobs = await Promise.all(
     fileBlobRecords.map(async ({ blob, ...record }) => {
       const [dataUrl, hash] = await Promise.all([blobToDataUrl(blob), hashBlob(blob).catch(() => "")]);
