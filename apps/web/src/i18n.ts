@@ -199,6 +199,7 @@ export type AppCopy = {
     generationPreparingCache: (total: number) => string;
     generationStarted: (total: number) => string;
     generationPage: (current: number, total: number, pageNo: number) => string;
+    generationPageRetrying: (pageNo: number, attempt: number, total: number) => string;
     generationPageFailed: (pageNo: number, message: string) => string;
     generationDone: (completed: number, total: number, skipped?: number) => string;
     generationBatchStarted: (documents: number, pages: number) => string;
@@ -290,10 +291,12 @@ export type AppCopy = {
     generationDetailsGenerated: string;
     generationDetailsPending: string;
     generationDetailsRunning: string;
+    generationDetailsRetrying: string;
     generationDetailsFailed: string;
     generationDetailsCurrent: string;
     generationStatusDone: string;
     generationStatusRunning: string;
+    generationStatusRetrying: string;
     generationStatusPending: string;
     generationStatusFailed: string;
   };
@@ -621,6 +624,7 @@ const zhCN: AppCopy = {
     generationPreparingCache: (total) => `正在准备 ${total} 页 PDF 缓存上下文`,
     generationStarted: (total) => `开始生成 ${total} 页讲解`,
     generationPage: (current, total, pageNo) => `正在生成第 ${pageNo} 页讲解（${current}/${total}）`,
+    generationPageRetrying: (pageNo, attempt, total) => `第 ${pageNo} 页无响应，正在第 ${attempt}/${total} 次重试`,
     generationPageFailed: (pageNo, message) => `第 ${pageNo} 页讲解生成失败：${message}`,
     generationDone: (completed, total, skipped = 0) => `讲解生成完成：新生成 ${completed} 页，已跳过 ${skipped} 页，当前 ${total} 页已检查`,
     generationBatchStarted: (documents, pages) => `开始批量生成 ${documents} 个文件，共 ${pages} 页待检查`,
@@ -712,10 +716,12 @@ const zhCN: AppCopy = {
     generationDetailsGenerated: "已生成",
     generationDetailsPending: "待生成",
     generationDetailsRunning: "生成中",
+    generationDetailsRetrying: "重试中",
     generationDetailsFailed: "失败",
     generationDetailsCurrent: "当前页",
     generationStatusDone: "已生成",
     generationStatusRunning: "正在生成",
+    generationStatusRetrying: "正在重试",
     generationStatusPending: "待生成",
     generationStatusFailed: "失败",
   },
@@ -1043,6 +1049,7 @@ const enUS: AppCopy = {
     generationPreparingCache: (total) => `Preparing cacheable PDF context for ${total} pages`,
     generationStarted: (total) => `Generating notes for ${total} pages`,
     generationPage: (current, total, pageNo) => `Generating notes for page ${pageNo} (${current}/${total})`,
+    generationPageRetrying: (pageNo, attempt, total) => `Page ${pageNo} did not respond, retrying ${attempt}/${total}`,
     generationPageFailed: (pageNo, message) => `Page ${pageNo} generation failed: ${message}`,
     generationDone: (completed, total, skipped = 0) => `Generation complete: ${completed} new, ${skipped} skipped, ${total} pages checked`,
     generationBatchStarted: (documents, pages) => `Batch generation started for ${documents} documents, ${pages} pages to check`,
@@ -1134,10 +1141,12 @@ const enUS: AppCopy = {
     generationDetailsGenerated: "Generated",
     generationDetailsPending: "Pending",
     generationDetailsRunning: "Running",
+    generationDetailsRetrying: "Retrying",
     generationDetailsFailed: "Failed",
     generationDetailsCurrent: "Current",
     generationStatusDone: "Generated",
     generationStatusRunning: "Generating",
+    generationStatusRetrying: "Retrying",
     generationStatusPending: "Pending",
     generationStatusFailed: "Failed",
   },

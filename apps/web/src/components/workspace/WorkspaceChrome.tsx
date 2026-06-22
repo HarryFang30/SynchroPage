@@ -94,7 +94,7 @@ export function GenerationDetailsPopover({
   copy: AppCopy;
   pages: Array<{ pageNo: number; status: GenerationPageStatus }>;
   currentPageNo: number;
-  summary: { done: number; running: number; failed: number; pending: number };
+  summary: { done: number; running: number; retrying: number; failed: number; pending: number };
   statusLabel: (status: GenerationPageStatus, copy: AppCopy) => string;
 }) {
   const pageRangeForStatus = (status: GenerationPageStatus) =>
@@ -105,6 +105,9 @@ export function GenerationDetailsPopover({
     { label: copy.topbar.generationDetailsPending, value: `${summary.pending}`, detail: pageRangeForStatus("pending") },
     ...(summary.running
       ? [{ label: copy.topbar.generationDetailsRunning, value: `${summary.running}`, detail: pageRangeForStatus("running") }]
+      : []),
+    ...(summary.retrying
+      ? [{ label: copy.topbar.generationDetailsRetrying, value: `${summary.retrying}`, detail: pageRangeForStatus("retrying") }]
       : []),
     ...(summary.failed ? [{ label: copy.topbar.generationDetailsFailed, value: `${summary.failed}`, detail: pageRangeForStatus("failed") }] : []),
     {

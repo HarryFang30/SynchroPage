@@ -10,7 +10,6 @@ import {
   batchTeachingPages,
   fullPdfContextForTeachingGeneration,
   generatedTeachingNeedsRetry,
-  generationFailureMarkdown,
   lightPdfContextForFastTeachingGeneration,
   PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
   prioritizeTeachingPages,
@@ -76,8 +75,12 @@ import {
 
 const TEACHING_PAGE_REQUEST_TIMEOUT_MS = 120_000;
 const TEACHING_BATCH_REQUEST_TIMEOUT_MS = 150_000;
-const TEACHING_PAGE_REQUEST_STALL_MS = 60_000;
-const TEACHING_BATCH_REQUEST_STALL_MS = 75_000;
+const TEACHING_PAGE_REQUEST_STALL_MS = 20_000;
+const TEACHING_BATCH_REQUEST_STALL_MS = 20_000;
+const TEACHING_PAGE_MAX_ATTEMPTS = 3;
+const TEACHING_PAGE_RETRY_DELAYS_MS = [1_000, 3_000] as const;
+const TEACHING_RATE_LIMIT_EXTRA_COOLDOWN_MS = 8_000;
+const TEACHING_RATE_LIMIT_EXTRA_JITTER_MS = 4_000;
 
 type GenerationRequestWatchdogOptions = {
   stallMs?: number;
@@ -287,7 +290,6 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 stallMs: TEACHING_PAGE_REQUEST_STALL_MS,
                 stalledMessage: p.copy.errors.generationRequestStalled(timeoutSeconds(TEACHING_PAGE_REQUEST_STALL_MS)),
                 timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_PAGE_REQUEST_TIMEOUT_MS)),
-                onStalled: () => p.setJobStatus(p.copy.status.generationPageFailed(pageNo, p.copy.errors.generationRequestStalled(timeoutSeconds(TEACHING_PAGE_REQUEST_STALL_MS)))),
               }),
               { priority, signal: generationSignal },
             );
@@ -301,30 +303,31 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           ) => {
             const pageNo = runningPage.page_no;
             if (generationSignal.aborted) return;
-            try {
-              let generatedPage = await requestGeneratedPage(runningPage, plan);
-              if (plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
-                const retryPlan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "retry");
-                const retriedPage = await requestGeneratedPage(runningPage, retryPlan).catch(() => null);
-                if (retriedPage && shouldPreferTeachingCandidate(retriedPage, generatedPage)) {
-                  generatedPage = retriedPage;
-                }
-              }
-              await commitGeneratedPage(generatedPage);
-            } catch (error) {
-              if ((error as Error).name === "AbortError") return;
-              if (fallbackOnFailure) {
-                await commitGeneratedPage(fallbackOnFailure);
-                return;
-              }
-              const message = (error as Error).message || p.copy.agent.generationFailed;
-              const failedPage = buildFailedPageData(runningPage, message, pageOutputLanguage, p.copy);
-              workingPack = mergePageIntoPack(workingPack, failedPage);
-              workingPagesByNumber.set(pageNo, failedPage);
-              p.setPack(workingPack);
-              p.setJobStatus(p.copy.status.generationPageFailed(pageNo, message));
-              persistQueue.enqueue(failedPage);
-            }
+            await generatePageWithAutoRetry({
+              runningPage,
+              initialPlan: plan,
+              preference: p.uiPreferences.modelReasoningEffort,
+              outputLanguage: pageOutputLanguage,
+              copy: p.copy,
+              signal: generationSignal,
+              fallbackOnFailure,
+              requestGeneratedPage,
+              commitGeneratedPage,
+              markRetryingPage: (page, attempt, totalAttempts) => {
+                const retryingPage = buildRetryingPageData(page, pageOutputLanguage);
+                workingPack = mergePageIntoPack(workingPack, retryingPage);
+                workingPagesByNumber.set(pageNo, retryingPage);
+                p.setPack(workingPack);
+                p.setJobStatus(p.copy.status.generationPageRetrying(pageNo, attempt, totalAttempts));
+              },
+              commitFailedPage: (failedPage) => {
+                workingPack = mergePageIntoPack(workingPack, failedPage);
+                workingPagesByNumber.set(pageNo, failedPage);
+                p.setPack(workingPack);
+                p.setJobStatus(p.copy.status.generationPageFailed(pageNo, generationFailureMessage(failedPage)));
+                persistQueue.enqueue(failedPage);
+              },
+            });
           };
 
           const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort);
@@ -751,7 +754,6 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                   stallMs: TEACHING_PAGE_REQUEST_STALL_MS,
                   stalledMessage: p.copy.errors.generationRequestStalled(timeoutSeconds(TEACHING_PAGE_REQUEST_STALL_MS)),
                   timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_PAGE_REQUEST_TIMEOUT_MS)),
-                  onStalled: () => p.setJobStatus(p.copy.status.generationPageFailed(pageNo, p.copy.errors.generationRequestStalled(timeoutSeconds(TEACHING_PAGE_REQUEST_STALL_MS)))),
                 }),
                 { priority, signal: generationSignal },
               );
@@ -772,41 +774,31 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             ) => {
               const pageNo = runningPage.page_no;
               if (generationSignal.aborted) return;
-              try {
-                let generatedPage = await requestGeneratedPage(runningPage, plan);
-                if (plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
-                  const retryPlan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "retry");
-                  const retriedPage = await requestGeneratedPage(runningPage, retryPlan).catch(() => null);
-                  if (retriedPage && shouldPreferTeachingCandidate(retriedPage, generatedPage)) {
-                    generatedPage = retriedPage;
-                  }
-                }
-                await commitGeneratedPage(generatedPage);
-              } catch (error) {
-                if ((error as Error).name === "AbortError") return;
-                if (fallbackOnFailure) {
-                  await commitGeneratedPage(fallbackOnFailure);
-                  return;
-                }
-                const message = (error as Error).message || p.copy.agent.generationFailed;
-                const failedPage: PageData = {
-                  ...runningPage,
-                  status: "failed",
-                  teaching: {
-                    ...runningPage.teaching,
-                    output_language: p.teachingOutputLanguage,
-                    slide_title: runningPage.teaching.slide_title || `PDF p.${pageNo}`,
-                    speaker_notes_md: generationFailureMarkdown(message, p.teachingOutputLanguage),
-                    confidence: 0,
-                    needs_review: true,
-                  },
-                };
-                workingPack = mergePageIntoPack(workingPack, failedPage);
-                workingPagesByNumber.set(pageNo, failedPage);
-                if (item.documentId === _documentId) p.setPack(workingPack);
-                p.setJobStatus(p.copy.status.generationPageFailed(pageNo, message));
-                persistQueue.enqueue(failedPage);
-              }
+              await generatePageWithAutoRetry({
+                runningPage,
+                initialPlan: plan,
+                preference: p.uiPreferences.modelReasoningEffort,
+                outputLanguage: p.teachingOutputLanguage,
+                copy: p.copy,
+                signal: generationSignal,
+                fallbackOnFailure,
+                requestGeneratedPage,
+                commitGeneratedPage,
+                markRetryingPage: (page, attempt, totalAttempts) => {
+                  const retryingPage = buildRetryingPageData(page, p.teachingOutputLanguage);
+                  workingPack = mergePageIntoPack(workingPack, retryingPage);
+                  workingPagesByNumber.set(pageNo, retryingPage);
+                  if (item.documentId === _documentId) p.setPack(workingPack);
+                  p.setJobStatus(`${p.copy.status.generationBatchDocument(index + 1, projectDocumentItems.length, item.title || "")} · ${p.copy.status.generationPageRetrying(pageNo, attempt, totalAttempts)}`);
+                },
+                commitFailedPage: (failedPage) => {
+                  workingPack = mergePageIntoPack(workingPack, failedPage);
+                  workingPagesByNumber.set(pageNo, failedPage);
+                  if (item.documentId === _documentId) p.setPack(workingPack);
+                  p.setJobStatus(p.copy.status.generationPageFailed(pageNo, generationFailureMessage(failedPage)));
+                  persistQueue.enqueue(failedPage);
+                },
+              });
             };
 
             const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort);
@@ -969,6 +961,146 @@ export function useGenerationEngine(p: GenerationEngineParams) {
   ]);
 
   return { handleGenerateNotes, handleGenerateProjectMissingNotes };
+}
+
+type GeneratePageWithAutoRetryOptions = {
+  runningPage: PageData;
+  initialPlan: TeachingGenerationQualityPlan;
+  preference: UiPreferences["modelReasoningEffort"];
+  outputLanguage: TeachingOutputLanguage;
+  copy: AppCopy;
+  signal: AbortSignal;
+  fallbackOnFailure?: PageData;
+  requestGeneratedPage: (runningPage: PageData, plan: TeachingGenerationQualityPlan) => Promise<PageData>;
+  commitGeneratedPage: (generatedPage: PageData) => Promise<void> | void;
+  commitFailedPage: (failedPage: PageData) => Promise<void> | void;
+  markRetryingPage: (runningPage: PageData, attempt: number, totalAttempts: number) => void;
+};
+
+async function generatePageWithAutoRetry({
+  runningPage,
+  initialPlan,
+  preference,
+  outputLanguage,
+  copy,
+  signal,
+  fallbackOnFailure,
+  requestGeneratedPage,
+  commitGeneratedPage,
+  commitFailedPage,
+  markRetryingPage,
+}: GeneratePageWithAutoRetryOptions) {
+  let bestFallback = fallbackOnFailure;
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= TEACHING_PAGE_MAX_ATTEMPTS; attempt += 1) {
+    if (signal.aborted) return;
+    const plan = attempt === 1
+      ? initialPlan
+      : teachingGenerationQualityPlan(runningPage, preference, "retry");
+
+    try {
+      const generatedPage = await requestGeneratedPage(runningPage, plan);
+      const shouldRetryWeakOutput =
+        plan.retryOnWeakOutput &&
+        generatedTeachingNeedsRetry(generatedPage) &&
+        attempt < TEACHING_PAGE_MAX_ATTEMPTS;
+      if (shouldRetryWeakOutput) {
+        bestFallback = bestFallback && shouldPreferTeachingCandidate(bestFallback, generatedPage)
+          ? bestFallback
+          : generatedPage;
+        markRetryingPage(runningPage, attempt + 1, TEACHING_PAGE_MAX_ATTEMPTS);
+        await waitBeforeTeachingRetry(attempt, null, signal);
+        continue;
+      }
+
+      const finalPage = bestFallback && shouldPreferTeachingCandidate(bestFallback, generatedPage)
+        ? bestFallback
+        : generatedPage;
+      await commitGeneratedPage(finalPage);
+      return;
+    } catch (error) {
+      if ((error as Error).name === "AbortError" || signal.aborted) return;
+      lastError = error;
+      if (attempt >= TEACHING_PAGE_MAX_ATTEMPTS || !shouldAutoRetryGenerationError(error, copy)) {
+        break;
+      }
+      markRetryingPage(runningPage, attempt + 1, TEACHING_PAGE_MAX_ATTEMPTS);
+      await waitBeforeTeachingRetry(attempt, error, signal);
+    }
+  }
+
+  if (bestFallback) {
+    await commitGeneratedPage(bestFallback);
+    return;
+  }
+
+  const message = (lastError as Error | null)?.message || copy.agent.generationFailed;
+  await commitFailedPage(buildFailedPageData(runningPage, message, outputLanguage, copy));
+}
+
+function buildRetryingPageData(page: PageData, outputLanguage: TeachingOutputLanguage): PageData {
+  return {
+    ...page,
+    status: "retrying",
+    teaching: {
+      ...page.teaching,
+      output_language: outputLanguage,
+    },
+  };
+}
+
+function generationFailureMessage(page: PageData) {
+  return page.teaching.speaker_notes_md.replace(/^## .+?\n\n/s, "").trim() || "Generation failed";
+}
+
+async function waitBeforeTeachingRetry(attempt: number, error: unknown, signal: AbortSignal) {
+  const baseDelay = TEACHING_PAGE_RETRY_DELAYS_MS[Math.min(Math.max(attempt - 1, 0), TEACHING_PAGE_RETRY_DELAYS_MS.length - 1)];
+  const rateLimitDelay = isRateLimitGenerationError(error)
+    ? TEACHING_RATE_LIMIT_EXTRA_COOLDOWN_MS + Math.random() * TEACHING_RATE_LIMIT_EXTRA_JITTER_MS
+    : 0;
+  await abortableDelay(baseDelay + rateLimitDelay, signal);
+}
+
+function shouldAutoRetryGenerationError(error: unknown, copy: AppCopy) {
+  const typed = error as Error;
+  if (typed.name === "GenerationStalledError" || typed.name === "TimeoutError") return true;
+  const message = (typed.message || String(error || "")).toLowerCase();
+  if (!message) return false;
+  if (message === copy.errors.accountNotFound.toLowerCase()) return false;
+  if (message.includes("oauth client id") || message.includes("account_not_found")) return false;
+  if (message.includes("invalid_request") && !message.includes("timeout")) return false;
+  return (
+    message.includes("rate limit") ||
+    message.includes("429") ||
+    message.includes("timeout") ||
+    message.includes("timed out") ||
+    message.includes("stalled") ||
+    message.includes("network") ||
+    message.includes("failed to fetch") ||
+    message.includes("empty generation response") ||
+    /\b50[0-4]\b/.test(message)
+  );
+}
+
+function isRateLimitGenerationError(error: unknown) {
+  const message = ((error as Error | null)?.message || String(error || "")).toLowerCase();
+  return message.includes("rate limit") || message.includes("429") || message.includes("too many requests");
+}
+
+function abortableDelay(ms: number, signal: AbortSignal) {
+  if (signal.aborted || ms <= 0) return Promise.resolve();
+  let abort: (() => void) | null = null;
+  return new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(resolve, ms);
+    abort = () => {
+      window.clearTimeout(timer);
+      reject(createAbortError());
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  }).finally(() => {
+    if (abort) signal.removeEventListener("abort", abort);
+  });
 }
 
 async function runGenerationRequestWithTimeout<T>(

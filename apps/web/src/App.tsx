@@ -350,6 +350,7 @@ const samplePacks: Record<UiPreferences["language"], PagePack> = {
 function generationStatusLabel(status: GenerationPageStatus, copy: AppCopy) {
   if (status === "done") return copy.topbar.generationStatusDone;
   if (status === "running") return copy.topbar.generationStatusRunning;
+  if (status === "retrying") return copy.topbar.generationStatusRetrying;
   if (status === "failed") return copy.topbar.generationStatusFailed;
   return copy.topbar.generationStatusPending;
 }
@@ -435,7 +436,7 @@ export default function App() {
     setPack((current) => ({
       ...current,
       pages: current.pages.map((page) => {
-        if (page.status !== "running") return page;
+        if (page.status !== "running" && page.status !== "retrying") return page;
         return {
           ...page,
           status: "failed",
@@ -481,10 +482,11 @@ export default function App() {
     (summary, item) => ({
       done: summary.done + (item.status === "done" ? 1 : 0),
       running: summary.running + (item.status === "running" ? 1 : 0),
+      retrying: summary.retrying + (item.status === "retrying" ? 1 : 0),
       failed: summary.failed + (item.status === "failed" ? 1 : 0),
       pending: summary.pending + (item.status === "pending" ? 1 : 0),
     }),
-    { done: 0, running: 0, failed: 0, pending: 0 },
+    { done: 0, running: 0, retrying: 0, failed: 0, pending: 0 },
   ), [generationProgressPages]);
   const generateScopeSummary =
     generatePageMode === "current"
@@ -1054,12 +1056,12 @@ export default function App() {
   }, [documentId, isRestoringWorkspace, persistOperation, selectedContext, workspaceId]);
 
   useEffect(() => {
-    if (isRestoringWorkspace || !restoredOnceRef.current || !workspaceId || !documentId || pack.document.id !== documentId) return undefined;
+    if (isGeneratingNotes || isRestoringWorkspace || !restoredOnceRef.current || !workspaceId || !documentId || pack.document.id !== documentId) return undefined;
     const timer = window.setTimeout(() => {
       void persistOperation(() => saveGeneratedPagesFromPack({ workspaceId, documentId, pack })).catch(() => undefined);
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [documentId, isRestoringWorkspace, pack, persistOperation, workspaceId]);
+  }, [documentId, isGeneratingNotes, isRestoringWorkspace, pack, persistOperation, workspaceId]);
 
   useEffect(() => {
     if (!documentId || pack.document.id !== documentId) return;

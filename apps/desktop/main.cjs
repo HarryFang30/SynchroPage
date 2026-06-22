@@ -9,6 +9,7 @@ const HOST = "127.0.0.1";
 const DEFAULT_PORT = Number(process.env.SYNCHROPAGE_DESKTOP_PORT || 8765);
 const PORT_SCAN_LIMIT = Number(process.env.SYNCHROPAGE_DESKTOP_PORT_SCAN_LIMIT || 20);
 const BACKEND_START_TIMEOUT_MS = Number(process.env.SYNCHROPAGE_BACKEND_START_TIMEOUT_MS || 30_000);
+const BACKEND_HEALTH_POLL_INTERVAL_MS = Number(process.env.SYNCHROPAGE_BACKEND_HEALTH_POLL_INTERVAL_MS || 50);
 const DEFAULT_WINDOW_WIDTH = 1680;
 const DEFAULT_WINDOW_HEIGHT = 920;
 const MIN_WINDOW_WIDTH = 1180;
@@ -65,6 +66,7 @@ function createMainWindow(url) {
   const win = new BrowserWindow({
     ...bounds,
     title: "SynchroPage",
+    show: false,
     autoHideMenuBar: true,
     backgroundColor: "#f7f4ec",
     webPreferences: {
@@ -91,6 +93,20 @@ function createMainWindow(url) {
   }
 
   logStartupMetric("window-created");
+  let hasShownWindow = false;
+  const showWindow = (source) => {
+    if (hasShownWindow || win.isDestroyed()) return;
+    hasShownWindow = true;
+    logStartupMetric("window-show", { source });
+    win.show();
+  };
+  const showFallbackTimer = setTimeout(() => showWindow("timeout"), 3000);
+  showFallbackTimer.unref?.();
+  win.once("ready-to-show", () => {
+    clearTimeout(showFallbackTimer);
+    logStartupMetric("window-ready-to-show");
+    showWindow("ready-to-show");
+  });
   win.webContents.once("dom-ready", () => logStartupMetric("dom-ready"));
   win.webContents.once("did-finish-load", () => logStartupMetric("did-finish-load"));
   void win.loadURL(url);
@@ -227,7 +243,7 @@ async function waitForBackend(port) {
     if (backendProcess?.exitCode !== null && backendProcess?.exitCode !== undefined) break;
     const health = await getBackendHealth(port);
     if (health.ok) return;
-    await delay(300);
+    await delay(BACKEND_HEALTH_POLL_INTERVAL_MS);
   }
   throw new Error(`SynchroPage backend did not become healthy on ${HOST}:${port}. See ${getBackendLogPath()} for details.`);
 }

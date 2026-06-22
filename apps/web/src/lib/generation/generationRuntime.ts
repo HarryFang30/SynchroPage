@@ -7,7 +7,7 @@ import {
   type TeachingOutputLanguage,
 } from "./teachingGeneration";
 
-export type GenerationPageStatus = "done" | "running" | "failed" | "pending";
+export type GenerationPageStatus = "done" | "running" | "retrying" | "failed" | "pending";
 
 export function normalizeGeneratedPage(rawPage: GeneratedTeachingPageResponse["page"], fallback: PageData): PageData {
   const rawSource: Partial<PageData["source"]> = rawPage.source ?? {};
@@ -100,13 +100,14 @@ export function missingSourceTextPageNumbers(pageNumbers: number[], sourceTextBy
 
 export function hasCompletedTeaching(page: PageData | undefined, outputLanguage?: TeachingOutputLanguage) {
   if (!page) return false;
-  if (page.status === "failed" || page.status === "running" || !page.teaching.speaker_notes_md.trim()) return false;
+  if (page.status === "failed" || page.status === "running" || page.status === "retrying" || !page.teaching.speaker_notes_md.trim()) return false;
   return !outputLanguage || page.teaching.output_language === outputLanguage;
 }
 
 export function generationPageStatus(page: PageData | undefined, outputLanguage?: TeachingOutputLanguage): GenerationPageStatus {
   if (!page) return "pending";
   if (page.status === "running") return "running";
+  if (page.status === "retrying") return "retrying";
   if (page.status === "failed") return "failed";
   if (!page.teaching.speaker_notes_md.trim()) return "pending";
   if (outputLanguage && page.teaching.output_language !== outputLanguage) return "pending";
