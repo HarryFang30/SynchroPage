@@ -41,9 +41,6 @@ from pdf_agent.server.value_utils import (
     env_positive_int as _env_positive_int,
     string_value as _string_value,
 )
-from pdf_agent.server.document_context import (
-    set_pdf_file_cache,
-)
 from pdf_agent.server.agent_gateway import AgentChatGateway
 from pdf_agent.server.teaching_gateway import TeachingGenerationGateway
 
@@ -328,11 +325,18 @@ def create_server(
     runner = AsyncRunner()
     oauth_api = OpenAIOAuthApi(manager)
     pdf_file_cache = PdfFileCache()
-    # Register the cache for document_context helpers that still use the
-    # module-level reference (set_pdf_file_cache / _pdf_file_cache).
-    set_pdf_file_cache(pdf_file_cache)
-    chat_gateway = AgentChatGateway(manager, model=model, config_store=model_config_store)
-    teaching_gateway = TeachingGenerationGateway(manager, model=model, config_store=model_config_store)
+    chat_gateway = AgentChatGateway(
+        manager,
+        model=model,
+        config_store=model_config_store,
+        pdf_file_cache=pdf_file_cache,
+    )
+    teaching_gateway = TeachingGenerationGateway(
+        manager,
+        model=model,
+        config_store=model_config_store,
+        pdf_file_cache=pdf_file_cache,
+    )
     return PdfAgentHttpServer(
         (host, port),
         PdfAgentRequestHandler,

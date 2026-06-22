@@ -20,6 +20,7 @@ from pdf_agent.server.model_gateway import (
     provider_cache_metadata,
 )
 from pdf_agent.server.payload_builders import _build_responses_payload
+from pdf_agent.server.pdf_file_cache import PdfFileCache
 from pdf_agent.server.prompt_cache import _should_retry_transient_upstream_error, _transient_retry_delay_seconds
 
 
@@ -33,11 +34,13 @@ class AgentChatGateway:
         model: str = DEFAULT_AGENT_MODEL,
         timeout_seconds: float = 120.0,
         config_store: ModelConfigStore | None = None,
+        pdf_file_cache: PdfFileCache | None = None,
     ) -> None:
         self.manager = manager
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.config_store = config_store
+        self.pdf_file_cache = pdf_file_cache
 
     async def chat(self, body: Mapping[str, Any]) -> dict[str, Any]:
         result = await post_responses_payload_for_body(
@@ -46,7 +49,11 @@ class AgentChatGateway:
             body=body,
             default_key="assistant",
             legacy_model=self.model,
-            responses_payload=_build_responses_payload(body, default_model=self.model),
+            responses_payload=_build_responses_payload(
+                body,
+                default_model=self.model,
+                pdf_file_cache=self.pdf_file_cache,
+            ),
             post_with_retries=self._post_with_retries,
             codex_include_reasoning_encrypted_content=True,
             codex_auth_builder=build_chatgpt_codex_auth,

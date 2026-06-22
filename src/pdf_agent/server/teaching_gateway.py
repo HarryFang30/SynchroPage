@@ -32,6 +32,7 @@ from pdf_agent.server.payload_builders import (
     _build_teaching_generation_payload,
     _teaching_generation_candidate_bodies,
 )
+from pdf_agent.server.pdf_file_cache import PdfFileCache
 from pdf_agent.server.prompt_cache import (
     TEACHING_MAX_RETRY_DELAY_SECONDS,
     TEACHING_RETRY_DELAYS_SECONDS,
@@ -52,18 +53,20 @@ class TeachingGenerationGateway:
         timeout_seconds: float = float(TEACHING_UPSTREAM_TIMEOUT_SECONDS),
         api_concurrency: int = TEACHING_API_CONCURRENCY,
         config_store: ModelConfigStore | None = None,
+        pdf_file_cache: PdfFileCache | None = None,
     ) -> None:
         self.manager = manager
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.config_store = config_store
+        self.pdf_file_cache = pdf_file_cache
         self._api_semaphore = asyncio.Semaphore(max(1, api_concurrency))
         self._rate_limit_lock = asyncio.Lock()
         self._rate_limit_cooldown_until = 0.0
 
     async def generate_page(self, body: Mapping[str, Any]) -> dict[str, Any]:
         content, result, document_file_used, cache_metadata = await self._generate_content_with_fallback(body)
-        page = _parse_generated_page(content, body)
+        page = _parse_generated_page(content, body, pdf_file_cache=self.pdf_file_cache)
         return {
             "page": page,
             "account_id": result.account_id,
@@ -78,7 +81,7 @@ class TeachingGenerationGateway:
 
     async def generate_pages(self, body: Mapping[str, Any]) -> dict[str, Any]:
         content, result, document_file_used, cache_metadata = await self._generate_content_with_fallback(body)
-        pages = _parse_generated_pages(content, body)
+        pages = _parse_generated_pages(content, body, pdf_file_cache=self.pdf_file_cache)
         return {
             "pages": pages,
             "account_id": result.account_id,
@@ -95,11 +98,16 @@ class TeachingGenerationGateway:
         self,
         body: Mapping[str, Any],
     ):
-        candidate_bodies = _teaching_generation_candidate_bodies(body)
+        candidate_bodies = _teaching_generation_candidate_bodies(body, pdf_file_cache=self.pdf_file_cache)
 
         last_error: HttpError | None = None
         for candidate_index, (candidate_body, document_file_used) in enumerate(candidate_bodies):
-            payload = await asyncio.to_thread(_build_teaching_generation_payload, candidate_body, default_model=self.model)
+            payload = await asyncio.to_thread(
+                _build_teaching_generation_payload,
+                candidate_body,
+                default_model=self.model,
+                pdf_file_cache=self.pdf_file_cache,
+            )
             try:
                 result = await post_responses_payload_for_body(
                     manager=self.manager,

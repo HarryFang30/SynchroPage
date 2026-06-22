@@ -37,6 +37,7 @@ from pdf_agent.server.web_app import (
     _resolve_static_path,
     _static_cache_control,
     _static_file_etag,
+    create_server,
 )
 from pdf_agent.gateway.openai_gateway import redacted_gateway_error
 from pdf_agent.server.document_context import set_pdf_file_cache
@@ -73,6 +74,9 @@ def _blank_pdf_file_data(page_count: int = 2) -> str:
 
 
 class WebAppTest(unittest.TestCase):
+    def setUp(self) -> None:
+        set_pdf_file_cache(PdfFileCache())
+
     def test_read_json_rejects_oversized_content_length_before_reading(self) -> None:
         handler = PdfAgentRequestHandler.__new__(PdfAgentRequestHandler)
         handler.headers = {"Content-Length": "100000001"}  # type: ignore[assignment]
@@ -555,6 +559,48 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(file_part["type"], "input_file")
         subset_reader = PdfReader(io.BytesIO(_decode_pdf_file_data(file_part["file_data"])))
         self.assertEqual(len(subset_reader.pages), 1)
+
+    def test_server_pdf_cache_is_not_overwritten_by_later_server(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_config = Path(tmp) / "missing-oauth.yaml"
+            server_a = create_server(port=0, oauth_config_path=missing_config)
+            server_b = create_server(port=0, oauth_config_path=missing_config)
+            try:
+                handler = PdfAgentRequestHandler.__new__(PdfAgentRequestHandler)
+                handler.server = server_a  # type: ignore[assignment]
+                cached = handler._cache_pdf_file_payload({
+                    "filename": "cached.pdf",
+                    "fileData": _blank_pdf_file_data(1),
+                })
+
+                self.assertIs(server_a.chat_gateway.pdf_file_cache, server_a.pdf_file_cache)
+                self.assertIs(server_a.teaching_gateway.pdf_file_cache, server_a.pdf_file_cache)
+                payload = _build_responses_payload(
+                    {
+                        "model": "gpt-5.5",
+                        "input": "Use the cached PDF",
+                        "documentFile": {"filename": cached["filename"], "sha256": cached["sha256"]},
+                    },
+                    default_model="fallback",
+                    pdf_file_cache=server_a.pdf_file_cache,
+                )
+                other_payload = _build_responses_payload(
+                    {
+                        "model": "gpt-5.5",
+                        "input": "Use the cached PDF",
+                        "documentFile": {"filename": cached["filename"], "sha256": cached["sha256"]},
+                    },
+                    default_model="fallback",
+                    pdf_file_cache=server_b.pdf_file_cache,
+                )
+
+                self.assertTrue(any(part.get("type") == "input_file" for part in payload["input"][0]["content"]))
+                self.assertFalse(any(part.get("type") == "input_file" for part in other_payload["input"][0]["content"]))
+            finally:
+                server_a.runner.shutdown()
+                server_a.server_close()
+                server_b.runner.shutdown()
+                server_b.server_close()
 
     def test_teaching_batch_prompt_uses_single_schema_contract(self) -> None:
         prompt = _build_teaching_generation_prompt(
@@ -1165,6 +1211,12 @@ class WebAppTest(unittest.TestCase):
         short = '{"error": "bad request"}'
         result = _redacted_upstream_detail(short)
         self.assertIn("bad request", result)
+
+    def test_gateway_redaction_handles_truncated_json_secret(self) -> None:
+        long_secret = '{"access_token":"' + ("s" * 4000) + '"}'
+        result = _redacted_upstream_detail(long_secret)
+        self.assertIn("<redacted>", result)
+        self.assertNotIn("ssss", result)
 
 
 if __name__ == "__main__":

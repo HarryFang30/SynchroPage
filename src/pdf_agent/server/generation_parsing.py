@@ -16,6 +16,7 @@ from pdf_agent.server.markdown_math import (
     normalize_markdown_math as _normalize_markdown_math,
 )
 from pdf_agent.server.document_context import _pdf_file_input
+from pdf_agent.server.pdf_file_cache import PdfFileCache
 from pdf_agent.server.payload_builders import (
     _is_fast_teaching_generation,
     _teaching_generation_pages,
@@ -31,16 +32,26 @@ from pdf_agent.server.value_utils import (
 )
 
 
-def _parse_generated_page(content: str, body: Mapping[str, Any]) -> dict[str, Any]:
+def _parse_generated_page(
+    content: str,
+    body: Mapping[str, Any],
+    *,
+    pdf_file_cache: PdfFileCache | None = None,
+) -> dict[str, Any]:
     value = _json_from_model_text(content)
     page_input = body.get("page") if isinstance(body.get("page"), Mapping) else {}
     candidate = _first_generated_page_candidate(value)
     if not isinstance(candidate, Mapping):
         raise HttpError(502, "Generation response did not contain a page JSON object", code="invalid_generation_json")
-    return _normalize_generated_page_candidate(candidate, page_input, body)
+    return _normalize_generated_page_candidate(candidate, page_input, body, pdf_file_cache=pdf_file_cache)
 
 
-def _parse_generated_pages(content: str, body: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _parse_generated_pages(
+    content: str,
+    body: Mapping[str, Any],
+    *,
+    pdf_file_cache: PdfFileCache | None = None,
+) -> list[dict[str, Any]]:
     value = _json_from_model_text(content)
     page_inputs = _teaching_generation_pages(body)
     if not page_inputs:
@@ -63,7 +74,7 @@ def _parse_generated_pages(content: str, body: Mapping[str, Any]) -> list[dict[s
             candidate = candidates[index]
         if candidate is None:
             raise HttpError(502, f"Generation response did not contain page {page_no}", code="invalid_generation_json")
-        pages.append(_normalize_generated_page_candidate(candidate, page_input, body))
+        pages.append(_normalize_generated_page_candidate(candidate, page_input, body, pdf_file_cache=pdf_file_cache))
     return pages
 
 
@@ -86,6 +97,8 @@ def _normalize_generated_page_candidate(
     candidate: Mapping[str, Any],
     page_input: Mapping[str, Any],
     body: Mapping[str, Any],
+    *,
+    pdf_file_cache: PdfFileCache | None = None,
 ) -> dict[str, Any]:
     source_input = page_input.get("source") if isinstance(page_input.get("source"), Mapping) else {}
     page_no = _int_value(page_input.get("page_no"), 1)
@@ -94,7 +107,7 @@ def _normalize_generated_page_candidate(
     source = candidate.get("source") if isinstance(candidate.get("source"), Mapping) else {}
     teaching = candidate.get("teaching") if isinstance(candidate.get("teaching"), Mapping) else {}
     source_text = str(source.get("text_md") or source_input.get("text_md") or "").strip()
-    has_pdf_file = bool(_pdf_file_input(body.get("documentFile")))
+    has_pdf_file = bool(_pdf_file_input(body.get("documentFile"), pdf_file_cache=pdf_file_cache))
     no_source_available = not source_text and not has_pdf_file
     needs_fallback = bool(teaching.get("needs_parser_fallback")) or no_source_available
     fast_generation = _is_fast_teaching_generation(body)

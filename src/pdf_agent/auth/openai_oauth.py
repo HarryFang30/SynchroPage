@@ -51,6 +51,7 @@ SENSITIVE_OAUTH_FIELDS = (
 )
 _SENSITIVE_FIELD_PATTERN = "|".join(re.escape(field) for field in SENSITIVE_OAUTH_FIELDS)
 _JSON_SECRET_RE = re.compile(rf'("(?:(?:{_SENSITIVE_FIELD_PATTERN}))"\s*:\s*")[^"]+(")', re.IGNORECASE)
+_JSON_DANGLING_SECRET_RE = re.compile(rf'("(?:(?:{_SENSITIVE_FIELD_PATTERN}))"\s*:\s*")[^"]*\Z', re.IGNORECASE)
 _FORM_SECRET_RE = re.compile(rf"((?:{_SENSITIVE_FIELD_PATTERN})=)[^&\s]+", re.IGNORECASE)
 _BEARER_SECRET_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/-]+", re.IGNORECASE)
 _ENV_VAR_RE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
@@ -664,6 +665,7 @@ def atomic_write_secret(path: Path, content: str) -> None:
 
 def redact_secret_text(text: str, *, max_chars: int | None = None) -> str:
     redacted = _JSON_SECRET_RE.sub(r"\1<redacted>\2", text)
+    redacted = _JSON_DANGLING_SECRET_RE.sub(r"\1<redacted>", redacted)
     redacted = _FORM_SECRET_RE.sub(r"\1<redacted>", redacted)
     redacted = _BEARER_SECRET_RE.sub(r"\1<redacted>", redacted)
     if max_chars is not None and len(redacted) > max_chars:

@@ -41,6 +41,7 @@ from pdf_agent.server.document_context import (
     _transcript_messages,
 )
 from pdf_agent.server.json_utils import json_dumps_utf8_safe as _json_dumps_utf8_safe
+from pdf_agent.server.pdf_file_cache import PdfFileCache
 from pdf_agent.server.prompt_cache import (
     _apply_prompt_cache_fields as _apply_prompt_cache_fields_impl,
 )
@@ -517,7 +518,11 @@ def _build_user_request(input_text: str, selected_context: Any, pdf_context: Any
     return "\n\n".join(sections)
 
 
-def _build_agent_interaction_prompt(body: Mapping[str, Any]) -> str:
+def _build_agent_interaction_prompt(
+    body: Mapping[str, Any],
+    *,
+    pdf_file_cache: PdfFileCache | None = None,
+) -> str:
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
     page = body.get("page") if isinstance(body.get("page"), Mapping) else {}
     teaching = page.get("teaching") if isinstance(page.get("teaching"), Mapping) else {}
@@ -542,7 +547,7 @@ def _build_agent_interaction_prompt(body: Mapping[str, Any]) -> str:
         f"Document ID: {_string_value(document.get('id'), 'unknown')}",
     ]
     attached_pdf_pages = _agent_pdf_file_page_numbers(body)
-    if _pdf_file_input(body.get("documentFile"), page_numbers=attached_pdf_pages):
+    if _pdf_file_input(body.get("documentFile"), page_numbers=attached_pdf_pages, pdf_file_cache=pdf_file_cache):
         if attached_pdf_pages:
             pdf_note = (
                 f"A PDF subset is attached as an input_file for pages {_format_page_ranges(attached_pdf_pages)}. "
@@ -638,7 +643,12 @@ def _agent_priority_pdf_pages(body: Mapping[str, Any], page_count: int) -> list[
 # ---------------------------------------------------------------------------
 
 
-def _build_responses_payload(body: Mapping[str, Any], *, default_model: str) -> dict[str, Any]:
+def _build_responses_payload(
+    body: Mapping[str, Any],
+    *,
+    default_model: str,
+    pdf_file_cache: PdfFileCache | None = None,
+) -> dict[str, Any]:
     model = _clean_model(body.get("model")) or default_model
     content: list[dict[str, Any]] = []
     cache_prefix = _build_document_cache_prefix(body)
@@ -648,10 +658,11 @@ def _build_responses_payload(body: Mapping[str, Any], *, default_model: str) -> 
         body.get("documentFile"),
         page_numbers=_agent_pdf_file_page_numbers(body),
         fallback_to_original_on_subset_failure=False,
+        pdf_file_cache=pdf_file_cache,
     )
     if pdf_file:
         content.append(pdf_file)
-    content.append({"type": "input_text", "text": _build_agent_interaction_prompt(body)})
+    content.append({"type": "input_text", "text": _build_agent_interaction_prompt(body, pdf_file_cache=pdf_file_cache)})
     for image in _image_attachments(body.get("attachments"), body.get("parts")):
         content.append({"type": "input_image", "image_url": image["data_url"]})
     payload: dict[str, Any] = {
@@ -664,7 +675,12 @@ def _build_responses_payload(body: Mapping[str, Any], *, default_model: str) -> 
     return payload
 
 
-def _build_teaching_generation_payload(body: Mapping[str, Any], *, default_model: str) -> dict[str, Any]:
+def _build_teaching_generation_payload(
+    body: Mapping[str, Any],
+    *,
+    default_model: str,
+    pdf_file_cache: PdfFileCache | None = None,
+) -> dict[str, Any]:
     model = _clean_model(body.get("model")) or default_model
     content: list[dict[str, Any]] = []
     cache_prefix = _build_document_cache_prefix(body)
@@ -674,6 +690,7 @@ def _build_teaching_generation_payload(body: Mapping[str, Any], *, default_model
         body.get("documentFile"),
         page_numbers=_teaching_generation_page_numbers(body),
         fallback_to_original_on_subset_failure=False,
+        pdf_file_cache=pdf_file_cache,
     )
     if pdf_file:
         content.append(pdf_file)
@@ -692,16 +709,25 @@ def _teaching_payload_instructions(body: Mapping[str, Any]) -> str:
     return SYNCHROPAGE_FAST_TEACHING_INSTRUCTIONS if _is_fast_teaching_generation(body) else SYNCHROPAGE_SHARED_INSTRUCTIONS
 
 
-def _build_teaching_codex_responses_payload(body: Mapping[str, Any], default_model: str) -> dict[str, Any]:
+def _build_teaching_codex_responses_payload(
+    body: Mapping[str, Any],
+    default_model: str,
+    *,
+    pdf_file_cache: PdfFileCache | None = None,
+) -> dict[str, Any]:
     return build_codex_responses_payload(
-        _build_teaching_generation_payload(body, default_model=default_model),
+        _build_teaching_generation_payload(body, default_model=default_model, pdf_file_cache=pdf_file_cache),
         force_stream=True,
         include_reasoning_encrypted_content=False,
         strip_unsupported_fields=True,
     )
 
 
-def _teaching_generation_candidate_bodies(body: Mapping[str, Any]) -> list[tuple[Mapping[str, Any], bool]]:
+def _teaching_generation_candidate_bodies(
+    body: Mapping[str, Any],
+    *,
+    pdf_file_cache: PdfFileCache | None = None,
+) -> list[tuple[Mapping[str, Any], bool]]:
     requested_model = _clean_model(body.get("model"))
     fallback_model = _clean_model(body.get("fallbackModel"))
     fallback_provider_id = _clean_model(body.get("fallbackModelProviderId"))
@@ -720,6 +746,7 @@ def _teaching_generation_candidate_bodies(body: Mapping[str, Any]) -> list[tuple
             body.get("documentFile"),
             page_numbers=_teaching_generation_page_numbers(body),
             fallback_to_original_on_subset_failure=False,
+            pdf_file_cache=pdf_file_cache,
         )
     )
     candidates: list[tuple[Mapping[str, Any], bool]] = []

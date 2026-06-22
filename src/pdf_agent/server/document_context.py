@@ -3,8 +3,8 @@
 Pure functions that build the cacheable document context prefix, extract
 selected-source and attachment data, and normalise page-number lists.
 
-``_pdf_file_input`` needs a ``PdfFileCache`` instance; callers should
-call ``set_pdf_file_cache()`` once during initialisation.
+``_pdf_file_input`` accepts a ``PdfFileCache`` instance for request-scoped
+server paths.  ``set_pdf_file_cache()`` remains for direct helper callers.
 """
 
 from __future__ import annotations
@@ -286,11 +286,12 @@ def _pdf_file_input(
     *,
     page_numbers: Sequence[int] | None = None,
     fallback_to_original_on_subset_failure: bool = True,
+    pdf_file_cache: PdfFileCache | None = None,
 ) -> dict[str, Any] | None:
     """Build an ``input_file`` content part for a gateway payload."""
     if not isinstance(value, Mapping):
         return None
-    cache = _pdf_file_cache
+    cache = pdf_file_cache or _pdf_file_cache
     file_data = _raw_pdf_file_data(value.get("fileData") or value.get("file_data"))
     sha256 = _string_value(value.get("sha256"), "")
     if not file_data and sha256 and cache is not None:
