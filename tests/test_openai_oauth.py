@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pdf_agent.auth.openai_oauth import (
     DEFAULT_CODEX_OAUTH_CLIENT_ID,
@@ -180,6 +181,40 @@ class OpenAIOAuthManagerTest(unittest.TestCase):
                 self.assertTrue(storage_path.exists())
 
         asyncio.run(scenario())
+
+    def test_env_storage_path_overrides_config_storage_path(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                configured_path = Path(tmp) / "configured" / "oauth.json"
+                env_path = Path(tmp) / "env" / "openai_oauth.json"
+                fake = FakeHttpClient()
+                with patch.dict("os.environ", {"PDF_AGENT_HOME": "", "PDF_AGENT_OPENAI_OAUTH_STORAGE_PATH": str(env_path)}):
+                    manager = OpenAIOAuthManager(
+                        config={**TEST_OAUTH_CONFIG, "storage": {"path": str(configured_path)}},
+                        http_client=fake,
+                    )
+                    self.assertEqual(manager.storage_path, env_path)
+
+                    device = await manager.start_login()
+                    fake.poll_ready = True
+                    await manager.poll_login(device.device_code)
+
+                self.assertTrue(env_path.exists())
+                self.assertFalse(configured_path.exists())
+
+        asyncio.run(scenario())
+
+    def test_pdf_agent_home_overrides_config_storage_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            configured_path = Path(tmp) / "configured" / "oauth.json"
+            home_path = Path(tmp) / "agent-home"
+            with patch.dict("os.environ", {"PDF_AGENT_HOME": str(home_path), "PDF_AGENT_OPENAI_OAUTH_STORAGE_PATH": ""}):
+                manager = OpenAIOAuthManager(
+                    config={**TEST_OAUTH_CONFIG, "storage": {"path": str(configured_path)}},
+                    http_client=FakeHttpClient(),
+                )
+
+            self.assertEqual(manager.storage_path, home_path / "openai_oauth.json")
 
     def test_oauth_error_details_are_redacted(self) -> None:
         async def scenario() -> None:

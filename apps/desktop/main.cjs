@@ -1,8 +1,9 @@
-const { app, BrowserWindow, Menu, dialog, screen, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, screen, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
+const os = require("node:os");
 const path = require("node:path");
 
 const HOST = "127.0.0.1";
@@ -21,6 +22,24 @@ const STARTUP_METRICS_ENABLED = process.env.SYNCHROPAGE_STARTUP_METRICS === "1";
 let mainWindow = null;
 let backendProcess = null;
 let backendLogPath = null;
+let startupError = null;
+let desktopRuntime = {
+  dataDir: null,
+  configuredDataDir: null,
+  dataDirManagedByEnv: false,
+  backendDataDir: null,
+  oauthStoragePath: null,
+  oauthStoragePathExplicit: false,
+  configPath: null,
+  configValues: {}
+};
+
+try {
+  desktopRuntime = configureDesktopRuntime();
+} catch (error) {
+  startupError = error;
+}
+registerDesktopIpcHandlers();
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -37,6 +56,7 @@ app.on("ready", async () => {
   logStartupMetric("app-ready");
   Menu.setApplicationMenu(null);
   try {
+    if (startupError) throw startupError;
     const webRoot = resolveWebRoot();
     ensureBuiltWebRoot(webRoot);
     const backend = await ensureBackend(webRoot);
@@ -154,6 +174,14 @@ function startBackend(port, webRoot) {
     ...process.env,
     PYTHONUNBUFFERED: "1"
   };
+  if (desktopRuntime.backendDataDir && !env.PDF_AGENT_HOME) {
+    env.PDF_AGENT_HOME = desktopRuntime.backendDataDir;
+  }
+  if (desktopRuntime.oauthStoragePath && !env.PDF_AGENT_OPENAI_OAUTH_STORAGE_PATH) {
+    if (desktopRuntime.oauthStoragePathExplicit || !env.PDF_AGENT_HOME) {
+      env.PDF_AGENT_OPENAI_OAUTH_STORAGE_PATH = desktopRuntime.oauthStoragePath;
+    }
+  }
 
   let command;
   let args;
@@ -230,6 +258,231 @@ function resolveBackendExecutable(candidate) {
     return nestedExecutable;
   }
   return null;
+}
+
+function configureDesktopRuntime() {
+  const config = readDesktopConfig();
+  const envDataDirSetting = firstPathSetting(
+    { value: process.env.SYNCHROPAGE_DESKTOP_DATA_DIR, baseDir: process.cwd() }
+  );
+  const configuredDataDirSetting = firstPathSetting(
+    { value: config.values.dataDir, baseDir: config.baseDir },
+    { value: objectValue(config.values.desktop).dataDir, baseDir: config.baseDir }
+  );
+  const dataDirSetting = firstPathSetting(
+    envDataDirSetting,
+    configuredDataDirSetting
+  );
+  const dataDir = dataDirSetting ? resolveConfiguredPath(dataDirSetting) : null;
+  const configuredDataDir = configuredDataDirSetting ? resolveConfiguredPath(configuredDataDirSetting) : null;
+  if (dataDir) {
+    fs.mkdirSync(dataDir, { recursive: true });
+    app.setPath("userData", dataDir);
+    const logsDir = path.join(dataDir, "logs");
+    fs.mkdirSync(logsDir, { recursive: true });
+    if (typeof app.setAppLogsPath === "function") {
+      app.setAppLogsPath(logsDir);
+    } else {
+      app.setPath("logs", logsDir);
+    }
+  }
+
+  const backendDataDirSetting = firstPathSetting(
+    { value: process.env.SYNCHROPAGE_BACKEND_DATA_DIR, baseDir: process.cwd() },
+    { value: config.values.backendDataDir, baseDir: config.baseDir },
+    { value: objectValue(config.values.backend).dataDir, baseDir: config.baseDir }
+  );
+  const backendDataDir = backendDataDirSetting
+    ? resolveConfiguredPath(backendDataDirSetting)
+    : dataDir
+      ? path.join(dataDir, "backend")
+      : null;
+  if (backendDataDir) fs.mkdirSync(backendDataDir, { recursive: true });
+
+  const oauthStoragePathSetting = firstPathSetting(
+    { value: process.env.PDF_AGENT_OPENAI_OAUTH_STORAGE_PATH, baseDir: process.cwd() },
+    { value: config.values.oauthStoragePath, baseDir: config.baseDir },
+    { value: objectValue(config.values.backend).oauthStoragePath, baseDir: config.baseDir }
+  );
+  const oauthStoragePath = oauthStoragePathSetting
+    ? resolveConfiguredPath(oauthStoragePathSetting)
+    : backendDataDir
+      ? path.join(backendDataDir, "openai_oauth.json")
+      : null;
+
+  return {
+    dataDir,
+    configuredDataDir,
+    dataDirManagedByEnv: Boolean(envDataDirSetting),
+    backendDataDir,
+    oauthStoragePath,
+    oauthStoragePathExplicit: Boolean(oauthStoragePathSetting),
+    configPath: config.path,
+    configValues: config.values
+  };
+}
+
+function readDesktopConfig() {
+  const configPathSetting = firstPathSetting(
+    { value: process.env.SYNCHROPAGE_DESKTOP_CONFIG, baseDir: process.cwd() }
+  );
+  const configPath = configPathSetting ? resolveConfiguredPath(configPathSetting) : defaultDesktopConfigPath();
+  if (!fs.existsSync(configPath)) {
+    return { values: {}, baseDir: path.dirname(configPath), path: configPath };
+  }
+
+  const raw = fs.readFileSync(configPath, "utf8");
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`SynchroPage desktop config must be a JSON object: ${configPath}`);
+  }
+  return { values: parsed, baseDir: path.dirname(configPath), path: configPath };
+}
+
+function defaultDesktopConfigPath() {
+  return path.join(defaultUserDataPath(), "desktop-config.json");
+}
+
+function registerDesktopIpcHandlers() {
+  ipcMain.handle("synchropage:storage-config:get", () => desktopStorageConfigPayload());
+  ipcMain.handle("synchropage:storage-config:choose-data-dir", async () => {
+    const options = {
+      title: "Choose SynchroPage data folder",
+      defaultPath: desktopRuntime.configuredDataDir || desktopRuntime.dataDir || app.getPath("userData"),
+      properties: ["openDirectory", "createDirectory"],
+      securityScopedBookmarks: true
+    };
+    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+    if (result.canceled || !result.filePaths[0]) {
+      return desktopStorageConfigPayload({ canceled: true });
+    }
+    const nextDataDir = path.resolve(result.filePaths[0]);
+    saveDesktopConfig({ ...desktopRuntime.configValues, dataDir: nextDataDir });
+    desktopRuntime.configuredDataDir = nextDataDir;
+    desktopRuntime.dataDirManagedByEnv = Boolean(process.env.SYNCHROPAGE_DESKTOP_DATA_DIR);
+    if (!process.env.SYNCHROPAGE_BACKEND_DATA_DIR) {
+      desktopRuntime.backendDataDir = path.join(nextDataDir, "backend");
+    }
+    if (!desktopRuntime.oauthStoragePathExplicit) {
+      desktopRuntime.oauthStoragePath = path.join(desktopRuntime.backendDataDir || path.join(nextDataDir, "backend"), "openai_oauth.json");
+    }
+    return desktopStorageConfigPayload();
+  });
+  ipcMain.handle("synchropage:storage-config:reset-data-dir", () => {
+    const nextValues = { ...desktopRuntime.configValues };
+    delete nextValues.dataDir;
+    if (objectValue(nextValues.desktop).dataDir) {
+      nextValues.desktop = { ...nextValues.desktop };
+      delete nextValues.desktop.dataDir;
+    }
+    saveDesktopConfig(nextValues);
+    desktopRuntime.configuredDataDir = null;
+    desktopRuntime.dataDirManagedByEnv = Boolean(process.env.SYNCHROPAGE_DESKTOP_DATA_DIR);
+    if (!process.env.SYNCHROPAGE_BACKEND_DATA_DIR) {
+      desktopRuntime.backendDataDir = null;
+    }
+    if (!desktopRuntime.oauthStoragePathExplicit) {
+      desktopRuntime.oauthStoragePath = null;
+    }
+    return desktopStorageConfigPayload();
+  });
+  ipcMain.handle("synchropage:storage-config:restart", () => {
+    app.relaunch();
+    app.quit();
+    return { ok: true };
+  });
+}
+
+function saveDesktopConfig(values) {
+  const configPath = desktopRuntime.configPath || defaultDesktopConfigPath();
+  const normalized = pruneEmptyObjects(values);
+  const content = `${JSON.stringify(normalized, null, 2)}\n`;
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const tmpPath = path.join(path.dirname(configPath), `${path.basename(configPath)}.tmp.${Date.now()}`);
+  fs.writeFileSync(tmpPath, content, "utf8");
+  fs.renameSync(tmpPath, configPath);
+  desktopRuntime.configPath = configPath;
+  desktopRuntime.configValues = normalized;
+}
+
+function pruneEmptyObjects(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const output = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (child && typeof child === "object" && !Array.isArray(child)) {
+      const pruned = pruneEmptyObjects(child);
+      if (Object.keys(pruned).length) output[key] = pruned;
+    } else if (child !== undefined) {
+      output[key] = child;
+    }
+  }
+  return output;
+}
+
+function desktopStorageConfigPayload(extra = {}) {
+  const currentDataDir = app.isReady() ? app.getPath("userData") : desktopRuntime.dataDir;
+  const configuredDataDir = desktopRuntime.configuredDataDir;
+  const desiredDataDir = desktopRuntime.dataDirManagedByEnv
+    ? desktopRuntime.dataDir
+    : configuredDataDir || defaultUserDataPath();
+  const pendingDataDir = desiredDataDir && currentDataDir && path.resolve(desiredDataDir) !== path.resolve(currentDataDir)
+    ? desiredDataDir
+    : null;
+  return {
+    available: true,
+    currentDataDir: currentDataDir || null,
+    configuredDataDir,
+    pendingDataDir,
+    backendDataDir: desktopRuntime.backendDataDir,
+    oauthStoragePath: desktopRuntime.oauthStoragePath,
+    configPath: desktopRuntime.configPath,
+    dataDirManagedByEnv: desktopRuntime.dataDirManagedByEnv,
+    restartRequired: Boolean(pendingDataDir),
+    ...extra
+  };
+}
+
+function defaultUserDataPath() {
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "SynchroPage");
+  }
+  if (process.platform === "win32") {
+    return path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "SynchroPage");
+  }
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "SynchroPage");
+}
+
+function firstPathSetting(...settings) {
+  for (const setting of settings) {
+    if (setting && typeof setting.value === "string" && setting.value.trim()) {
+      return { value: setting.value.trim(), baseDir: setting.baseDir };
+    }
+  }
+  return null;
+}
+
+function resolveConfiguredPath(setting) {
+  const expanded = expandEnvVars(expandHome(setting.value));
+  return path.resolve(setting.baseDir || process.cwd(), expanded);
+}
+
+function expandHome(value) {
+  if (value === "~") return os.homedir();
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
+}
+
+function expandEnvVars(value) {
+  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (match, braced, bare) => {
+    const name = braced || bare;
+    return process.env[name] || match;
+  });
+}
+
+function objectValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
 function ensureBuiltWebRoot(webRoot) {

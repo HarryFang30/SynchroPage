@@ -130,6 +130,20 @@ export type AppCopy = {
       persistentLabel: string;
       persistentDescription: string;
       persistentRequestButton: string;
+      dataDirectoryLabel: string;
+      dataDirectoryDescription: string;
+      currentDataDirectory: string;
+      pendingDataDirectory: (path: string) => string;
+      dataDirectoryBrowserManaged: string;
+      dataDirectoryManagedByEnv: string;
+      defaultDirectory: string;
+      chooseDataDirectoryButton: string;
+      resetDataDirectoryButton: string;
+      restartButton: string;
+      dataDirectorySaved: string;
+      dataDirectoryReset: string;
+      dataDirectoryRestartRequired: string;
+      dataDirectoryFailed: string;
       exportLabel: string;
       exportDescription: string;
       exportButton: string;
@@ -555,6 +569,20 @@ const zhCN: AppCopy = {
       persistentLabel: "持久存储",
       persistentDescription: "请求浏览器尽量不要在存储压力下清理本地草稿。",
       persistentRequestButton: "启用持久存储",
+      dataDirectoryLabel: "保存目录",
+      dataDirectoryDescription: "桌面端工作区、PDF Blob、设置和后端 OAuth 数据的保存位置。更改后需重启应用生效。",
+      currentDataDirectory: "当前目录",
+      pendingDataDirectory: (path) => `重启后使用：${path}`,
+      dataDirectoryBrowserManaged: "浏览器模式由当前浏览器 profile 管理",
+      dataDirectoryManagedByEnv: "由启动环境变量管理",
+      defaultDirectory: "默认目录",
+      chooseDataDirectoryButton: "选择目录",
+      resetDataDirectoryButton: "恢复默认",
+      restartButton: "重启应用",
+      dataDirectorySaved: "保存目录已更新",
+      dataDirectoryReset: "保存目录已恢复默认",
+      dataDirectoryRestartRequired: "保存目录已更新，重启应用后生效",
+      dataDirectoryFailed: "保存目录更新失败",
       exportLabel: "导出当前工作区",
       exportDescription: "导出 PDF、讲解、对话和本地元数据，便于备份。",
       exportButton: "导出",
@@ -980,6 +1008,20 @@ const enUS: AppCopy = {
       persistentLabel: "Persistent storage",
       persistentDescription: "Ask the browser not to evict local drafts under storage pressure.",
       persistentRequestButton: "Enable persistence",
+      dataDirectoryLabel: "Save folder",
+      dataDirectoryDescription: "Desktop location for workspaces, PDF blobs, settings, and backend OAuth data. Changes apply after restart.",
+      currentDataDirectory: "Current folder",
+      pendingDataDirectory: (path) => `After restart: ${path}`,
+      dataDirectoryBrowserManaged: "Browser mode is managed by the current browser profile",
+      dataDirectoryManagedByEnv: "Managed by startup environment variable",
+      defaultDirectory: "Default folder",
+      chooseDataDirectoryButton: "Choose folder",
+      resetDataDirectoryButton: "Use default",
+      restartButton: "Restart app",
+      dataDirectorySaved: "Save folder updated",
+      dataDirectoryReset: "Save folder reset to default",
+      dataDirectoryRestartRequired: "Save folder updated; restart the app to apply it",
+      dataDirectoryFailed: "Failed to update save folder",
       exportLabel: "Export current workspace",
       exportDescription: "Export metadata, chat, notes, and the PDF Blob for backup.",
       exportButton: "Export",

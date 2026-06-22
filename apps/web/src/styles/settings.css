@@ -325,6 +325,60 @@
   white-space: nowrap;
 }
 
+.settings-directory-control {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
+.settings-directory-paths {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+  color: color-mix(in oklch, var(--text) 82%, var(--muted));
+  font-size: 12.5px;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.settings-directory-caption {
+  color: var(--settings-description);
+  font-weight: 650;
+}
+
+.settings-directory-paths code {
+  max-width: 100%;
+  padding: 3px 6px;
+  border: 1px solid color-mix(in oklch, var(--line) 60%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--muted-soft) 55%, transparent);
+  color: color-mix(in oklch, var(--text) 88%, var(--muted));
+  font-family: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.settings-directory-pending {
+  max-width: 100%;
+  color: color-mix(in oklch, var(--brand) 72%, var(--text));
+  font-weight: 640;
+  overflow-wrap: anywhere;
+}
+
+.settings-button svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.settings-button:has(svg) {
+  gap: 6px;
+}
+
 .settings-confirm-overlay {
   position: fixed;
   z-index: 100;

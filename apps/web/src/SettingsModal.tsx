@@ -3,7 +3,10 @@ import {
   Bot,
   Database,
   FileText,
+  FolderOpen,
   Palette,
+  RefreshCcw,
+  RotateCcw,
   Settings2,
   UserCircle,
   Wrench,
@@ -53,8 +56,13 @@ type SettingsModalProps = {
   saveState: { kind: SaveStatusKind; message?: string; updatedAt?: number };
   storageEstimate: { usage: number; quota: number; workspaceCount: number; documentCount: number } | null;
   persistentStorageState: PersistentStorageState;
+  desktopStorageConfig: SynchroPageDesktopStorageConfig | null;
+  desktopStorageBusy: boolean;
   hasWorkspace: boolean;
   onRequestPersistentStorage: () => void;
+  onChooseDesktopDataDirectory: () => void;
+  onResetDesktopDataDirectory: () => void;
+  onRestartDesktopApp: () => void;
   onExportWorkspace: () => void;
   onImportWorkspace: () => void;
   onClearWorkspace: () => void;
@@ -337,6 +345,46 @@ export function SettingsModal(props: SettingsModalProps) {
                       >
                         {copy.settings.storage.persistentRequestButton}
                       </SettingsButton>
+                    </div>
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.storage.dataDirectoryLabel} description={copy.settings.storage.dataDirectoryDescription}>
+                    <div className="settings-directory-control">
+                      <div className="settings-directory-paths">
+                        <span className="settings-directory-caption">
+                          {props.desktopStorageConfig ? copy.settings.storage.currentDataDirectory : copy.settings.storage.dataDirectoryBrowserManaged}
+                        </span>
+                        <code>{props.desktopStorageConfig?.currentDataDir || copy.settings.storage.defaultDirectory}</code>
+                        {props.desktopStorageConfig?.pendingDataDir && (
+                          <span className="settings-directory-pending">
+                            {copy.settings.storage.pendingDataDirectory(props.desktopStorageConfig.pendingDataDir)}
+                          </span>
+                        )}
+                        {props.desktopStorageConfig?.dataDirManagedByEnv && (
+                          <span className="settings-directory-pending">{copy.settings.storage.dataDirectoryManagedByEnv}</span>
+                        )}
+                      </div>
+                      <div className="settings-inline-actions">
+                        <SettingsButton
+                          disabled={!props.desktopStorageConfig || props.desktopStorageBusy || props.desktopStorageConfig.dataDirManagedByEnv}
+                          onClick={props.onChooseDesktopDataDirectory}
+                        >
+                          <FolderOpen />
+                          {copy.settings.storage.chooseDataDirectoryButton}
+                        </SettingsButton>
+                        <SettingsButton
+                          disabled={!props.desktopStorageConfig || props.desktopStorageBusy || props.desktopStorageConfig.dataDirManagedByEnv}
+                          onClick={props.onResetDesktopDataDirectory}
+                        >
+                          <RotateCcw />
+                          {copy.settings.storage.resetDataDirectoryButton}
+                        </SettingsButton>
+                        {props.desktopStorageConfig?.restartRequired && (
+                          <SettingsButton variant="primary" disabled={props.desktopStorageBusy} onClick={props.onRestartDesktopApp}>
+                            <RefreshCcw />
+                            {copy.settings.storage.restartButton}
+                          </SettingsButton>
+                        )}
+                      </div>
                     </div>
                   </SettingsRow>
                   <SettingsRow label={copy.settings.storage.exportLabel} description={copy.settings.storage.exportDescription}>

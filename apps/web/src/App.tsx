@@ -183,6 +183,10 @@ type SaveState = {
 
 type PersistentStorageState = "unknown" | "persisted" | "best-effort" | "unsupported";
 
+function desktopApi() {
+  return typeof window === "undefined" ? undefined : window.synchropageDesktop;
+}
+
 const fullPanelVisibility: PanelVisibility = {
   rail: true,
   notes: true,
@@ -405,6 +409,8 @@ export default function App() {
   const [saveState, setSaveState] = useState<SaveState>({ kind: "draft", message: copy.persistence.localDraft });
   const [storageEstimate, setStorageEstimate] = useState<StorageEstimate | null>(null);
   const [persistentStorageState, setPersistentStorageState] = useState<PersistentStorageState>("unknown");
+  const [desktopStorageConfig, setDesktopStorageConfig] = useState<SynchroPageDesktopStorageConfig | null>(null);
+  const [desktopStorageBusy, setDesktopStorageBusy] = useState(false);
   const [persistedMessages, setPersistedMessages] = useState<ThreadMessageLike[]>([]);
   const [agentRuntimeKey, setAgentRuntimeKey] = useState("thread:initial");
   const lastSelectionRef = useRef<SelectedContext | null>(null);
@@ -1473,6 +1479,63 @@ export default function App() {
     refreshStorageEstimate,
   ]);
 
+  const refreshDesktopStorageConfig = useCallback(async () => {
+    const api = desktopApi();
+    if (!api?.getStorageConfig) {
+      setDesktopStorageConfig(null);
+      return null;
+    }
+    const config = await api.getStorageConfig();
+    setDesktopStorageConfig(config);
+    return config;
+  }, []);
+
+  useEffect(() => {
+    void refreshDesktopStorageConfig().catch(() => setDesktopStorageConfig(null));
+  }, [refreshDesktopStorageConfig]);
+
+  const chooseDesktopDataDirectory = useCallback(() => {
+    const api = desktopApi();
+    if (!api?.chooseDataDirectory) return;
+    setDesktopStorageBusy(true);
+    void api.chooseDataDirectory()
+      .then((config) => {
+        setDesktopStorageConfig(config);
+        if (!config.canceled) {
+          setJobStatus(config.restartRequired ? copy.settings.storage.dataDirectoryRestartRequired : copy.settings.storage.dataDirectorySaved);
+        }
+      })
+      .catch((error) => setJobStatus((error as Error).message || copy.settings.storage.dataDirectoryFailed))
+      .finally(() => setDesktopStorageBusy(false));
+  }, [
+    copy.settings.storage.dataDirectoryFailed,
+    copy.settings.storage.dataDirectoryRestartRequired,
+    copy.settings.storage.dataDirectorySaved,
+  ]);
+
+  const resetDesktopDataDirectory = useCallback(() => {
+    const api = desktopApi();
+    if (!api?.resetDataDirectory) return;
+    setDesktopStorageBusy(true);
+    void api.resetDataDirectory()
+      .then((config) => {
+        setDesktopStorageConfig(config);
+        setJobStatus(config.restartRequired ? copy.settings.storage.dataDirectoryRestartRequired : copy.settings.storage.dataDirectoryReset);
+      })
+      .catch((error) => setJobStatus((error as Error).message || copy.settings.storage.dataDirectoryFailed))
+      .finally(() => setDesktopStorageBusy(false));
+  }, [
+    copy.settings.storage.dataDirectoryFailed,
+    copy.settings.storage.dataDirectoryReset,
+    copy.settings.storage.dataDirectoryRestartRequired,
+  ]);
+
+  const restartDesktopApp = useCallback(() => {
+    const api = desktopApi();
+    if (!api?.restart) return;
+    void api.restart().catch((error) => setJobStatus((error as Error).message || copy.settings.storage.dataDirectoryFailed));
+  }, [copy.settings.storage.dataDirectoryFailed]);
+
   const repairLocalStorage = useCallback(() => {
     void persistOperation(async () => {
       const result = await repairWorkspaceStorage(workspaceId);
@@ -1985,8 +2048,13 @@ export default function App() {
             saveState={saveState}
             storageEstimate={storageEstimate}
             persistentStorageState={persistentStorageState}
+            desktopStorageConfig={desktopStorageConfig}
+            desktopStorageBusy={desktopStorageBusy}
             hasWorkspace={Boolean(workspaceId)}
             onRequestPersistentStorage={enablePersistentStorage}
+            onChooseDesktopDataDirectory={chooseDesktopDataDirectory}
+            onResetDesktopDataDirectory={resetDesktopDataDirectory}
+            onRestartDesktopApp={restartDesktopApp}
             onExportWorkspace={exportCurrentWorkspace}
             onImportWorkspace={() => workspaceImportInputRef.current?.click()}
             onClearWorkspace={clearCurrentWorkspace}

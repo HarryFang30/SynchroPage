@@ -16,6 +16,8 @@ from typing import Any, Protocol
 
 DEFAULT_PROVIDER_ID = "codex_oauth"
 OAUTH_CLIENT_ID_ENV_VARS = ("PDF_AGENT_OPENAI_OAUTH_CLIENT_ID", "OPENAI_OAUTH_CLIENT_ID")
+OAUTH_STORAGE_PATH_ENV_VAR = "PDF_AGENT_OPENAI_OAUTH_STORAGE_PATH"
+DATA_DIR_ENV_VAR = "PDF_AGENT_HOME"
 DEFAULT_CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 DEVICE_AUTH_USERCODE_URL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
 DEVICE_AUTH_TOKEN_URL = "https://auth.openai.com/api/accounts/deviceauth/token"
@@ -311,8 +313,14 @@ class OpenAIOAuthManager:
         self.config = OpenAIOAuthConfig.coerce(config)
         self.provider = self.config.provider_id
         if storage_path is None:
-            if data_dir is not None:
+            env_storage_path = _optional_path(os.environ.get(OAUTH_STORAGE_PATH_ENV_VAR))
+            env_data_dir = _optional_path(os.environ.get(DATA_DIR_ENV_VAR))
+            if env_storage_path is not None:
+                storage_path = env_storage_path
+            elif data_dir is not None:
                 storage_path = Path(data_dir) / "openai_oauth.json"
+            elif env_data_dir is not None:
+                storage_path = env_data_dir / "openai_oauth.json"
             elif self.config.storage_path is not None:
                 storage_path = self.config.storage_path
             else:
@@ -620,7 +628,7 @@ class OpenAIOAuthManager:
 
 
 def default_data_dir() -> Path:
-    return Path(os.environ.get("PDF_AGENT_HOME", "~/.pdf_agent")).expanduser()
+    return Path(os.environ.get(DATA_DIR_ENV_VAR, "~/.pdf_agent")).expanduser()
 
 
 def atomic_write_secret(path: Path, content: str) -> None:
@@ -751,7 +759,7 @@ def _default_oauth_client_id() -> str:
 
 
 def _optional_path(value: Any) -> Path | None:
-    return Path(value).expanduser() if isinstance(value, str) and value.strip() else None
+    return Path(os.path.expandvars(value.strip())).expanduser() if isinstance(value, str) and value.strip() else None
 
 
 def _loads_json(text: str) -> Any:
