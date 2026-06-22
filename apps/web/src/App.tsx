@@ -1727,7 +1727,7 @@ export default function App() {
     setRailConfirmAction({
       title: copy.rail.deleteDocument(item.title),
       description: copy.rail.confirmDeleteDocument(item.title),
-      confirmLabel: copy.rail.deleteDocument(item.title),
+      confirmLabel: copy.rail.confirmDeleteAction,
       onConfirm: () => executeDeleteDocumentFromRail(item),
     });
   }, [copy.rail, executeDeleteDocumentFromRail, workspaceId]);
@@ -1756,7 +1756,7 @@ export default function App() {
     setRailConfirmAction({
       title: copy.rail.deleteCourse(project.name),
       description: copy.rail.confirmDeleteCourse(project.name, project.documentCount),
-      confirmLabel: copy.rail.deleteCourse(project.name),
+      confirmLabel: copy.rail.confirmDeleteAction,
       onConfirm: () => executeDeleteProjectFromRail(project),
     });
   }, [copy.rail, executeDeleteProjectFromRail, workspaceId]);
@@ -2170,12 +2170,12 @@ export default function App() {
 
       {railConfirmAction && (
         <div
-          className="settings-confirm-overlay"
+          className="rail-confirm-overlay"
           role="presentation"
           onMouseDown={() => setRailConfirmAction(null)}
         >
           <div
-            className="settings-confirm-dialog"
+            className="rail-confirm-dialog"
             role="dialog"
             aria-modal="true"
             aria-labelledby="rail-confirm-title"
@@ -2187,7 +2187,7 @@ export default function App() {
           >
             <h2 id="rail-confirm-title">{railConfirmAction.title}</h2>
             <p id="rail-confirm-description">{railConfirmAction.description}</p>
-            <div className="settings-confirm-actions">
+            <div className="rail-confirm-actions">
               <button className="settings-button" type="button" autoFocus onClick={() => setRailConfirmAction(null)}>
                 {copy.settings.confirm.cancel}
               </button>

@@ -340,6 +340,7 @@ export type AppCopy = {
     archiveUnavailable: string;
     deleteDocument: (documentTitle: string) => string;
     deleteCourse: (courseName: string) => string;
+    confirmDeleteAction: string;
     confirmDeleteDocument: (documentTitle: string) => string;
     confirmDeleteCourse: (courseName: string, documentCount: number) => string;
     documentDeleted: (documentTitle: string) => string;
@@ -781,6 +782,7 @@ const zhCN: AppCopy = {
     archiveUnavailable: "请先选择一个课程",
     deleteDocument: (documentTitle) => `删除文档「${documentTitle}」`,
     deleteCourse: (courseName) => `删除课程「${courseName}」`,
+    confirmDeleteAction: "删除",
     confirmDeleteDocument: (documentTitle) => `删除文档「${documentTitle}」？这会同时删除本地 PDF、讲解、对话和选区上下文。`,
     confirmDeleteCourse: (courseName, documentCount) => `删除课程「${courseName}」？其中 ${documentCount} 个文档及其讲解、对话都会被删除。`,
     documentDeleted: (documentTitle) => `已删除「${documentTitle}」`,
@@ -1222,6 +1224,7 @@ const enUS: AppCopy = {
     archiveUnavailable: "Select a course first",
     deleteDocument: (documentTitle) => `Delete "${documentTitle}"`,
     deleteCourse: (courseName) => `Delete "${courseName}"`,
+    confirmDeleteAction: "Delete",
     confirmDeleteDocument: (documentTitle) => `Delete "${documentTitle}"? This also removes its local PDF, notes, chat, and selected context.`,
     confirmDeleteCourse: (courseName, documentCount) => `Delete "${courseName}"? This removes ${documentCount} ${documentCount === 1 ? "document" : "documents"} plus their notes and chats.`,
     documentDeleted: (documentTitle) => `Deleted "${documentTitle}"`,

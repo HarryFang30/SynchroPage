@@ -83,6 +83,33 @@ test.describe("Agent Panel", () => {
     await expect(assistant).not.toContainText("$$\\in$$");
   });
 
+  test("renders table math with vertical bars without splitting columns", async ({ page }) => {
+    await page.unroute("**/api/**");
+    await mockApi(page, {
+      "/api/agent/chat": {
+        content: [
+          "| 比较项 | $T = 3$ | $T = 7$ |",
+          "| --- | --- | --- |",
+          "| 时域持续时间 | 较短 | 较长 |",
+          "| 能量密度 | $|X(\\omega)|^2$ | $|Y(\\omega)|^2$ |",
+        ].join("\n"),
+      },
+    });
+
+    const composer = await activateAgent(page);
+    await composer.click();
+    await composer.fill("Render table math");
+    await page.keyboard.press("Enter");
+
+    const assistant = page.locator(".assistant-message").last();
+    const rows = assistant.locator("table tr");
+    await expect(rows).toHaveCount(3, { timeout: 10_000 });
+    await expect(rows.nth(2).locator("td")).toHaveCount(3);
+    await expect(assistant.locator(".katex-error")).toHaveCount(0);
+    await expect(assistant).not.toContainText("$|X");
+    await expect(assistant).not.toContainText("^2$");
+  });
+
   test("adding an image shows the preview inside the composer", async ({ page }) => {
     await activateAgent(page);
     const imageInput = page.locator('.agent-action-button input[type="file"][accept="image/*"]');

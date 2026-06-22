@@ -299,13 +299,37 @@ function sanitizeMathMarkdownSegment(segment: string) {
 }
 
 function sanitizeKatexBody(body: string) {
-  let normalized = normalizeLooseMathBody(body).replace(/\\(?=\d)/g, "").replace(/\\_/g, "_");
+  let normalized = normalizeMathVerticalBars(normalizeLooseMathBody(body)).replace(/\\(?=\d)/g, "").replace(/\\_/g, "_");
   const hdlIdentifier = hdlIdentifierMathBody(normalized);
   if (hdlIdentifier) return hdlIdentifier;
   if (!/\\(?:text|mathrm|operatorname)\s*\{/.test(normalized)) {
     normalized = normalized.replace(/([\u3400-\u9fff，。、；：！？、]+)/g, "\\text{$1}");
   }
   return normalized;
+}
+
+function normalizeMathVerticalBars(body: string) {
+  const positions: number[] = [];
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] === "|" && !isEscapedAt(body, index)) positions.push(index);
+  }
+  if (!positions.length) return body;
+  const paired = positions.length % 2 === 0;
+  let output = "";
+  let barIndex = 0;
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] === "|" && !isEscapedAt(body, index)) {
+      output += paired
+        ? barIndex % 2 === 0
+          ? "\\lvert{}"
+          : "\\rvert{}"
+        : "\\vert{}";
+      barIndex += 1;
+    } else {
+      output += body[index];
+    }
+  }
+  return output;
 }
 
 function hdlIdentifierMathBody(body: string) {

@@ -189,6 +189,18 @@ class JsonLatexRepairTest(unittest.TestCase):
         self.assertIn("```\n$not math$\n```", result)
         self.assertIn("$math$", result)
 
+    def test_normalize_markdown_math_protects_vertical_bar_math_in_tables(self) -> None:
+        value = (
+            "| 比较项 | T = 3 | T = 7 |\n"
+            "| --- | --- | --- |\n"
+            r"| 能量密度 | $|X(\omega)|^2$ | $|Y(\omega)|^2$ |"
+        )
+        result = normalize_markdown_math(value)
+        self.assertIn(r"$\lvert{}X(\omega)\rvert{}^2$", result)
+        self.assertIn(r"$\lvert{}Y(\omega)\rvert{}^2$", result)
+        self.assertNotIn(r"$|X(\omega)|^2$", result)
+        self.assertEqual(result.splitlines()[-1].count("|"), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

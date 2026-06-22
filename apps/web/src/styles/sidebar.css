@@ -527,3 +527,54 @@
   cursor: not-allowed;
   opacity: 0.62;
 }
+
+.rail-confirm-overlay {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: oklch(0.20 0.012 95 / 0.30);
+  backdrop-filter: blur(8px) saturate(112%);
+}
+
+.rail-confirm-dialog {
+  width: min(420px, calc(100vw - 40px));
+  padding: 22px;
+  border: 1px solid color-mix(in oklch, var(--line) 70%, transparent);
+  border-radius: 16px;
+  background: color-mix(in oklch, var(--popover) 88%, var(--background));
+  box-shadow: 0 28px 70px oklch(0.24 0.018 95 / 0.25);
+}
+
+.rail-confirm-dialog h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 680;
+}
+
+.rail-confirm-dialog p {
+  margin: 10px 0 0;
+  color: var(--settings-description);
+  font-size: 13.5px;
+  line-height: 1.48;
+}
+
+.rail-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 22px;
+}
+
+:root[data-synchropage-resolved-theme="dark"] .rail-confirm-overlay {
+  background: oklch(0.04 0.004 86 / 0.66);
+}
+
+:root[data-synchropage-resolved-theme="dark"] .rail-confirm-dialog {
+  background: color-mix(in oklch, var(--popover) 90%, var(--background));
+  box-shadow: 0 26px 70px oklch(0 0 0 / 0.48);
+}

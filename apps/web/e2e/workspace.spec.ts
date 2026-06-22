@@ -47,4 +47,48 @@ test.describe("Workspace", () => {
       /2\s*(个文档|documents?)/i,
     );
   });
+
+  test("asks for confirmation before deleting a document", async ({ page }) => {
+    await uploadPdfFromRail(page);
+
+    const documentItem = page.locator(".document-item").filter({ hasText: "two-page" });
+    await expect(documentItem).toBeVisible();
+    await documentItem.hover();
+    await documentItem.locator(".rail-delete-button").click();
+
+    const dialog = page.locator(".rail-confirm-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText(/删除文档|Delete/i);
+    await page.getByRole("button", { name: /取消|Cancel/i }).click();
+    await expect(dialog).toBeHidden();
+    await expect(documentItem).toBeVisible();
+
+    await documentItem.hover();
+    await documentItem.locator(".rail-delete-button").click();
+    await page.getByRole("button", { name: /^删除$|^Delete$/i }).click();
+    await expect(dialog).toBeHidden();
+    await expect(documentItem).toHaveCount(0);
+  });
+
+  test("asks for confirmation before deleting a course", async ({ page }) => {
+    await createCourse(page, "Delete Me");
+
+    const courseItem = page.locator(".course-item").filter({ hasText: "Delete Me" });
+    await expect(courseItem).toBeVisible();
+    await courseItem.hover();
+    await courseItem.locator(".rail-delete-button").click();
+
+    const dialog = page.locator(".rail-confirm-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText(/删除课程|Delete/i);
+    await page.getByRole("button", { name: /取消|Cancel/i }).click();
+    await expect(dialog).toBeHidden();
+    await expect(courseItem).toBeVisible();
+
+    await courseItem.hover();
+    await courseItem.locator(".rail-delete-button").click();
+    await page.getByRole("button", { name: /^删除$|^Delete$/i }).click();
+    await expect(dialog).toBeHidden();
+    await expect(courseItem).toHaveCount(0);
+  });
 });

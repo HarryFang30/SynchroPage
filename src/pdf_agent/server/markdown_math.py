@@ -453,9 +453,41 @@ def _normalize_math_match(match: re.Match[str]) -> str:
 
 
 def _normalize_katex_body(value: str) -> str:
-    normalized = re.sub(r"\\(?=\d)", "", value)
+    normalized = _normalize_math_vertical_bars(re.sub(r"\\(?=\d)", "", value))
     if not re.search(r"\\(?:text|mathrm|operatorname)\s*\{", normalized):
         normalized = re.sub(
             r"([㐀-鿿，。、；：！？、]+)", r"\\text{\1}", normalized
         )
     return normalized
+
+
+def _normalize_math_vertical_bars(value: str) -> str:
+    positions = [
+        index
+        for index, char in enumerate(value)
+        if char == "|" and not _is_escaped_at(value, index)
+    ]
+    if not positions:
+        return value
+    paired = len(positions) % 2 == 0
+    output: list[str] = []
+    bar_index = 0
+    for index, char in enumerate(value):
+        if char == "|" and not _is_escaped_at(value, index):
+            if paired:
+                output.append(r"\lvert{}" if bar_index % 2 == 0 else r"\rvert{}")
+            else:
+                output.append(r"\vert{}")
+            bar_index += 1
+        else:
+            output.append(char)
+    return "".join(output)
+
+
+def _is_escaped_at(value: str, index: int) -> bool:
+    slash_count = 0
+    cursor = index - 1
+    while cursor >= 0 and value[cursor] == "\\":
+        slash_count += 1
+        cursor -= 1
+    return slash_count % 2 == 1
