@@ -14,7 +14,6 @@ from pdf_agent.gateway import (
     build_chatgpt_codex_auth,
     build_codex_responses_payload,
     codex_responses_url,
-    redacted_gateway_error,
 )
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.gateway_fallback import post_payload_with_cache_fallback

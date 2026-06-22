@@ -19,7 +19,8 @@ test.describe("Smoke", () => {
     await page.locator(".rail-settings-button").click();
     await expect(page.locator(".settings-overlay")).toBeVisible();
     await expect(page.locator(".settings-dialog")).toBeVisible();
-    await expect(page.locator(".settings-nav-item")).toHaveCount(7);
+    await expect(page.locator(".settings-nav-item")).toHaveCount(9);
+    await expect(page.locator(".settings-nav")).toContainText(/Provider|模型|Models|服务/i);
   });
 
   test("command menu opens and shows actions", async ({ page }) => {
