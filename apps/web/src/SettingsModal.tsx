@@ -946,7 +946,18 @@ function providerPreviewUrl(provider: ModelApiProvider) {
   if (provider.type === "codex-oauth") return "https://chatgpt.com/backend-api/codex/responses";
   const host = provider.apiHost.trim().replace(/\/+$/, "");
   if (!host) return "";
+  if (provider.type === "openai-compatible" && isDeepSeekOfficialHost(host)) {
+    return `${host}/chat/completions`;
+  }
   const hasVersion = /\/v1$/i.test(host);
   const base = hasVersion ? host : `${host}/v1`;
   return `${base}/${provider.type === "openai-responses" ? "responses" : "chat/completions"}`;
+}
+
+function isDeepSeekOfficialHost(host: string) {
+  try {
+    return new URL(host).host.toLowerCase() === "api.deepseek.com";
+  } catch {
+    return false;
+  }
 }

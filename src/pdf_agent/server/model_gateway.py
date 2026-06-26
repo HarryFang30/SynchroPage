@@ -31,6 +31,8 @@ from pdf_agent.server.value_utils import string_value
 
 PostWithRetries = Callable[[str, dict[str, Any], dict[str, str]], Awaitable[tuple[str, str]]]
 CodexAuthBuilder = Callable[..., Awaitable[Any]]
+DEEPSEEK_PROVIDER_ID = "deepseek"
+DEEPSEEK_HOSTS = frozenset({"api.deepseek.com"})
 
 
 @dataclass(frozen=True)
@@ -101,7 +103,7 @@ async def post_responses_payload_for_body(
         api_payload = _strip_nonportable_responses_fields(payload)
     else:
         url = provider_api_url(provider, "chat/completions")
-        api_payload = responses_payload_to_chat_completions(payload)
+        api_payload = responses_payload_to_chat_completions(payload, provider=provider)
 
     text, content_type, sent_payload = await post_payload_with_cache_fallback(
         post_with_retries,
@@ -142,24 +144,33 @@ def normalized_provider_api_base(provider: Mapping[str, Any]) -> str:
         return base
     parsed = urllib.parse.urlparse(base)
     path_parts = [part for part in parsed.path.split("/") if part]
+    if not path_parts and _is_deepseek_official_api_host(parsed):
+        return base
     if path_parts and path_parts[-1].lower() == "v1":
         return base
     next_path = "/".join([*path_parts, "v1"])
     return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, f"/{next_path}/", "", "", ""))
 
 
-def responses_payload_to_chat_completions(payload: Mapping[str, Any]) -> dict[str, Any]:
+def responses_payload_to_chat_completions(
+    payload: Mapping[str, Any],
+    *,
+    provider: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     system_text = string_value(payload.get("instructions"), "")
     user_text = _responses_input_text(payload.get("input"))
     messages: list[dict[str, str]] = []
     if system_text:
         messages.append({"role": "system", "content": system_text})
     messages.append({"role": "user", "content": user_text or "Continue."})
-    return {
+    chat_payload: dict[str, Any] = {
         "model": string_value(payload.get("model"), ""),
         "messages": messages,
         "stream": False,
     }
+    if provider is not None and _is_deepseek_provider(provider):
+        chat_payload.update(_deepseek_chat_options(payload, chat_payload["model"]))
+    return chat_payload
 
 
 def extract_provider_text(text: str, content_type: str) -> str:
@@ -267,6 +278,41 @@ def _strip_nonportable_responses_fields(payload: Mapping[str, Any]) -> dict[str,
     stripped.pop("prompt_cache_retention", None)
     stripped.pop("include", None)
     return stripped
+
+
+def _is_deepseek_provider(provider: Mapping[str, Any], *, parsed: urllib.parse.ParseResult | None = None) -> bool:
+    provider_id = string_value(provider.get("id"), "").lower()
+    if provider_id == DEEPSEEK_PROVIDER_ID:
+        return True
+    url = parsed or urllib.parse.urlparse(_ensure_trailing_slash(string_value(provider.get("apiHost"), "")))
+    return _is_deepseek_official_api_host(url)
+
+
+def _is_deepseek_official_api_host(parsed: urllib.parse.ParseResult) -> bool:
+    return parsed.netloc.lower() in DEEPSEEK_HOSTS
+
+
+def _deepseek_chat_options(payload: Mapping[str, Any], model: str) -> dict[str, Any]:
+    effort = ""
+    reasoning = payload.get("reasoning")
+    if isinstance(reasoning, Mapping):
+        effort = string_value(reasoning.get("effort"), "")
+    lowered_model = model.lower()
+    if lowered_model == "deepseek-chat":
+        return {"thinking": {"type": "disabled"}}
+    if lowered_model == "deepseek-reasoner":
+        return {"thinking": {"type": "enabled"}, "reasoning_effort": _deepseek_reasoning_effort(effort)}
+    if lowered_model.startswith("deepseek-v4"):
+        if effort == "none":
+            return {"thinking": {"type": "disabled"}}
+        return {"thinking": {"type": "enabled"}, "reasoning_effort": _deepseek_reasoning_effort(effort)}
+    return {}
+
+
+def _deepseek_reasoning_effort(value: str) -> str:
+    if value == "xhigh":
+        return "max"
+    return "high" if value in {"", "low", "medium", "high"} else "high"
 
 
 def _extract_chat_completion_text(value: Any) -> str:

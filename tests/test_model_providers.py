@@ -55,10 +55,24 @@ class ModelProviderConfigTest(unittest.TestCase):
 
 
 class ModelProviderGatewayTest(unittest.TestCase):
-    def test_provider_api_url_appends_v1_when_host_is_bare_origin(self) -> None:
+    def test_provider_api_url_uses_deepseek_official_chat_path(self) -> None:
         self.assertEqual(
             provider_api_url({"type": "openai-compatible", "apiHost": "https://api.deepseek.com"}, "chat/completions"),
-            "https://api.deepseek.com/v1/chat/completions",
+            "https://api.deepseek.com/chat/completions",
+        )
+        self.assertEqual(
+            provider_api_url({"type": "openai-compatible", "apiHost": "https://api.deepseek.com/v1"}, "models"),
+            "https://api.deepseek.com/v1/models",
+        )
+
+    def test_provider_api_url_appends_v1_for_generic_bare_origin(self) -> None:
+        self.assertEqual(
+            provider_api_url({"type": "openai-compatible", "apiHost": "https://api.example.com"}, "chat/completions"),
+            "https://api.example.com/v1/chat/completions",
+        )
+        self.assertEqual(
+            provider_api_url({"id": "deepseek", "type": "openai-compatible", "apiHost": "https://proxy.example.com"}, "chat/completions"),
+            "https://proxy.example.com/v1/chat/completions",
         )
         self.assertEqual(
             provider_api_url({"type": "openai-compatible", "apiHost": "https://openrouter.ai/api/v1"}, "models"),
@@ -86,6 +100,33 @@ class ModelProviderGatewayTest(unittest.TestCase):
         self.assertEqual(payload["messages"][0], {"role": "system", "content": "System rules"})
         self.assertIn("Explain page 1", payload["messages"][1]["content"])
         self.assertIn("course.pdf", payload["messages"][1]["content"])
+
+    def test_deepseek_v4_chat_completion_uses_thinking_options(self) -> None:
+        payload = responses_payload_to_chat_completions(
+            {
+                "model": "deepseek-v4-pro",
+                "instructions": "System rules",
+                "input": "Explain page 1",
+                "reasoning": {"effort": "xhigh"},
+            },
+            provider={"id": "deepseek", "apiHost": "https://api.deepseek.com"},
+        )
+
+        self.assertEqual(payload["thinking"], {"type": "enabled"})
+        self.assertEqual(payload["reasoning_effort"], "max")
+
+    def test_deepseek_chat_disables_thinking_options(self) -> None:
+        payload = responses_payload_to_chat_completions(
+            {
+                "model": "deepseek-chat",
+                "input": "hello",
+                "reasoning": {"effort": "high"},
+            },
+            provider={"id": "deepseek", "apiHost": "https://api.deepseek.com"},
+        )
+
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertNotIn("reasoning_effort", payload)
 
     def test_agent_gateway_posts_to_openai_compatible_chat_completions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -119,6 +160,6 @@ class ModelProviderGatewayTest(unittest.TestCase):
                 result = _runner(gateway.chat({"input": "hello", "modelProviderId": "deepseek", "model": "deepseek-chat"}))
 
             self.assertEqual(result["message"]["content"], "hello from deepseek")
-            self.assertEqual(calls[0][0], "https://api.deepseek.com/v1/chat/completions")
+            self.assertEqual(calls[0][0], "https://api.deepseek.com/chat/completions")
             self.assertEqual(calls[0][1]["messages"][0]["role"], "system")
             self.assertEqual(calls[0][2]["Authorization"], "Bearer sk-secret")

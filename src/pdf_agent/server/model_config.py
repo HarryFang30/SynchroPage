@@ -52,7 +52,7 @@ def default_model_config() -> dict[str, Any]:
                 "apiHost": "https://api.deepseek.com",
                 "apiKeyRequired": True,
                 "enabled": False,
-                "models": ["deepseek-chat", "deepseek-reasoner"],
+                "models": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
             },
             {
                 "id": "openrouter",

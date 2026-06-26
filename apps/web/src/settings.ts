@@ -110,7 +110,7 @@ export const defaultModelApiConfig: ModelApiConfig = {
       apiHost: "https://api.deepseek.com",
       apiKeyRequired: true,
       enabled: false,
-      models: ["deepseek-chat", "deepseek-reasoner"],
+      models: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
     },
     {
       id: "openrouter",
