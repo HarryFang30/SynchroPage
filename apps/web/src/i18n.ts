@@ -388,7 +388,10 @@ export type AppCopy = {
     challengeModeDiagnostic: string;
     challengeAction: string;
     challengeAria: string;
-    challengeUserMessage: (count: number) => string;
+    challengeUserMessage: (kind: "quiz" | "problem", count: number) => string;
+    challengeKindLabel: string;
+    challengeQuizKind: string;
+    challengeProblemKind: string;
     challengeCountLabel: string;
     challengeCorrect: string;
     challengeIncorrect: string;
@@ -397,6 +400,16 @@ export type AppCopy = {
     challengeNext: string;
     challengeNewSet: string;
     challengeParseFailed: string;
+    challengeProblemSuitable: string;
+    challengeProblemUnsuitable: string;
+    challengeProblemGivenLabel: string;
+    challengeProblemTasksLabel: string;
+    challengeProblemEntryLabel: string;
+    challengeProblemHintAction: string;
+    challengeProblemSelfCheckAction: string;
+    challengeProblemTrapLabel: string;
+    challengeProblemRubricLabel: string;
+    challengeProblemAgain: string;
     quickExplainPrompt: (label: string) => string;
     quickSummarizePrompt: (label: string) => string;
     continuePrompt: string;
@@ -844,7 +857,12 @@ const zhCN: AppCopy = {
     challengeModeDiagnostic: "漏洞诊断",
     challengeAction: "生成挑战",
     challengeAria: "当前页 Challenge",
-    challengeUserMessage: (count) => `Challenge：请基于当前页生成 ${count} 道互动选择题，用于漏洞诊断`,
+    challengeUserMessage: (kind, count) => kind === "problem"
+      ? "Challenge：请先判断当前页是否适合典型大题；如果适合，生成 1 道典型大题 challenge"
+      : `Challenge：请基于当前页生成 ${count} 道互动选择题，用于漏洞诊断`,
+    challengeKindLabel: "题型",
+    challengeQuizKind: "选择题",
+    challengeProblemKind: "大题",
     challengeCountLabel: "题数",
     challengeCorrect: "判断正确",
     challengeIncorrect: "再想一下",
@@ -852,7 +870,17 @@ const zhCN: AppCopy = {
     challengeFollowUpLabel: "追问：",
     challengeNext: "下一题",
     challengeNewSet: "再来一组",
-    challengeParseFailed: "Challenge 题目格式解析失败，请重新生成。",
+    challengeParseFailed: "Challenge 题目解析失败，请重新生成。",
+    challengeProblemSuitable: "适合典型大题",
+    challengeProblemUnsuitable: "本页不适合硬出典型大题",
+    challengeProblemGivenLabel: "已知条件",
+    challengeProblemTasksLabel: "分问",
+    challengeProblemEntryLabel: "第一步怎么想",
+    challengeProblemHintAction: "看第一步提示",
+    challengeProblemSelfCheckAction: "我做完了，看检查点",
+    challengeProblemTrapLabel: "常见误区",
+    challengeProblemRubricLabel: "自查采分点",
+    challengeProblemAgain: "再来一道大题",
     quickExplainPrompt: (label) => `请解释这段选中内容，优先基于该来源回答：${label}`,
     quickSummarizePrompt: (label) => `请总结这段选中内容，提炼关键概念和可能的公式关系：${label}`,
     continuePrompt: "请根据上下文继续。",
@@ -1300,7 +1328,12 @@ const enUS: AppCopy = {
     challengeModeDiagnostic: "Diagnostic",
     challengeAction: "Generate",
     challengeAria: "Current-page challenge",
-    challengeUserMessage: (count) => `Challenge: generate ${count} interactive multiple-choice question${count === 1 ? "" : "s"} for current-page diagnosis`,
+    challengeUserMessage: (kind, count) => kind === "problem"
+      ? "Challenge: first decide whether this page supports a typical major problem; if suitable, generate one major-problem challenge"
+      : `Challenge: generate ${count} interactive multiple-choice question${count === 1 ? "" : "s"} for current-page diagnosis`,
+    challengeKindLabel: "Type",
+    challengeQuizKind: "Quiz",
+    challengeProblemKind: "Problem",
     challengeCountLabel: "Count",
     challengeCorrect: "Correct",
     challengeIncorrect: "Try again",
@@ -1308,7 +1341,17 @@ const enUS: AppCopy = {
     challengeFollowUpLabel: "Follow-up:",
     challengeNext: "Next",
     challengeNewSet: "New set",
-    challengeParseFailed: "Could not parse the Challenge quiz format. Please regenerate it.",
+    challengeParseFailed: "Could not parse the Challenge format. Please regenerate it.",
+    challengeProblemSuitable: "Suitable major problem",
+    challengeProblemUnsuitable: "Not suitable for a forced major problem",
+    challengeProblemGivenLabel: "Given",
+    challengeProblemTasksLabel: "Tasks",
+    challengeProblemEntryLabel: "First move",
+    challengeProblemHintAction: "Show first hint",
+    challengeProblemSelfCheckAction: "I tried it, show checks",
+    challengeProblemTrapLabel: "Common traps",
+    challengeProblemRubricLabel: "Self-check points",
+    challengeProblemAgain: "Another problem",
     quickExplainPrompt: (label) => `Please explain this selected content. Prioritize answering from this source: ${label}`,
     quickSummarizePrompt: (label) => `Please summarize this selected content, extracting key concepts and possible formula relationships: ${label}`,
     continuePrompt: "Please continue based on the context.",

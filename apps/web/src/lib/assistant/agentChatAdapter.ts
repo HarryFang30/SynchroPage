@@ -82,6 +82,7 @@ type AgentPageData = {
 };
 
 type ChallengeRequest = {
+  kind: "quiz" | "problem";
   mode: string;
   count: number;
 };
@@ -398,13 +399,20 @@ function buildAgentRequestPrompt({
   copy: AppCopy;
 }) {
   if (challengeRequest) {
-    return buildChallengeCoachPrompt({
-      mode: challengeRequest.mode,
-      count: challengeRequest.count,
-      pack,
-      page,
-      pdfContext,
-    });
+    return challengeRequest.kind === "problem"
+      ? buildChallengeProblemPrompt({
+          mode: challengeRequest.mode,
+          pack,
+          page,
+          pdfContext,
+        })
+      : buildChallengeCoachPrompt({
+          mode: challengeRequest.mode,
+          count: challengeRequest.count,
+          pack,
+          page,
+          pdfContext,
+        });
   }
   return buildSelectedQuestionPrompt(question, selectedContext, pdfContext, copy);
 }
@@ -496,6 +504,73 @@ JSON schema:
 - explanation 不要太长，优先说明为什么正确选项成立以及错误选项暴露什么误区。
 - JSON 字符串里的 LaTeX 反斜杠必须双重转义，例如写作 "\\vec{E}"、"\\int_A^B"、"\\frac{a}{b}"。`;
 
+const CHALLENGE_PROBLEM_PROMPT = `你是我的理工科 PPT 典型大题挑战教练。当前页是我手动选择触发 challenge 的页面，因此你应当默认这页很重要，但你必须先判断它是否适合生成“典型大题”。
+
+你的目标不是讲课，也不是直接给答案，而是判断当前页是否对应常见考试/作业中的大题入口，并在适合时生成 1 道高质量典型大题 challenge。
+
+典型大题的判定标准：
+- 当前页有公式、定理、推导、方法、例题、图示关系、工程流程或可组合的多步知识点。
+- 能形成 2-4 个有递进关系的分问。
+- 解题需要选择入口、列条件、套用适用条件、完成推导/计算/解释，而不是单句概念回忆。
+- 如果本页只是目录、过渡页、纯背景页、零散术语页，或信息不足以支撑大题，不要硬编。
+
+你需要先判断当前页的知识类型：
+1. concept：概念/定义页
+2. formula：公式/定理/结论页
+3. derivation：推导页
+4. method：方法/套路页
+5. example：例题页
+6. diagram：图示/结构/流程页
+7. mixed：混合页
+
+出题原则：
+1. 默认只生成 1 道典型大题。
+2. 大题必须有具体题干和 2-4 个分问。
+3. 不要一开始展示完整答案。
+4. 可以给第一步入口提示，但不能把完整解法写进题干。
+5. 如果有公式，必须在题目或检查点中涉及适用条件或误用场景。
+6. 如果有例题，必须检查题型入口、第一步切入或轻量变式。
+7. 如果本页和我的历史薄弱点有关，要优先针对薄弱点设计大题。
+8. 如果不适合典型大题，has_typical_problem 必须为 false，并给一个短的替代挑战题干；不要伪装成典型大题。
+
+你必须输出严格 JSON，不要输出 Markdown，不要包裹代码块，不要输出 schema 之外的解释。
+JSON schema:
+{
+  "type": "synchropage.challenge_problem.v1",
+  "title": "short problem title",
+  "knowledge_type": "concept|formula|derivation|method|example|diagram|mixed",
+  "challenge_type": "典型大题|大题入口|综合应用|推导证明|计算题|图示分析",
+  "suitability": {
+    "has_typical_problem": true,
+    "reason": "short reason for the suitability judgement",
+    "problem_type": "calculation|proof|derivation|application|diagram analysis|mixed"
+  },
+  "problem": {
+    "stem": "complete problem stem shown before any hint",
+    "given": ["known condition or definition"],
+    "tasks": ["subquestion 1", "subquestion 2"],
+    "expected_entry": "what the student should think/do first, without full solution",
+    "difficulty": "medium|hard",
+    "time_minutes": 8,
+    "rubric": ["self-check point, not full answer"]
+  },
+  "coach": {
+    "first_hint": "one short first-step hint",
+    "common_traps": ["common misconception or trap"],
+    "after_attempt_check": "short guidance for checking an attempted solution"
+  }
+}
+
+如果 has_typical_problem 为 false：
+- problem.stem 应该是一个“替代挑战”，用于暴露本页理解漏洞。
+- problem.tasks 可以只有 1-2 个分问。
+- reason 必须说明为什么不适合硬出典型大题。
+
+输出要求：
+- JSON 字符串里的 LaTeX 反斜杠必须双重转义，例如写作 "\\vec{E}"、"\\int_A^B"、"\\frac{a}{b}"。
+- 不要在 stem、expected_entry、first_hint 中直接泄露完整答案。
+- rubric 是自查采分点，不是完整标准答案。`;
+
 function buildChallengeCoachPrompt({
   mode,
   count,
@@ -535,14 +610,56 @@ function buildChallengeCoachPrompt({
   ].filter((line): line is string => Boolean(line)).join("\n");
 }
 
+function buildChallengeProblemPrompt({
+  mode,
+  pack,
+  page,
+  pdfContext,
+}: {
+  mode: string;
+  pack: AgentPagePack;
+  page: AgentPageData;
+  pdfContext: PdfContextPayload | null;
+}) {
+  const teaching = objectValue(page.teaching);
+  const source = objectValue(page.source);
+  const pageNo = numberValue(page.page_no);
+  const title = stringValue(teaching.slide_title);
+  const concepts = Array.isArray(teaching.concepts)
+    ? teaching.concepts.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6)
+    : [];
+  const neighborContext = neighboringPdfContext(pdfContext, pageNo);
+  return [
+    CHALLENGE_PROBLEM_PROMPT,
+    "",
+    "当前典型大题挑战上下文：",
+    `- 课程名称：${pack.document.title || "Untitled"}`,
+    `- 当前页：${pageNo ? `PDF p.${pageNo}` : "unknown page"}${title ? ` · ${title}` : ""}`,
+    concepts.length ? `- 当前页概念：${concepts.join("、")}` : null,
+    `- 当前挑战模式：${mode}`,
+    "- 当前挑战题型：典型大题；你必须先判断本页是否适合典型大题。",
+    "- 我的历史薄弱点：暂无显式结构化记录；如果最近对话中已经暴露薄弱点，请优先针对它，不要编造不存在的历史。",
+    neighborContext ? `- 前后页摘要：\n${neighborContext}` : "- 前后页摘要：请使用随请求提供的 PDF 文本上下文和最近对话；若没有明确前后页信息，不要编造。",
+    source.text_md ? "- 当前 PPT 页内容：已随请求作为 Current page source text 提供。" : "- 当前 PPT 页内容：当前页无可用抽取文本时，请优先使用附加 PDF/图片证据和已有讲解。",
+    teaching.speaker_notes_md ? "- AI 对当前页的讲解：已随请求作为 Existing notes 提供。" : "- AI 对当前页的讲解：暂无已生成讲解时，请仅基于 PPT 页内容判断和出题。",
+    "",
+    "输出要求：返回严格 JSON；前端会把 JSON 渲染为典型大题挑战卡片。不要在 JSON 之外展示答案或追问。",
+  ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
 function parseChallengeRequest(question: string, copy: AppCopy): ChallengeRequest | null {
   const value = question.trim();
   if (!value) return null;
   if (!/^(challenge|挑战)[:：]/i.test(value)) return null;
   return {
+    kind: challengeKindFromText(value),
     mode: copy.agent.challengeModeDiagnostic,
     count: challengeCountFromText(value),
   };
+}
+
+function challengeKindFromText(value: string): ChallengeRequest["kind"] {
+  return /(典型大题|大题|major\s*problem|problem\s*challenge)/i.test(value) ? "problem" : "quiz";
 }
 
 function challengeCountFromText(value: string) {

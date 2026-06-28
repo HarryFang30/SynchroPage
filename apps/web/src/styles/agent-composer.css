@@ -31,6 +31,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 7px 8px;
   border: 1px solid color-mix(in oklch, var(--brand) 12%, var(--line));
@@ -77,9 +78,12 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 7px;
 }
 
+.challenge-kind-control,
 .challenge-count-control {
   display: flex;
   align-items: center;
@@ -89,6 +93,7 @@
   font-weight: 700;
 }
 
+.challenge-segment-toggle,
 .challenge-count-toggle {
   display: flex;
   align-items: center;
@@ -99,9 +104,11 @@
   background: color-mix(in oklch, var(--background) 78%, transparent);
 }
 
+.challenge-kind-option,
 .challenge-count-option {
-  width: 24px;
+  min-width: 24px;
   height: 22px;
+  padding: 0 7px;
   display: grid;
   place-items: center;
   border: 0;
@@ -114,12 +121,20 @@
   cursor: pointer;
 }
 
+.challenge-count-option {
+  width: 24px;
+  padding: 0;
+}
+
+.challenge-kind-option:hover,
+.challenge-kind-option.active,
 .challenge-count-option:hover,
 .challenge-count-option.active {
   background: color-mix(in oklch, var(--brand) 18%, var(--background));
   color: var(--text-strong);
 }
 
+.challenge-kind-option.active,
 .challenge-count-option.active {
   box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--brand) 24%, transparent);
 }
@@ -149,6 +164,10 @@
   }
 
   .challenge-count-control > span {
+    display: none;
+  }
+
+  .challenge-kind-control > span {
     display: none;
   }
 

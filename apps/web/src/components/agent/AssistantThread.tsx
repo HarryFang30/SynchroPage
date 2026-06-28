@@ -33,6 +33,7 @@ import { selectedContextSourceLabel } from "./agentLabels";
 const MarkdownRenderer = lazy(() => import("../MarkdownRenderer"));
 const CHALLENGE_COUNT_OPTIONS = [1, 3, 5, 10] as const;
 const DEFAULT_CHALLENGE_COUNT = 3;
+type ChallengeKind = "quiz" | "problem";
 
 // ── AssistantThread ──────────────────────────────────────────
 
@@ -62,19 +63,20 @@ export function AssistantThread({
   const { ThreadPrimitive } = assistantUi;
   const thread = assistantUi.useThreadRuntime();
   const [challengeCount, setChallengeCount] = useState(DEFAULT_CHALLENGE_COUNT);
+  const [challengeKind, setChallengeKind] = useState<ChallengeKind>("quiz");
   const sendSuggestion = useCallback((suggestion: string) => {
     thread.append({
       role: "user",
       content: [{ type: "text", text: suggestion }],
     });
   }, [thread]);
-  const sendChallenge = useCallback((count = challengeCount) => {
+  const sendChallenge = useCallback((kind = challengeKind, count = challengeCount) => {
     const normalizedCount = normalizeChallengeCount(count);
     thread.append({
       role: "user",
-      content: [{ type: "text", text: copy.agent.challengeUserMessage(normalizedCount) }],
+      content: [{ type: "text", text: copy.agent.challengeUserMessage(kind, normalizedCount) }],
     });
-  }, [challengeCount, copy.agent, thread]);
+  }, [challengeCount, challengeKind, copy.agent, thread]);
 
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
@@ -101,6 +103,8 @@ export function AssistantThread({
               <button className="scroll-bottom" type="button">↓</button>
             </ThreadPrimitive.ScrollToBottom>
             <ChallengePanel
+              kind={challengeKind}
+              onKindChange={setChallengeKind}
               count={challengeCount}
               onCountChange={setChallengeCount}
               onStart={sendChallenge}
@@ -122,13 +126,17 @@ export function AssistantThread({
 }
 
 function ChallengePanel({
+  kind,
+  onKindChange,
   count,
   onCountChange,
   onStart,
 }: {
+  kind: ChallengeKind;
+  onKindChange: (kind: ChallengeKind) => void;
   count: number;
   onCountChange: (count: number) => void;
-  onStart: (count: number) => void;
+  onStart: (kind: ChallengeKind, count: number) => void;
 }) {
   const copy = useAppCopy();
   return (
@@ -139,23 +147,46 @@ function ChallengePanel({
         <span className="challenge-mode">{copy.agent.challengeModeDiagnostic}</span>
       </div>
       <div className="challenge-controls">
-        <div className="challenge-count-control" role="group" aria-label={copy.agent.challengeCountLabel}>
-          <span>{copy.agent.challengeCountLabel}</span>
-          <div className="challenge-count-toggle">
-            {CHALLENGE_COUNT_OPTIONS.map((option) => (
-              <button
-                key={option}
-                className={`challenge-count-option ${option === count ? "active" : ""}`}
-                type="button"
-                aria-pressed={option === count}
-                onClick={() => onCountChange(option)}
-              >
-                {option}
-              </button>
-            ))}
+        <div className="challenge-kind-control" role="group" aria-label={copy.agent.challengeKindLabel}>
+          <span>{copy.agent.challengeKindLabel}</span>
+          <div className="challenge-segment-toggle">
+            <button
+              className={`challenge-kind-option ${kind === "quiz" ? "active" : ""}`}
+              type="button"
+              aria-pressed={kind === "quiz"}
+              onClick={() => onKindChange("quiz")}
+            >
+              {copy.agent.challengeQuizKind}
+            </button>
+            <button
+              className={`challenge-kind-option ${kind === "problem" ? "active" : ""}`}
+              type="button"
+              aria-pressed={kind === "problem"}
+              onClick={() => onKindChange("problem")}
+            >
+              {copy.agent.challengeProblemKind}
+            </button>
           </div>
         </div>
-        <button className="challenge-start" type="button" onClick={() => onStart(count)}>
+        {kind === "quiz" && (
+          <div className="challenge-count-control" role="group" aria-label={copy.agent.challengeCountLabel}>
+            <span>{copy.agent.challengeCountLabel}</span>
+            <div className="challenge-count-toggle">
+              {CHALLENGE_COUNT_OPTIONS.map((option) => (
+                <button
+                  key={option}
+                  className={`challenge-count-option ${option === count ? "active" : ""}`}
+                  type="button"
+                  aria-pressed={option === count}
+                  onClick={() => onCountChange(option)}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <button className="challenge-start" type="button" onClick={() => onStart(kind, count)}>
           {copy.agent.challengeAction}
         </button>
       </div>
@@ -212,10 +243,10 @@ function AgentMessage() {
   const status = assistantUi.useAuiState((state) => state.message.status);
   const content = assistantUi.useAuiState((state) => state.message.content);
   const assistantText = assistantContentText(content);
-  const challengeQuiz = parseChallengeQuiz(assistantText);
+  const challengeContent = parseChallengeContent(assistantText);
   const isThinking = status?.type === "running" && content.length === 0;
-  const isChallengeStreaming = status?.type === "running" && !challengeQuiz && looksLikeChallengeQuizText(assistantText);
-  const isChallengeParseFailed = status?.type !== "running" && !challengeQuiz && containsChallengeQuizMarker(assistantText);
+  const isChallengeStreaming = status?.type === "running" && !challengeContent && looksLikeChallengeText(assistantText);
+  const isChallengeParseFailed = status?.type !== "running" && !challengeContent && containsChallengeMarker(assistantText);
   const isStopped = status?.type === "incomplete" && status.reason === "cancelled";
   const failureText = status?.type === "incomplete" && status.reason === "error"
     ? assistantText
@@ -233,8 +264,10 @@ function AgentMessage() {
           </div>
         ) : isChallengeParseFailed ? (
           <MessageStatusNote>{copy.agent.challengeParseFailed}</MessageStatusNote>
-        ) : challengeQuiz ? (
-          <ChallengeQuizCard quiz={challengeQuiz} />
+        ) : challengeContent?.kind === "quiz" ? (
+          <ChallengeQuizCard quiz={challengeContent.quiz} />
+        ) : challengeContent?.kind === "problem" ? (
+          <ChallengeProblemCard problem={challengeContent.problem} />
         ) : (
           <>
             <MessagePrimitive.Parts components={{ Text: MarkdownPart }} />
@@ -270,6 +303,10 @@ function AgentMessage() {
   );
 }
 
+type ChallengeContent =
+  | { kind: "quiz"; quiz: ChallengeQuizSet }
+  | { kind: "problem"; problem: ChallengeProblem };
+
 type ChallengeQuizSet = {
   title: string;
   questions: ChallengeQuizQuestion[];
@@ -287,6 +324,25 @@ type ChallengeQuizQuestion = {
   };
   explanation: string;
   followUp: string;
+};
+
+type ChallengeProblem = {
+  title: string;
+  hasTypicalProblem: boolean;
+  reason: string;
+  knowledgeType: string;
+  challengeType: string;
+  problemType: string;
+  difficulty: string;
+  timeMinutes: number | null;
+  stem: string;
+  given: string[];
+  tasks: string[];
+  expectedEntry: string;
+  firstHint: string;
+  commonTraps: string[];
+  rubric: string[];
+  selfCheck: string;
 };
 
 function ChallengeQuizCard({ quiz }: { quiz: ChallengeQuizSet }) {
@@ -383,7 +439,7 @@ function ChallengeQuizCard({ quiz }: { quiz: ChallengeQuizSet }) {
               }
               thread.append({
                 role: "user",
-                content: [{ type: "text", text: copy.agent.challengeUserMessage(quiz.questions.length) }],
+                content: [{ type: "text", text: copy.agent.challengeUserMessage("quiz", quiz.questions.length) }],
               });
             }}
           >
@@ -392,6 +448,102 @@ function ChallengeQuizCard({ quiz }: { quiz: ChallengeQuizSet }) {
         </div>
       )}
     </section>
+  );
+}
+
+function ChallengeProblemCard({ problem }: { problem: ChallengeProblem }) {
+  const copy = useAppCopy();
+  const assistantUi = useAssistantUi();
+  const thread = assistantUi.useThreadRuntime();
+  const [showHint, setShowHint] = useState(false);
+  const [showSelfCheck, setShowSelfCheck] = useState(false);
+  const meta = [
+    problem.problemType,
+    problem.difficulty,
+    problem.timeMinutes ? `${problem.timeMinutes} min` : "",
+  ].filter(Boolean).join(" · ");
+
+  return (
+    <section className="challenge-problem-card" aria-label={problem.title || copy.agent.challengeProblemKind}>
+      <header className="challenge-quiz-header">
+        <div>
+          <span className="challenge-quiz-kicker">{problem.knowledgeType} · {problem.challengeType}</span>
+          <h3>{problem.title || copy.agent.challengeProblemKind}</h3>
+        </div>
+        <span className={`challenge-problem-status ${problem.hasTypicalProblem ? "suitable" : "unsuitable"}`}>
+          {problem.hasTypicalProblem ? copy.agent.challengeProblemSuitable : copy.agent.challengeProblemUnsuitable}
+        </span>
+      </header>
+      {meta && <div className="challenge-problem-meta">{meta}</div>}
+      {problem.reason && (
+        <div className="challenge-problem-reason">
+          <ReaderMarkdown className="markdown-body" text={problem.reason} />
+        </div>
+      )}
+      <div className="challenge-problem-stem">
+        <ReaderMarkdown className="markdown-body" text={problem.stem} />
+      </div>
+      {!!problem.given.length && (
+        <ChallengeProblemList title={copy.agent.challengeProblemGivenLabel} items={problem.given} />
+      )}
+      {!!problem.tasks.length && (
+        <ChallengeProblemList title={copy.agent.challengeProblemTasksLabel} items={problem.tasks} ordered />
+      )}
+      <div className="challenge-problem-actions">
+        <button type="button" onClick={() => setShowHint((current) => !current)}>
+          {copy.agent.challengeProblemHintAction}
+        </button>
+        <button type="button" onClick={() => setShowSelfCheck((current) => !current)}>
+          {copy.agent.challengeProblemSelfCheckAction}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            thread.append({
+              role: "user",
+              content: [{ type: "text", text: copy.agent.challengeUserMessage("problem", 1) }],
+            });
+          }}
+        >
+          {copy.agent.challengeProblemAgain}
+        </button>
+      </div>
+      {showHint && (
+        <div className="challenge-problem-panel">
+          <h4>{copy.agent.challengeProblemEntryLabel}</h4>
+          <ReaderMarkdown className="markdown-body" text={[problem.expectedEntry, problem.firstHint].filter(Boolean).join("\n\n")} />
+        </div>
+      )}
+      {showSelfCheck && (
+        <div className="challenge-problem-panel">
+          <h4>{copy.agent.challengeProblemRubricLabel}</h4>
+          <ReaderMarkdown
+            className="markdown-body"
+            text={[
+              problem.selfCheck,
+              ...problem.rubric.map((item) => `- ${item}`),
+              problem.commonTraps.length ? `${copy.agent.challengeProblemTrapLabel}\n${problem.commonTraps.map((item) => `- ${item}`).join("\n")}` : "",
+            ].filter(Boolean).join("\n\n")}
+          />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ChallengeProblemList({ title, items, ordered = false }: { title: string; items: string[]; ordered?: boolean }) {
+  const ListTag = ordered ? "ol" : "ul";
+  return (
+    <div className="challenge-problem-list">
+      <h4>{title}</h4>
+      <ListTag>
+        {items.map((item, index) => (
+          <li key={`${title}-${index}`}>
+            <ReaderMarkdown className="markdown-body" text={item} />
+          </li>
+        ))}
+      </ListTag>
+    </div>
   );
 }
 
@@ -535,14 +687,24 @@ function SelectedSourcePreview({ context, onRemove }: { context: SelectedContext
 
 // ── Utility ──────────────────────────────────────────────────
 
-function parseChallengeQuiz(text: string): ChallengeQuizSet | null {
+function parseChallengeContent(text: string): ChallengeContent | null {
   const raw = extractJsonObjectText(text);
   if (!raw) return null;
   const parsed = parseChallengeJson(raw);
   if (!parsed || typeof parsed !== "object") return null;
   const value = parsed as Record<string, unknown>;
-  if (value.type !== "synchropage.challenge_quiz.v1") return null;
+  if (value.type === "synchropage.challenge_quiz.v1") {
+    const quiz = parseChallengeQuizValue(value);
+    return quiz ? { kind: "quiz", quiz } : null;
+  }
+  if (value.type === "synchropage.challenge_problem.v1") {
+    const problem = parseChallengeProblemValue(value);
+    return problem ? { kind: "problem", problem } : null;
+  }
+  return null;
+}
 
+function parseChallengeQuizValue(value: Record<string, unknown>): ChallengeQuizSet | null {
   const rawQuestions = Array.isArray(value.questions) && value.questions.length
     ? value.questions
     : [value];
@@ -555,6 +717,34 @@ function parseChallengeQuiz(text: string): ChallengeQuizSet | null {
   return {
     title: stringField(value.title) || "Challenge Quiz",
     questions,
+  };
+}
+
+function parseChallengeProblemValue(value: Record<string, unknown>): ChallengeProblem | null {
+  const suitability = objectField(value.suitability);
+  const problem = objectField(value.problem);
+  const coach = objectField(value.coach);
+  const stem = stringField(problem.stem ?? value.stem ?? value.question);
+  const tasks = stringArrayField(problem.tasks ?? value.tasks);
+  if (!stem || !tasks.length) return null;
+  const timeMinutes = numberField(problem.time_minutes ?? problem.timeMinutes);
+  return {
+    title: stringField(value.title) || "典型大题 Challenge",
+    hasTypicalProblem: booleanField(suitability.has_typical_problem ?? suitability.hasTypicalProblem ?? value.has_typical_problem ?? value.hasTypicalProblem),
+    reason: stringField(suitability.reason ?? value.reason),
+    knowledgeType: stringField(value.knowledge_type ?? value.knowledgeType) || "mixed",
+    challengeType: stringField(value.challenge_type ?? value.challengeType) || "typical problem",
+    problemType: stringField(suitability.problem_type ?? suitability.problemType ?? problem.problem_type ?? problem.problemType),
+    difficulty: stringField(problem.difficulty),
+    timeMinutes,
+    stem,
+    given: stringArrayField(problem.given ?? problem.conditions ?? value.given),
+    tasks,
+    expectedEntry: stringField(problem.expected_entry ?? problem.expectedEntry ?? coach.expected_entry ?? coach.expectedEntry),
+    firstHint: stringField(coach.first_hint ?? coach.firstHint ?? problem.first_hint ?? problem.firstHint),
+    commonTraps: stringArrayField(coach.common_traps ?? coach.commonTraps),
+    rubric: stringArrayField(problem.rubric ?? coach.rubric),
+    selfCheck: stringField(coach.after_attempt_check ?? coach.afterAttemptCheck ?? coach.self_check ?? coach.selfCheck),
   };
 }
 
@@ -661,13 +851,13 @@ function isJsonUnicodeEscape(input: string, start: number) {
   return /^[0-9a-fA-F]{4}$/.test(input.slice(start, start + 4));
 }
 
-function looksLikeChallengeQuizText(text: string) {
+function looksLikeChallengeText(text: string) {
   const value = text.trim();
-  return value.startsWith("{") || value.startsWith("```json") || value.includes("synchropage.challenge_quiz.v1");
+  return value.startsWith("{") || value.startsWith("```json") || containsChallengeMarker(value);
 }
 
-function containsChallengeQuizMarker(text: string) {
-  return text.includes("synchropage.challenge_quiz.v1");
+function containsChallengeMarker(text: string) {
+  return text.includes("synchropage.challenge_quiz.v1") || text.includes("synchropage.challenge_problem.v1");
 }
 
 function extractJsonObjectText(text: string) {
@@ -688,6 +878,27 @@ function normalizeOptionId(value: unknown, fallback: string) {
 
 function stringField(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function stringArrayField(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function objectField(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function booleanField(value: unknown) {
+  return value === true || value === "true";
+}
+
+function numberField(value: unknown) {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : null;
 }
 
 function normalizeChallengeCount(value: number) {

@@ -188,6 +188,17 @@
   color: var(--text);
 }
 
+.challenge-problem-card {
+  width: min(100%, 720px);
+  display: grid;
+  gap: 13px;
+  padding: 16px;
+  border: 1px solid color-mix(in oklch, var(--line) 58%, transparent);
+  border-radius: 18px;
+  background: color-mix(in oklch, var(--panel-strong) 86%, var(--background));
+  color: var(--text);
+}
+
 .challenge-quiz-header {
   display: flex;
   align-items: flex-start;
@@ -211,6 +222,102 @@
   font-size: var(--agent-text-lg);
   font-weight: 680;
   line-height: var(--agent-leading-title);
+}
+
+.challenge-problem-status {
+  flex: 0 0 auto;
+  max-width: 180px;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in oklch, var(--line) 56%, transparent);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: var(--agent-text-xs);
+  font-weight: 760;
+  line-height: var(--agent-leading-compact);
+  text-align: right;
+}
+
+.challenge-problem-status.suitable {
+  border-color: color-mix(in oklch, var(--success, var(--brand)) 34%, var(--line));
+  background: color-mix(in oklch, var(--success-soft, var(--brand-soft)) 30%, transparent);
+  color: color-mix(in oklch, var(--success, var(--brand)) 82%, var(--text));
+}
+
+.challenge-problem-status.unsuitable {
+  border-color: color-mix(in oklch, var(--coral) 36%, var(--line));
+  background: color-mix(in oklch, var(--coral-soft) 38%, transparent);
+  color: color-mix(in oklch, var(--coral) 82%, var(--text));
+}
+
+.challenge-problem-meta {
+  color: var(--muted);
+  font-size: var(--agent-text-xs);
+  font-weight: 720;
+}
+
+.challenge-problem-reason,
+.challenge-problem-panel {
+  padding: 11px 12px;
+  border: 1px solid color-mix(in oklch, var(--line) 46%, transparent);
+  border-radius: 13px;
+  background: color-mix(in oklch, var(--background) 72%, transparent);
+}
+
+.challenge-problem-card .challenge-problem-stem .markdown-body {
+  color: var(--text-strong);
+  font-size: var(--agent-text-md);
+  line-height: var(--agent-leading-body);
+}
+
+.challenge-problem-list {
+  display: grid;
+  gap: 7px;
+}
+
+.challenge-problem-list h4,
+.challenge-problem-panel h4 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--agent-text-sm);
+  font-weight: 780;
+}
+
+.challenge-problem-list ul,
+.challenge-problem-list ol {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.challenge-problem-list li::marker {
+  color: var(--muted);
+  font-weight: 760;
+}
+
+.challenge-problem-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.challenge-problem-actions button {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid color-mix(in oklch, var(--brand) 26%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--brand) 8%, var(--background));
+  color: var(--text-strong);
+  font-family: var(--agent-font-ui);
+  font-size: var(--agent-text-sm);
+  font-weight: 740;
+  cursor: pointer;
+}
+
+.challenge-problem-actions button:hover {
+  border-color: color-mix(in oklch, var(--brand) 40%, var(--line-strong));
+  background: color-mix(in oklch, var(--brand) 13%, var(--background));
 }
 
 .challenge-quiz-count {
@@ -243,14 +350,22 @@
 
 .challenge-quiz-question .markdown-body > :first-child,
 .challenge-option-text .markdown-body > :first-child,
-.challenge-feedback .markdown-body > :first-child {
+.challenge-feedback .markdown-body > :first-child,
+.challenge-problem-card .markdown-body > :first-child {
   margin-top: 0;
 }
 
 .challenge-quiz-question .markdown-body > :last-child,
 .challenge-option-text .markdown-body > :last-child,
-.challenge-feedback .markdown-body > :last-child {
+.challenge-feedback .markdown-body > :last-child,
+.challenge-problem-card .markdown-body > :last-child {
   margin-bottom: 0;
+}
+
+.challenge-problem-card .markdown-body {
+  color: color-mix(in oklch, var(--text) 86%, var(--muted));
+  font-size: var(--agent-text-sm);
+  line-height: var(--agent-leading-compact);
 }
 
 .challenge-options {

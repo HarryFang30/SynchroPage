@@ -143,6 +143,84 @@ test.describe("Agent Panel", () => {
     await expect.poll(() => requestPayload?.messages?.at(-1)?.content || "").toContain("Challenge");
   });
 
+  test("challenge problem mode renders a typical major problem card", async ({ page }) => {
+    await page.unroute("**/api/**");
+    let requestPayload: {
+      input?: string;
+      messages?: Array<{ content?: string }>;
+      modelProviderId?: string;
+      model?: string;
+      reasoningEffort?: string;
+    } | null = null;
+    const problemContent = String.raw`{
+      "type": "synchropage.challenge_problem.v1",
+      "title": "缩放点积注意力典型大题",
+      "knowledge_type": "formula",
+      "challenge_type": "典型大题",
+      "suitability": {
+        "has_typical_problem": true,
+        "reason": "本页包含注意力打分公式、归一化和适用条件，适合设计多步计算与解释题。",
+        "problem_type": "calculation"
+      },
+      "problem": {
+        "stem": "给定查询向量 \vec{q} 和两个键向量 \vec{k}_1, \vec{k}_2，要求判断模型更关注哪个 token。",
+        "given": ["打分公式为 s_i = \\frac{\vec{q}\\cdot\vec{k}_i}{\\sqrt{d_k}}。", "softmax 后得到注意力权重。"],
+        "tasks": ["写出两个 token 的打分表达式。", "说明为什么要除以 \\sqrt{d_k}。", "判断哪类错误会把注意力误解成硬选择。"],
+        "expected_entry": "先确认 q、k 的维度一致，再计算点积 logits。",
+        "difficulty": "medium",
+        "time_minutes": 8,
+        "rubric": ["能先写出 logits，而不是直接比较原始 token。", "能说明缩放项控制 logits 量级。"]
+      },
+      "coach": {
+        "first_hint": "第一步不要急着 softmax，先比较两个未归一化打分。",
+        "common_traps": ["把 softmax 权重理解成只能选一个 token。", "忽略 \\sqrt{d_k} 的适用原因。"],
+        "after_attempt_check": "检查你的解法是否区分了打分、归一化和加权求和三个阶段。"
+      }
+    }`;
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/agent/chat")) {
+        requestPayload = JSON.parse(route.request().postData() || "{}") as typeof requestPayload;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ content: problemContent }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await activateAgent(page);
+    await page.locator(".challenge-kind-option").filter({ hasText: "大题" }).click();
+    await page.locator(".challenge-start").click();
+
+    await expect(page.locator(".user-message")).toContainText("典型大题");
+    const problem = page.locator(".challenge-problem-card");
+    await expect(problem).toBeVisible({ timeout: 10_000 });
+    await expect(problem).toContainText("缩放点积注意力典型大题");
+    await expect(problem).toContainText("适合典型大题");
+    await expect(problem).toContainText("已知条件");
+    await expect(problem).toContainText("分问");
+    await expect(problem).toContainText("两个 token 的打分表达式");
+    await expect(problem).not.toContainText("第一步不要急着 softmax");
+
+    await problem.getByRole("button", { name: "看第一步提示" }).click();
+    await expect(problem).toContainText("第一步不要急着 softmax");
+    await problem.getByRole("button", { name: "我做完了，看检查点" }).click();
+    await expect(problem).toContainText("自查采分点");
+    await expect(problem).toContainText("常见误区");
+    await expect(problem).toContainText("打分、归一化和加权求和");
+
+    await expect.poll(() => requestPayload?.input || "").toContain("典型大题挑战教练");
+    await expect.poll(() => requestPayload?.input || "").toContain("synchropage.challenge_problem.v1");
+    await expect.poll(() => requestPayload?.input || "").toContain("不要硬编");
+    await expect.poll(() => requestPayload?.modelProviderId || "").toBe("codex_oauth");
+    await expect.poll(() => requestPayload?.model || "").toBe("gpt-5.5");
+    await expect.poll(() => requestPayload?.reasoningEffort || "").toBe("xhigh");
+    await expect.poll(() => requestPayload?.messages?.at(-1)?.content || "").toContain("典型大题");
+  });
+
   test("sending a message via Enter renders mocked assistant reply", async ({ page }) => {
     const composer = await activateAgent(page);
     await composer.click();
