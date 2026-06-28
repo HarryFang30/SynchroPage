@@ -126,7 +126,59 @@ test.describe("Teaching Generation (mocked)", () => {
     await expect.poll(() => Math.max(...pageCalls.values())).toBeGreaterThan(1);
   });
 
-  test("stalled single-page request is aborted and retried", async ({ page }) => {
+  test("slow successful single-page request is not aborted at the old stall threshold", async ({ page }) => {
+    test.setTimeout(40_000);
+    await uploadPdfFromRail(page);
+    await page.unroute("**/api/**");
+
+    const pageCalls = new Map<number, number>();
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/generate/pages")) {
+        await route.fulfill({
+          status: 502,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "HTTP 502" }),
+        });
+        return;
+      }
+      if (url.includes("/api/generate/page")) {
+        const body = JSON.parse(route.request().postData() || "{}") as { page?: { page_no?: number } };
+        const pageNo = Number(body.page?.page_no || 1);
+        const calls = (pageCalls.get(pageNo) || 0) + 1;
+        pageCalls.set(pageNo, calls);
+        if (pageNo === 1 && calls === 1) {
+          await new Promise((resolve) => setTimeout(resolve, 21_500));
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            page: {
+              page_no: pageNo,
+              teaching: {
+                slide_title: `Slow Page ${pageNo}`,
+                speaker_notes_md: `Slow successful notes for page ${pageNo}. This response intentionally arrives after the old twenty second stall threshold, but it is still a healthy generation result with enough detail to avoid the weak-output retry path.`,
+                confidence: 0.9,
+                concepts: [`slow-${pageNo}`],
+                output_language: "zh-CN",
+              },
+              status: "completed",
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await page.locator(".generate-main-button").click();
+
+    await expect(page.locator(".notes-content")).toContainText(/Slow successful notes for page 1/i, { timeout: 30_000 });
+    await expect.poll(() => pageCalls.get(1) || 0).toBe(1);
+  });
+
+  test("network-aborted single-page request is retried", async ({ page }) => {
     test.setTimeout(45_000);
     await uploadPdfFromRail(page);
     await page.unroute("**/api/**");

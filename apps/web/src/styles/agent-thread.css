@@ -177,6 +177,231 @@
   padding: 0;
 }
 
+.challenge-quiz-card {
+  width: min(100%, 680px);
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid color-mix(in oklch, var(--line) 58%, transparent);
+  border-radius: 18px;
+  background: color-mix(in oklch, var(--panel-strong) 86%, var(--background));
+  color: var(--text);
+}
+
+.challenge-quiz-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.challenge-quiz-kicker {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: var(--agent-text-xs);
+  font-weight: 720;
+  line-height: var(--agent-leading-compact);
+  text-transform: uppercase;
+}
+
+.challenge-quiz-header h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--agent-text-lg);
+  font-weight: 680;
+  line-height: var(--agent-leading-title);
+}
+
+.challenge-quiz-count {
+  flex: 0 0 auto;
+  color: color-mix(in oklch, var(--text) 74%, var(--muted));
+  font-size: var(--agent-text-md);
+  font-weight: 720;
+}
+
+.challenge-quiz-progress {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--line) 42%, transparent);
+}
+
+.challenge-quiz-progress span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in oklch, var(--brand) 68%, var(--text));
+}
+
+.challenge-quiz-question .markdown-body {
+  color: var(--text-strong);
+  font-size: var(--agent-text-md);
+  line-height: var(--agent-leading-body);
+}
+
+.challenge-quiz-question .markdown-body > :first-child,
+.challenge-option-text .markdown-body > :first-child,
+.challenge-feedback .markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.challenge-quiz-question .markdown-body > :last-child,
+.challenge-option-text .markdown-body > :last-child,
+.challenge-feedback .markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.challenge-options {
+  display: grid;
+  gap: 9px;
+}
+
+.challenge-option {
+  width: 100%;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 12px 13px;
+  border: 1px solid color-mix(in oklch, var(--line) 50%, transparent);
+  border-radius: 14px;
+  background: color-mix(in oklch, var(--background) 82%, black 4%);
+  color: color-mix(in oklch, var(--text) 88%, var(--muted));
+  font-family: var(--agent-font-ui);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.challenge-option:hover:not(:disabled) {
+  border-color: color-mix(in oklch, var(--brand) 32%, var(--line));
+  background: color-mix(in oklch, var(--brand-soft) 22%, var(--background));
+  color: var(--text-strong);
+  transform: translateY(-1px);
+}
+
+.challenge-option:disabled {
+  cursor: default;
+}
+
+.challenge-option.correct {
+  border-color: color-mix(in oklch, var(--success, var(--brand)) 46%, var(--line));
+  background: color-mix(in oklch, var(--success-soft, var(--brand-soft)) 48%, var(--background));
+  color: var(--text-strong);
+}
+
+.challenge-option.incorrect {
+  border-color: color-mix(in oklch, var(--coral) 58%, var(--line));
+  background: color-mix(in oklch, var(--coral-soft) 60%, var(--background));
+  color: var(--text-strong);
+}
+
+.challenge-option.dimmed {
+  opacity: 0.58;
+}
+
+.challenge-option-id {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in oklch, var(--secondary) 76%, transparent);
+  color: color-mix(in oklch, var(--text) 86%, var(--muted));
+  font-size: var(--agent-text-sm);
+  font-weight: 820;
+}
+
+.challenge-option.correct .challenge-option-id {
+  background: color-mix(in oklch, var(--success, var(--brand)) 22%, white);
+  color: color-mix(in oklch, var(--success, var(--brand)) 78%, var(--text));
+}
+
+.challenge-option.incorrect .challenge-option-id {
+  background: color-mix(in oklch, var(--coral) 18%, white);
+  color: var(--coral);
+}
+
+.challenge-option-text .markdown-body {
+  color: inherit;
+  font-size: var(--agent-text-sm);
+  line-height: var(--agent-leading-compact);
+}
+
+.challenge-feedback {
+  display: grid;
+  gap: 8px;
+  padding: 12px 13px;
+  border: 1px solid color-mix(in oklch, var(--line) 52%, transparent);
+  border-radius: 14px;
+  background: color-mix(in oklch, var(--background) 84%, transparent);
+}
+
+.challenge-feedback.correct {
+  border-color: color-mix(in oklch, var(--success, var(--brand)) 34%, var(--line));
+  background: color-mix(in oklch, var(--success-soft, var(--brand-soft)) 36%, var(--background));
+}
+
+.challenge-feedback.incorrect {
+  border-color: color-mix(in oklch, var(--coral) 42%, var(--line));
+  background: color-mix(in oklch, var(--coral-soft) 46%, var(--background));
+}
+
+.challenge-feedback-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-strong);
+  font-size: var(--agent-text-sm);
+  font-weight: 760;
+}
+
+.challenge-feedback-title svg {
+  width: 16px;
+  height: 16px;
+}
+
+.challenge-feedback.correct .challenge-feedback-title svg {
+  color: color-mix(in oklch, var(--success, var(--brand)) 80%, var(--text));
+}
+
+.challenge-feedback.incorrect .challenge-feedback-title svg {
+  color: var(--coral);
+}
+
+.challenge-feedback-selection {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--agent-text-xs);
+}
+
+.challenge-feedback .markdown-body {
+  color: color-mix(in oklch, var(--text) 84%, var(--muted));
+  font-size: var(--agent-text-sm);
+  line-height: var(--agent-leading-compact);
+}
+
+.challenge-next {
+  justify-self: end;
+  min-height: 32px;
+  padding: 0 13px;
+  border: 1px solid color-mix(in oklch, var(--brand) 34%, var(--line));
+  border-radius: 11px;
+  background: color-mix(in oklch, var(--brand) 74%, var(--text));
+  color: var(--background);
+  font-family: var(--agent-font-ui);
+  font-size: var(--agent-text-sm);
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.challenge-next:hover {
+  background: color-mix(in oklch, var(--brand) 84%, var(--text));
+}
+
 .message-actions,
 .assistant-footer {
   display: flex;

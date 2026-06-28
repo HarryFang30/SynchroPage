@@ -26,6 +26,82 @@
   visibility: hidden;
 }
 
+.challenge-panel {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in oklch, var(--brand) 12%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--panel-strong) 82%, var(--background));
+}
+
+.challenge-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in oklch, var(--text) 84%, var(--muted));
+  font-size: var(--agent-text-xs);
+  font-weight: 720;
+  line-height: var(--agent-leading-compact);
+}
+
+.challenge-title svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: color-mix(in oklch, var(--brand) 70%, var(--text));
+}
+
+.challenge-title > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.challenge-mode {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in oklch, var(--brand) 16%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--brand-soft) 32%, transparent);
+  color: color-mix(in oklch, var(--text) 78%, var(--muted));
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.challenge-start {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in oklch, var(--brand) 28%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in oklch, var(--brand) 9%, var(--background));
+  color: var(--text-strong);
+  font-family: var(--agent-font-ui);
+  font-size: var(--agent-text-xs);
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.challenge-start:hover {
+  border-color: color-mix(in oklch, var(--brand) 44%, var(--line-strong));
+  background: color-mix(in oklch, var(--brand) 14%, var(--background));
+}
+
+@container (max-width: 330px) {
+  .challenge-mode {
+    display: none;
+  }
+
+  .challenge-start {
+    padding: 0 8px;
+  }
+}
+
 .composer-shell {
   display: grid;
   gap: 6px;

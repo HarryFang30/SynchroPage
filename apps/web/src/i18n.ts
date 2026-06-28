@@ -384,6 +384,16 @@ export type AppCopy = {
     imagePreview: (name: string) => string;
     selectedFallbackSuggestions: string[];
     pageSuggestions: (title: string, concept: string) => string[];
+    challengeTitle: string;
+    challengeModeDiagnostic: string;
+    challengeAction: string;
+    challengeAria: string;
+    challengeUserMessage: string;
+    challengeCorrect: string;
+    challengeIncorrect: string;
+    challengeAnswerLabel: string;
+    challengeFollowUpLabel: string;
+    challengeNext: string;
     quickExplainPrompt: (label: string) => string;
     quickSummarizePrompt: (label: string) => string;
     continuePrompt: string;
@@ -827,6 +837,16 @@ const zhCN: AppCopy = {
     imagePreview: (name) => `图片 · ${name}`,
     selectedFallbackSuggestions: ["解释当前页的核心内容", "总结本页关键知识点", "用例子讲清楚这一页", "根据本页内容出几道题"],
     pageSuggestions: () => ["解释当前页的核心内容", "总结本页关键知识点", "用例子讲清楚这一页", "根据本页内容出几道题"],
+    challengeTitle: "Challenge",
+    challengeModeDiagnostic: "漏洞诊断",
+    challengeAction: "生成挑战",
+    challengeAria: "当前页 Challenge",
+    challengeUserMessage: "Challenge：请基于当前页生成一个漏洞诊断问题",
+    challengeCorrect: "判断正确",
+    challengeIncorrect: "再想一下",
+    challengeAnswerLabel: "正确选项：",
+    challengeFollowUpLabel: "追问：",
+    challengeNext: "下一题",
     quickExplainPrompt: (label) => `请解释这段选中内容，优先基于该来源回答：${label}`,
     quickSummarizePrompt: (label) => `请总结这段选中内容，提炼关键概念和可能的公式关系：${label}`,
     continuePrompt: "请根据上下文继续。",
@@ -1270,6 +1290,16 @@ const enUS: AppCopy = {
     imagePreview: (name) => `Image · ${name}`,
     selectedFallbackSuggestions: ["Explain the core idea of this page", "Summarize the key points", "Teach this page with an example", "Quiz me on this page"],
     pageSuggestions: () => ["Explain the core idea of this page", "Summarize the key points", "Teach this page with an example", "Quiz me on this page"],
+    challengeTitle: "Challenge",
+    challengeModeDiagnostic: "Diagnostic",
+    challengeAction: "Generate",
+    challengeAria: "Current-page challenge",
+    challengeUserMessage: "Challenge: generate one diagnostic question for the current page",
+    challengeCorrect: "Correct",
+    challengeIncorrect: "Try again",
+    challengeAnswerLabel: "Answer:",
+    challengeFollowUpLabel: "Follow-up:",
+    challengeNext: "Next",
     quickExplainPrompt: (label) => `Please explain this selected content. Prioritize answering from this source: ${label}`,
     quickSummarizePrompt: (label) => `Please summarize this selected content, extracting key concepts and possible formula relationships: ${label}`,
     continuePrompt: "Please continue based on the context.",

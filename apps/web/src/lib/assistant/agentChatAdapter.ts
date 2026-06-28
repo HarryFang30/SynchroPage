@@ -106,7 +106,14 @@ export function createPdfAgentAdapter(args: {
       const documentFile = await args.getDocumentFile?.().catch(() => null) || null;
       const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
       const latestUserText = latestUser ? messageText(latestUser) : "";
-      const promptInput = buildSelectedQuestionPrompt(latestUserText, snapshot.selectedContext, snapshot.pdfContext, args.copy);
+      const promptInput = buildAgentRequestPrompt({
+        question: latestUserText,
+        selectedContext: snapshot.selectedContext,
+        pdfContext: snapshot.pdfContext,
+        pack,
+        page,
+        copy: args.copy,
+      });
       const latestUserMeta = latestUser as { id?: string; createdAt?: Date };
       const assistantMessageId = options.unstable_assistantMessageId || args.createId("assistant");
       const selectedContextRecord = snapshot.selectedContext ? asPersistedRecord(selectedContextPayload(snapshot.selectedContext)) : null;
@@ -357,6 +364,181 @@ function selectedContextSourceLabel(context: SelectedContext, copy: AppCopy) {
   if (context.sourceType === "assistant-message") return copy.agent.assistantMessage;
   if (context.sourceType === "page") return copy.agent.pageSource(context.pageNumber || "?");
   return copy.common.selectedContent;
+}
+
+function buildAgentRequestPrompt({
+  question,
+  selectedContext,
+  pdfContext,
+  pack,
+  page,
+  copy,
+}: {
+  question: string;
+  selectedContext: SelectedContext | null;
+  pdfContext: PdfContextPayload | null;
+  pack: AgentPagePack;
+  page: AgentPageData;
+  copy: AppCopy;
+}) {
+  const challengeMode = challengeRequestMode(question, copy);
+  if (challengeMode) {
+    return buildChallengeCoachPrompt({ mode: challengeMode, pack, page, pdfContext });
+  }
+  return buildSelectedQuestionPrompt(question, selectedContext, pdfContext, copy);
+}
+
+const CHALLENGE_COACH_PROMPT = `你是我的理工科 PPT 挑战教练。当前页是我手动选择触发 challenge 的页面，因此你应当默认这页很重要，不需要判断是否出题。
+
+你的目标不是讲课，也不是机械刷题，而是基于当前 PPT 页生成一个高质量问题，用最少的问题暴露最大的理解漏洞。
+
+你会收到：
+- 课程名称
+- 当前 PPT 页内容
+- 当前页图示/公式/例题描述
+- AI 对当前页的讲解
+- 前后页摘要
+- 我的历史薄弱点
+- 当前挑战模式
+
+你需要先判断当前页的知识类型：
+1. concept：概念/定义页
+2. formula：公式/定理/结论页
+3. derivation：推导页
+4. method：方法/套路页
+5. example：例题页
+6. diagram：图示/结构/流程页
+7. mixed：混合页
+
+然后选择最适合的 challenge 类型：
+- 概念页：优先出辨析题，检查概念边界。
+- 公式页：优先出适用条件题或误用反例题。
+- 推导页：优先问“哪一步用了什么假设”。
+- 方法页：优先问“考场第一步怎么想”。
+- 例题页：优先出同类题型入口题或轻量变式题。
+- 图示页：优先问图中关系、方向、因果、状态变化或结构作用。
+- 混合页：选择最能暴露理解漏洞的问题。
+
+出题原则：
+1. 默认只生成 1 个主问题。
+2. 可以准备 1 个追问，但不要一开始展示。
+3. 不要生成一堆题。
+4. 不要问“请解释一下本页内容”这种泛问题。
+5. 不要考纯记忆，除非这是必要前置。
+6. 问题必须具体、短、有诊断力。
+7. 问题应该能区分：
+   - 看懂讲解；
+   - 能独立说清；
+   - 知道适用条件；
+   - 能用于题目；
+   - 能处理变式。
+8. 如果本页有公式，必须检查适用条件或误用场景。
+9. 如果本页有例题，必须检查题型入口或第一步切入。
+10. 如果本页和我的历史薄弱点有关，要优先针对薄弱点出题。
+11. 不要直接给答案。
+
+你必须输出一个可交互选择题的严格 JSON，不要输出 Markdown，不要包裹代码块，不要输出 schema 之外的解释。
+JSON schema:
+{
+  "type": "synchropage.challenge_quiz.v1",
+  "title": "short quiz title",
+  "knowledge_type": "concept|formula|derivation|method|example|diagram|mixed",
+  "challenge_type": "short challenge type label",
+  "question": "one concrete diagnostic question",
+  "options": [
+    {"id": "A", "text": "option text"},
+    {"id": "B", "text": "option text"},
+    {"id": "C", "text": "option text"},
+    {"id": "D", "text": "option text"}
+  ],
+  "correct_option_id": "A|B|C|D",
+  "feedback": {
+    "correct": "short feedback shown after a correct click",
+    "incorrect": "short feedback shown after a wrong click"
+  },
+  "explanation": "concise explanation shown only after selection",
+  "follow_up": "optional hidden follow-up question shown only after selection"
+}
+
+选项要求：
+- 必须提供 4 个选项，id 必须是 A、B、C、D。
+- 只有 1 个正确选项。
+- 错误选项必须是有诊断价值的常见误解，不要写明显荒谬的选项。
+- correct_option_id 必须和 options 中的 id 完全一致。
+- explanation 不要太长，优先说明为什么正确选项成立以及错误选项暴露什么误区。`;
+
+function buildChallengeCoachPrompt({
+  mode,
+  pack,
+  page,
+  pdfContext,
+}: {
+  mode: string;
+  pack: AgentPagePack;
+  page: AgentPageData;
+  pdfContext: PdfContextPayload | null;
+}) {
+  const teaching = objectValue(page.teaching);
+  const source = objectValue(page.source);
+  const pageNo = numberValue(page.page_no);
+  const title = stringValue(teaching.slide_title);
+  const concepts = Array.isArray(teaching.concepts)
+    ? teaching.concepts.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6)
+    : [];
+  const neighborContext = neighboringPdfContext(pdfContext, pageNo);
+  return [
+    CHALLENGE_COACH_PROMPT,
+    "",
+    "当前挑战上下文：",
+    `- 课程名称：${pack.document.title || "Untitled"}`,
+    `- 当前页：${pageNo ? `PDF p.${pageNo}` : "unknown page"}${title ? ` · ${title}` : ""}`,
+    concepts.length ? `- 当前页概念：${concepts.join("、")}` : null,
+    `- 当前挑战模式：${mode}`,
+    "- 我的历史薄弱点：暂无显式结构化记录；如果最近对话中已经暴露薄弱点，请优先针对它，不要编造不存在的历史。",
+    neighborContext ? `- 前后页摘要：\n${neighborContext}` : "- 前后页摘要：请使用随请求提供的 PDF 文本上下文和最近对话；若没有明确前后页信息，不要编造。",
+    source.text_md ? "- 当前 PPT 页内容：已随请求作为 Current page source text 提供。" : "- 当前 PPT 页内容：当前页无可用抽取文本时，请优先使用附加 PDF/图片证据和已有讲解。",
+    teaching.speaker_notes_md ? "- AI 对当前页的讲解：已随请求作为 Existing notes 提供。" : "- AI 对当前页的讲解：暂无已生成讲解时，请仅基于 PPT 页内容出题。",
+    "",
+    "输出要求：返回严格 JSON；前端会把 JSON 渲染为可点击选项卡片。不要在 JSON 之外展示答案或追问。",
+  ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function challengeRequestMode(question: string, copy: AppCopy) {
+  const value = question.trim();
+  if (!value) return "";
+  if (value === copy.agent.challengeUserMessage) return copy.agent.challengeModeDiagnostic;
+  if (/^(challenge|挑战)[:：]/i.test(value)) return copy.agent.challengeModeDiagnostic;
+  return "";
+}
+
+function neighboringPdfContext(pdfContext: PdfContextPayload | null, pageNo: number | null) {
+  if (!pdfContext || !pageNo) return "";
+  const neighbors = pdfContext.pages
+    .filter((item) => item.page_no === pageNo - 1 || item.page_no === pageNo + 1)
+    .sort((left, right) => left.page_no - right.page_no);
+  if (!neighbors.length) return "";
+  return neighbors
+    .map((item) => `  - PDF p.${item.page_no} · ${item.title || "Untitled"}：${compactPromptLine(item.text_md, 220)}`)
+    .join("\n");
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function numberValue(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function compactPromptLine(text: unknown, max: number) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (value.length <= max) return value || "[无可用文本]";
+  return `${value.slice(0, max)}...`;
 }
 
 function buildSelectedQuestionPrompt(

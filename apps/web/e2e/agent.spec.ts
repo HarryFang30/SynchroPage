@@ -41,6 +41,65 @@ test.describe("Agent Panel", () => {
     await expect(page.locator(".prompt-suggestions button")).toHaveCount(4);
   });
 
+  test("challenge panel sends the current-page challenge coach prompt", async ({ page }) => {
+    await page.unroute("**/api/**");
+    let requestPayload: { input?: string; messages?: Array<{ content?: string }> } | null = null;
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/agent/chat")) {
+        requestPayload = JSON.parse(route.request().postData() || "{}") as typeof requestPayload;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            content: JSON.stringify({
+              type: "synchropage.challenge_quiz.v1",
+              title: "Attention Mechanism Quiz",
+              knowledge_type: "concept",
+              challenge_type: "概念边界题",
+              question: "什么是注意力机制的核心思想？",
+              options: [
+                { id: "A", text: "将所有输入序列无差别地压缩成一个固定长度向量。" },
+                { id: "B", text: "随机丢弃一部分神经元以防止过拟合。" },
+                { id: "C", text: "根据当前任务动态分配不同输入位置的权重。" },
+                { id: "D", text: "通过固定窗口卷积提取局部空间特征。" },
+              ],
+              correct_option_id: "C",
+              feedback: {
+                correct: "对，关键是动态加权。",
+                incorrect: "这个选项没有抓住注意力的动态权重分配。",
+              },
+              explanation: "注意力机制允许模型根据查询和上下文决定关注哪些输入。",
+              follow_up: "如果所有位置权重都相同，还算有效注意力吗？",
+            }),
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await activateAgent(page);
+    await expect(page.locator(".challenge-panel")).toBeVisible();
+    await page.locator(".challenge-start").click();
+
+    await expect(page.locator(".user-message")).toContainText(/Challenge/i);
+    const quiz = page.locator(".challenge-quiz-card");
+    await expect(quiz).toBeVisible({ timeout: 10_000 });
+    await expect(quiz).toContainText("Attention Mechanism Quiz");
+    await expect(quiz.locator(".challenge-option")).toHaveCount(4);
+    await quiz.locator(".challenge-option").filter({ hasText: "随机丢弃" }).click();
+    await expect(quiz.locator(".challenge-option.incorrect")).toContainText("B");
+    await expect(quiz.locator(".challenge-option.correct")).toContainText("C");
+    await expect(quiz.locator(".challenge-feedback")).toContainText("正确选项");
+    await expect(quiz.locator(".challenge-feedback")).toContainText("追问");
+    await expect(quiz.locator(".challenge-next")).toContainText("下一题");
+    await expect.poll(() => requestPayload?.input || "").toContain("你是我的理工科 PPT 挑战教练");
+    await expect.poll(() => requestPayload?.input || "").toContain("当前挑战模式");
+    await expect.poll(() => requestPayload?.input || "").toContain("synchropage.challenge_quiz.v1");
+    await expect.poll(() => requestPayload?.messages?.at(-1)?.content || "").toContain("Challenge");
+  });
+
   test("sending a message via Enter renders mocked assistant reply", async ({ page }) => {
     const composer = await activateAgent(page);
     await composer.click();

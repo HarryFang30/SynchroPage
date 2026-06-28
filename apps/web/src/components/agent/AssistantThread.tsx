@@ -1,10 +1,13 @@
 import {
   ChevronLeft,
   ChevronRight,
+  CheckCircle2,
   Copy,
   RefreshCw,
   Send,
+  Target,
   X,
+  XCircle,
 } from "lucide-react";
 import {
   lazy,
@@ -62,6 +65,12 @@ export function AssistantThread({
       content: [{ type: "text", text: suggestion }],
     });
   }, [thread]);
+  const sendChallenge = useCallback(() => {
+    thread.append({
+      role: "user",
+      content: [{ type: "text", text: copy.agent.challengeUserMessage }],
+    });
+  }, [copy.agent.challengeUserMessage, thread]);
 
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
@@ -87,6 +96,7 @@ export function AssistantThread({
             <ThreadPrimitive.ScrollToBottom asChild>
               <button className="scroll-bottom" type="button">↓</button>
             </ThreadPrimitive.ScrollToBottom>
+            <ChallengePanel onStart={sendChallenge} />
             <AssistantComposer
               contextPreview={contextPreview}
               attachments={attachments}
@@ -100,6 +110,22 @@ export function AssistantThread({
         </div>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
+  );
+}
+
+function ChallengePanel({ onStart }: { onStart: () => void }) {
+  const copy = useAppCopy();
+  return (
+    <div className="challenge-panel" aria-label={copy.agent.challengeAria}>
+      <div className="challenge-title">
+        <Target />
+        <span>{copy.agent.challengeTitle}</span>
+        <span className="challenge-mode">{copy.agent.challengeModeDiagnostic}</span>
+      </div>
+      <button className="challenge-start" type="button" onClick={onStart}>
+        {copy.agent.challengeAction}
+      </button>
+    </div>
   );
 }
 
@@ -151,22 +177,27 @@ function AgentMessage() {
   } = assistantUi;
   const status = assistantUi.useAuiState((state) => state.message.status);
   const content = assistantUi.useAuiState((state) => state.message.content);
+  const assistantText = assistantContentText(content);
+  const challengeQuiz = parseChallengeQuiz(assistantText);
   const isThinking = status?.type === "running" && content.length === 0;
+  const isChallengeStreaming = status?.type === "running" && !challengeQuiz && looksLikeChallengeQuizText(assistantText);
   const isStopped = status?.type === "incomplete" && status.reason === "cancelled";
   const failureText = status?.type === "incomplete" && status.reason === "error"
-    ? assistantContentText(content)
+    ? assistantText
     : "";
 
   return (
     <MessagePrimitive.Root className="aui-message assistant-message">
       <div className="assistant-label">{copy.common.assistant}</div>
       <div className="message-bubble assistant-bubble">
-        {isThinking && <AssistantThinkingIndicator />}
+        {(isThinking || isChallengeStreaming) && <AssistantThinkingIndicator />}
         {isStopped && <MessageStatusNote>{copy.agent.generationStopped}</MessageStatusNote>}
         {failureText ? (
           <div className="message-error">
             <MarkdownRenderer className="message-error-detail" text={failureText} />
           </div>
+        ) : challengeQuiz ? (
+          <ChallengeQuizCard quiz={challengeQuiz} />
         ) : (
           <>
             <MessagePrimitive.Parts components={{ Text: MarkdownPart }} />
@@ -199,6 +230,110 @@ function AgentMessage() {
         </ActionBarPrimitive.Root>
       </div>
     </MessagePrimitive.Root>
+  );
+}
+
+type ChallengeQuiz = {
+  title: string;
+  knowledgeType: string;
+  challengeType: string;
+  question: string;
+  options: Array<{ id: string; text: string }>;
+  correctOptionId: string;
+  feedback: {
+    correct: string;
+    incorrect: string;
+  };
+  explanation: string;
+  followUp: string;
+};
+
+function ChallengeQuizCard({ quiz }: { quiz: ChallengeQuiz }) {
+  const copy = useAppCopy();
+  const assistantUi = useAssistantUi();
+  const thread = assistantUi.useThreadRuntime();
+  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
+  const selectedOption = selectedOptionId
+    ? quiz.options.find((option) => option.id === selectedOptionId) || null
+    : null;
+  const hasAnswered = Boolean(selectedOptionId);
+  const correct = selectedOptionId === quiz.correctOptionId;
+
+  return (
+    <section className="challenge-quiz-card" aria-label={quiz.title || copy.agent.challengeTitle}>
+      <header className="challenge-quiz-header">
+        <div>
+          <span className="challenge-quiz-kicker">{quiz.knowledgeType} · {quiz.challengeType}</span>
+          <h3>{quiz.title || copy.agent.challengeTitle}</h3>
+        </div>
+        <span className="challenge-quiz-count">1/1</span>
+      </header>
+      <div className="challenge-quiz-progress" aria-hidden="true">
+        <span />
+      </div>
+      <div className="challenge-quiz-question">
+        <ReaderMarkdown className="markdown-body" text={quiz.question} />
+      </div>
+      <div className="challenge-options">
+        {quiz.options.map((option) => {
+          const isSelected = option.id === selectedOptionId;
+          const isCorrect = option.id === quiz.correctOptionId;
+          const stateClass = hasAnswered
+            ? isCorrect
+              ? "correct"
+              : isSelected
+                ? "incorrect"
+                : "dimmed"
+            : "";
+          return (
+            <button
+              className={`challenge-option ${stateClass}`}
+              key={option.id}
+              type="button"
+              onClick={() => {
+                if (!hasAnswered) setSelectedOptionId(option.id);
+              }}
+              aria-pressed={isSelected}
+              disabled={hasAnswered}
+            >
+              <span className="challenge-option-id">{option.id}</span>
+              <span className="challenge-option-text">
+                <ReaderMarkdown className="markdown-body" text={option.text} />
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {hasAnswered && (
+        <div className={`challenge-feedback ${correct ? "correct" : "incorrect"}`}>
+          <div className="challenge-feedback-title">
+            {correct ? <CheckCircle2 /> : <XCircle />}
+            <span>{correct ? copy.agent.challengeCorrect : copy.agent.challengeIncorrect}</span>
+            {selectedOption && <span className="challenge-feedback-selection">{selectedOption.id}</span>}
+          </div>
+          <ReaderMarkdown
+            className="markdown-body"
+            text={[
+              correct ? quiz.feedback.correct : quiz.feedback.incorrect,
+              quiz.explanation ? `${copy.agent.challengeAnswerLabel} ${quiz.correctOptionId}. ${quiz.explanation}` : "",
+              quiz.followUp ? `${copy.agent.challengeFollowUpLabel} ${quiz.followUp}` : "",
+            ].filter(Boolean).join("\n\n")}
+          />
+          <button
+            className="challenge-next"
+            type="button"
+            onClick={() => {
+              thread.append({
+                role: "user",
+                content: [{ type: "text", text: copy.agent.challengeUserMessage }],
+              });
+            }}
+          >
+            {copy.agent.challengeNext}
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -341,6 +476,78 @@ function SelectedSourcePreview({ context, onRemove }: { context: SelectedContext
 }
 
 // ── Utility ──────────────────────────────────────────────────
+
+function parseChallengeQuiz(text: string): ChallengeQuiz | null {
+  const raw = extractJsonObjectText(text);
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const value = parsed as Record<string, unknown>;
+  if (value.type !== "synchropage.challenge_quiz.v1") return null;
+  const rawOptions = Array.isArray(value.options) ? value.options : [];
+  const options = rawOptions
+    .map((item, index) => {
+      if (!item || typeof item !== "object") return null;
+      const option = item as Record<string, unknown>;
+      const fallbackId = String.fromCharCode(65 + index);
+      const id = normalizeOptionId(option.id, fallbackId);
+      const textValue = stringField(option.text);
+      return id && textValue ? { id, text: textValue } : null;
+    })
+    .filter((item): item is { id: string; text: string } => Boolean(item))
+    .slice(0, 6);
+  const correctOptionId = normalizeOptionId(value.correct_option_id ?? value.correctOptionId ?? value.answer, "");
+  if (!stringField(value.question) || options.length < 2 || !options.some((option) => option.id === correctOptionId)) {
+    return null;
+  }
+  const feedback = value.feedback && typeof value.feedback === "object"
+    ? value.feedback as Record<string, unknown>
+    : {};
+  return {
+    title: stringField(value.title) || "Challenge Quiz",
+    knowledgeType: stringField(value.knowledge_type ?? value.knowledgeType) || "mixed",
+    challengeType: stringField(value.challenge_type ?? value.challengeType) || "diagnostic",
+    question: stringField(value.question),
+    options,
+    correctOptionId,
+    feedback: {
+      correct: stringField(feedback.correct) || "回答正确。",
+      incorrect: stringField(feedback.incorrect) || "这个选项暴露了一个常见误区。",
+    },
+    explanation: stringField(value.explanation),
+    followUp: stringField(value.follow_up ?? value.followUp),
+  };
+}
+
+function looksLikeChallengeQuizText(text: string) {
+  const value = text.trim();
+  return value.startsWith("{") || value.startsWith("```json") || value.includes("synchropage.challenge_quiz.v1");
+}
+
+function extractJsonObjectText(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = fenced ? fenced[1].trim() : trimmed;
+  if (candidate.startsWith("{") && candidate.endsWith("}")) return candidate;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  return start >= 0 && end > start ? candidate.slice(start, end + 1) : "";
+}
+
+function normalizeOptionId(value: unknown, fallback: string) {
+  const id = String(value || fallback).trim().toUpperCase();
+  return /^[A-Z]$/.test(id) ? id : "";
+}
+
+function stringField(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
 
 function assistantContentText(content: unknown[]): string {
   if (!Array.isArray(content)) return "";
