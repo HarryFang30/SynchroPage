@@ -41,6 +41,7 @@
 
 .challenge-title {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -75,7 +76,9 @@
 }
 
 .challenge-controls {
-  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -158,7 +161,21 @@
   background: color-mix(in oklch, var(--brand) 14%, var(--background));
 }
 
-@container (max-width: 330px) {
+@container (max-width: 520px) {
+  .challenge-panel {
+    align-items: stretch;
+  }
+
+  .challenge-title,
+  .challenge-controls {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .challenge-controls {
+    justify-content: space-between;
+  }
+
   .challenge-mode {
     display: none;
   }
@@ -173,6 +190,27 @@
 
   .challenge-start {
     padding: 0 8px;
+  }
+}
+
+@container (max-width: 360px) {
+  .challenge-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .challenge-kind-control {
+    min-width: 0;
+  }
+
+  .challenge-count-control {
+    justify-content: end;
+  }
+
+  .challenge-start {
+    width: 100%;
+    grid-column: 1 / -1;
   }
 }
 

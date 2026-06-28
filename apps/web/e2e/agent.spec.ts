@@ -41,6 +41,33 @@ test.describe("Agent Panel", () => {
     await expect(page.locator(".prompt-suggestions button")).toHaveCount(4);
   });
 
+  test("challenge panel controls stay inside a narrow agent panel", async ({ page }) => {
+    await page.setViewportSize({ width: 760, height: 720 });
+    await activateAgent(page);
+    const panel = page.locator(".challenge-panel");
+    await expect(panel).toBeVisible();
+
+    const overflow = await panel.evaluate((element) => {
+      const panelRect = element.getBoundingClientRect();
+      const descendants = Array.from(element.querySelectorAll("*"));
+      let minLeft = panelRect.left;
+      let maxRight = panelRect.right;
+      for (const descendant of descendants) {
+        const rect = descendant.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        minLeft = Math.min(minLeft, rect.left);
+        maxRight = Math.max(maxRight, rect.right);
+      }
+      return {
+        left: panelRect.left - minLeft,
+        right: maxRight - panelRect.right,
+      };
+    });
+
+    expect(overflow.left).toBeLessThanOrEqual(1);
+    expect(overflow.right).toBeLessThanOrEqual(1);
+  });
+
   test("challenge panel sends the current-page challenge coach prompt", async ({ page }) => {
     await page.unroute("**/api/**");
     let requestPayload: {
