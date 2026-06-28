@@ -43,7 +43,56 @@ test.describe("Agent Panel", () => {
 
   test("challenge panel sends the current-page challenge coach prompt", async ({ page }) => {
     await page.unroute("**/api/**");
-    let requestPayload: { input?: string; messages?: Array<{ content?: string }> } | null = null;
+    let requestPayload: {
+      input?: string;
+      messages?: Array<{ content?: string }>;
+      modelProviderId?: string;
+      model?: string;
+      reasoningEffort?: string;
+    } | null = null;
+    const challengeContent = String.raw`{
+      "type": "synchropage.challenge_quiz.v1",
+      "title": "Attention Mechanism Quiz",
+      "question_count": 2,
+      "questions": [
+        {
+          "knowledge_type": "concept",
+          "challenge_type": "概念边界题",
+          "question": "什么是注意力机制的核心思想？",
+          "options": [
+            {"id": "A", "text": "将所有输入序列无差别地压缩成一个固定长度向量。"},
+            {"id": "B", "text": "随机丢弃一部分神经元以防止过拟合。"},
+            {"id": "C", "text": "根据当前任务动态分配不同输入位置的权重。"},
+            {"id": "D", "text": "通过固定窗口卷积提取局部空间特征。"}
+          ],
+          "correct_option_id": "C",
+          "feedback": {
+            "correct": "对，关键是动态加权。",
+            "incorrect": "这个选项没有抓住注意力的动态权重分配。"
+          },
+          "explanation": "注意力机制允许模型根据查询和上下文决定关注哪些输入。",
+          "follow_up": "如果所有位置权重都相同，还算有效注意力吗？"
+        },
+        {
+          "knowledge_type": "formula",
+          "challenge_type": "适用条件题",
+          "question": "在 \vec{q}\cdot\vec{k} 的打分里，哪句话最准确？",
+          "options": [
+            {"id": "A", "text": "分数越大，softmax 后该位置通常权重越高。"},
+            {"id": "B", "text": "\vec{q} 与 \vec{k} 必须完全相同才有注意力。"},
+            {"id": "C", "text": "所有 token 的权重必须相等。"},
+            {"id": "D", "text": "\frac{1}{\sqrt{d_k}} 会删除无关 token。"}
+          ],
+          "correct_option_id": "A",
+          "feedback": {
+            "correct": "对，点积先给相关性打分，再归一化成权重。",
+            "incorrect": "这里容易把相关性打分误解成硬匹配或硬删除。"
+          },
+          "explanation": "缩放点积注意力用 \frac{\vec{q}\cdot\vec{k}}{\sqrt{d_k}} 作为 logits，再经 softmax 得到权重。",
+          "follow_up": "如果不除以 \sqrt{d_k}，大维度下 softmax 会有什么风险？"
+        }
+      ]
+    }`;
     await page.route("**/api/**", async (route) => {
       const url = route.request().url();
       if (url.includes("/api/agent/chat")) {
@@ -52,26 +101,7 @@ test.describe("Agent Panel", () => {
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
-            content: JSON.stringify({
-              type: "synchropage.challenge_quiz.v1",
-              title: "Attention Mechanism Quiz",
-              knowledge_type: "concept",
-              challenge_type: "概念边界题",
-              question: "什么是注意力机制的核心思想？",
-              options: [
-                { id: "A", text: "将所有输入序列无差别地压缩成一个固定长度向量。" },
-                { id: "B", text: "随机丢弃一部分神经元以防止过拟合。" },
-                { id: "C", text: "根据当前任务动态分配不同输入位置的权重。" },
-                { id: "D", text: "通过固定窗口卷积提取局部空间特征。" },
-              ],
-              correct_option_id: "C",
-              feedback: {
-                correct: "对，关键是动态加权。",
-                incorrect: "这个选项没有抓住注意力的动态权重分配。",
-              },
-              explanation: "注意力机制允许模型根据查询和上下文决定关注哪些输入。",
-              follow_up: "如果所有位置权重都相同，还算有效注意力吗？",
-            }),
+            content: challengeContent,
           }),
         });
         return;
@@ -81,12 +111,14 @@ test.describe("Agent Panel", () => {
 
     await activateAgent(page);
     await expect(page.locator(".challenge-panel")).toBeVisible();
+    await page.locator(".challenge-count-option").filter({ hasText: "5" }).click();
     await page.locator(".challenge-start").click();
 
     await expect(page.locator(".user-message")).toContainText(/Challenge/i);
     const quiz = page.locator(".challenge-quiz-card");
     await expect(quiz).toBeVisible({ timeout: 10_000 });
     await expect(quiz).toContainText("Attention Mechanism Quiz");
+    await expect(quiz.locator(".challenge-quiz-count")).toHaveText("1/2");
     await expect(quiz.locator(".challenge-option")).toHaveCount(4);
     await quiz.locator(".challenge-option").filter({ hasText: "随机丢弃" }).click();
     await expect(quiz.locator(".challenge-option.incorrect")).toContainText("B");
@@ -94,9 +126,20 @@ test.describe("Agent Panel", () => {
     await expect(quiz.locator(".challenge-feedback")).toContainText("正确选项");
     await expect(quiz.locator(".challenge-feedback")).toContainText("追问");
     await expect(quiz.locator(".challenge-next")).toContainText("下一题");
+    await quiz.locator(".challenge-next").click();
+    await expect(quiz.locator(".challenge-quiz-count")).toHaveText("2/2");
+    await expect(quiz).toContainText("哪句话最准确");
+    await quiz.locator(".challenge-option").filter({ hasText: "softmax" }).click();
+    await expect(quiz.locator(".challenge-option.correct")).toContainText("A");
+    await expect(quiz.locator(".challenge-next")).toContainText("再来一组");
     await expect.poll(() => requestPayload?.input || "").toContain("你是我的理工科 PPT 挑战教练");
     await expect.poll(() => requestPayload?.input || "").toContain("当前挑战模式");
+    await expect.poll(() => requestPayload?.input || "").toContain("当前挑战数量：5");
+    await expect.poll(() => requestPayload?.input || "").toContain("questions 数组");
     await expect.poll(() => requestPayload?.input || "").toContain("synchropage.challenge_quiz.v1");
+    await expect.poll(() => requestPayload?.modelProviderId || "").toBe("codex_oauth");
+    await expect.poll(() => requestPayload?.model || "").toBe("gpt-5.5");
+    await expect.poll(() => requestPayload?.reasoningEffort || "").toBe("xhigh");
     await expect.poll(() => requestPayload?.messages?.at(-1)?.content || "").toContain("Challenge");
   });
 

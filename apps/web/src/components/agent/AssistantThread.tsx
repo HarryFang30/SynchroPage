@@ -31,6 +31,8 @@ import { compactText } from "../../lib/workspace/synchroPageState";
 import { selectedContextSourceLabel } from "./agentLabels";
 
 const MarkdownRenderer = lazy(() => import("../MarkdownRenderer"));
+const CHALLENGE_COUNT_OPTIONS = [1, 3, 5, 10] as const;
+const DEFAULT_CHALLENGE_COUNT = 3;
 
 // ── AssistantThread ──────────────────────────────────────────
 
@@ -59,18 +61,20 @@ export function AssistantThread({
   const assistantUi = useAssistantUi();
   const { ThreadPrimitive } = assistantUi;
   const thread = assistantUi.useThreadRuntime();
+  const [challengeCount, setChallengeCount] = useState(DEFAULT_CHALLENGE_COUNT);
   const sendSuggestion = useCallback((suggestion: string) => {
     thread.append({
       role: "user",
       content: [{ type: "text", text: suggestion }],
     });
   }, [thread]);
-  const sendChallenge = useCallback(() => {
+  const sendChallenge = useCallback((count = challengeCount) => {
+    const normalizedCount = normalizeChallengeCount(count);
     thread.append({
       role: "user",
-      content: [{ type: "text", text: copy.agent.challengeUserMessage }],
+      content: [{ type: "text", text: copy.agent.challengeUserMessage(normalizedCount) }],
     });
-  }, [copy.agent.challengeUserMessage, thread]);
+  }, [challengeCount, copy.agent, thread]);
 
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
@@ -96,7 +100,11 @@ export function AssistantThread({
             <ThreadPrimitive.ScrollToBottom asChild>
               <button className="scroll-bottom" type="button">↓</button>
             </ThreadPrimitive.ScrollToBottom>
-            <ChallengePanel onStart={sendChallenge} />
+            <ChallengePanel
+              count={challengeCount}
+              onCountChange={setChallengeCount}
+              onStart={sendChallenge}
+            />
             <AssistantComposer
               contextPreview={contextPreview}
               attachments={attachments}
@@ -113,7 +121,15 @@ export function AssistantThread({
   );
 }
 
-function ChallengePanel({ onStart }: { onStart: () => void }) {
+function ChallengePanel({
+  count,
+  onCountChange,
+  onStart,
+}: {
+  count: number;
+  onCountChange: (count: number) => void;
+  onStart: (count: number) => void;
+}) {
   const copy = useAppCopy();
   return (
     <div className="challenge-panel" aria-label={copy.agent.challengeAria}>
@@ -122,9 +138,27 @@ function ChallengePanel({ onStart }: { onStart: () => void }) {
         <span>{copy.agent.challengeTitle}</span>
         <span className="challenge-mode">{copy.agent.challengeModeDiagnostic}</span>
       </div>
-      <button className="challenge-start" type="button" onClick={onStart}>
-        {copy.agent.challengeAction}
-      </button>
+      <div className="challenge-controls">
+        <div className="challenge-count-control" role="group" aria-label={copy.agent.challengeCountLabel}>
+          <span>{copy.agent.challengeCountLabel}</span>
+          <div className="challenge-count-toggle">
+            {CHALLENGE_COUNT_OPTIONS.map((option) => (
+              <button
+                key={option}
+                className={`challenge-count-option ${option === count ? "active" : ""}`}
+                type="button"
+                aria-pressed={option === count}
+                onClick={() => onCountChange(option)}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        </div>
+        <button className="challenge-start" type="button" onClick={() => onStart(count)}>
+          {copy.agent.challengeAction}
+        </button>
+      </div>
     </div>
   );
 }
@@ -181,6 +215,7 @@ function AgentMessage() {
   const challengeQuiz = parseChallengeQuiz(assistantText);
   const isThinking = status?.type === "running" && content.length === 0;
   const isChallengeStreaming = status?.type === "running" && !challengeQuiz && looksLikeChallengeQuizText(assistantText);
+  const isChallengeParseFailed = status?.type !== "running" && !challengeQuiz && containsChallengeQuizMarker(assistantText);
   const isStopped = status?.type === "incomplete" && status.reason === "cancelled";
   const failureText = status?.type === "incomplete" && status.reason === "error"
     ? assistantText
@@ -196,6 +231,8 @@ function AgentMessage() {
           <div className="message-error">
             <MarkdownRenderer className="message-error-detail" text={failureText} />
           </div>
+        ) : isChallengeParseFailed ? (
+          <MessageStatusNote>{copy.agent.challengeParseFailed}</MessageStatusNote>
         ) : challengeQuiz ? (
           <ChallengeQuizCard quiz={challengeQuiz} />
         ) : (
@@ -233,8 +270,12 @@ function AgentMessage() {
   );
 }
 
-type ChallengeQuiz = {
+type ChallengeQuizSet = {
   title: string;
+  questions: ChallengeQuizQuestion[];
+};
+
+type ChallengeQuizQuestion = {
   knowledgeType: string;
   challengeType: string;
   question: string;
@@ -248,36 +289,47 @@ type ChallengeQuiz = {
   followUp: string;
 };
 
-function ChallengeQuizCard({ quiz }: { quiz: ChallengeQuiz }) {
+function ChallengeQuizCard({ quiz }: { quiz: ChallengeQuizSet }) {
   const copy = useAppCopy();
   const assistantUi = useAssistantUi();
   const thread = assistantUi.useThreadRuntime();
-  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
-  const selectedOption = selectedOptionId
-    ? quiz.options.find((option) => option.id === selectedOptionId) || null
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [answers, setAnswers] = useState<Record<number, string>>({});
+  const question = quiz.questions[currentIndex] || quiz.questions[0] || null;
+  const selectedOptionId = question ? answers[currentIndex] || null : null;
+  const selectedOption = question && selectedOptionId
+    ? question.options.find((option) => option.id === selectedOptionId) || null
     : null;
   const hasAnswered = Boolean(selectedOptionId);
-  const correct = selectedOptionId === quiz.correctOptionId;
+  const correct = question ? selectedOptionId === question.correctOptionId : false;
+
+  useEffect(() => {
+    if (currentIndex >= quiz.questions.length) setCurrentIndex(0);
+  }, [currentIndex, quiz.questions.length]);
+
+  if (!question) return null;
+  const isLastQuestion = currentIndex >= quiz.questions.length - 1;
+  const progressPercent = `${Math.max(1, ((currentIndex + 1) / quiz.questions.length) * 100)}%`;
 
   return (
     <section className="challenge-quiz-card" aria-label={quiz.title || copy.agent.challengeTitle}>
       <header className="challenge-quiz-header">
         <div>
-          <span className="challenge-quiz-kicker">{quiz.knowledgeType} · {quiz.challengeType}</span>
+          <span className="challenge-quiz-kicker">{question.knowledgeType} · {question.challengeType}</span>
           <h3>{quiz.title || copy.agent.challengeTitle}</h3>
         </div>
-        <span className="challenge-quiz-count">1/1</span>
+        <span className="challenge-quiz-count">{currentIndex + 1}/{quiz.questions.length}</span>
       </header>
       <div className="challenge-quiz-progress" aria-hidden="true">
-        <span />
+        <span style={{ width: progressPercent }} />
       </div>
       <div className="challenge-quiz-question">
-        <ReaderMarkdown className="markdown-body" text={quiz.question} />
+        <ReaderMarkdown className="markdown-body" text={question.question} />
       </div>
       <div className="challenge-options">
-        {quiz.options.map((option) => {
+        {question.options.map((option) => {
           const isSelected = option.id === selectedOptionId;
-          const isCorrect = option.id === quiz.correctOptionId;
+          const isCorrect = option.id === question.correctOptionId;
           const stateClass = hasAnswered
             ? isCorrect
               ? "correct"
@@ -291,7 +343,9 @@ function ChallengeQuizCard({ quiz }: { quiz: ChallengeQuiz }) {
               key={option.id}
               type="button"
               onClick={() => {
-                if (!hasAnswered) setSelectedOptionId(option.id);
+                if (!hasAnswered) {
+                  setAnswers((current) => ({ ...current, [currentIndex]: option.id }));
+                }
               }}
               aria-pressed={isSelected}
               disabled={hasAnswered}
@@ -314,22 +368,26 @@ function ChallengeQuizCard({ quiz }: { quiz: ChallengeQuiz }) {
           <ReaderMarkdown
             className="markdown-body"
             text={[
-              correct ? quiz.feedback.correct : quiz.feedback.incorrect,
-              quiz.explanation ? `${copy.agent.challengeAnswerLabel} ${quiz.correctOptionId}. ${quiz.explanation}` : "",
-              quiz.followUp ? `${copy.agent.challengeFollowUpLabel} ${quiz.followUp}` : "",
+              correct ? question.feedback.correct : question.feedback.incorrect,
+              question.explanation ? `${copy.agent.challengeAnswerLabel} ${question.correctOptionId}. ${question.explanation}` : "",
+              question.followUp ? `${copy.agent.challengeFollowUpLabel} ${question.followUp}` : "",
             ].filter(Boolean).join("\n\n")}
           />
           <button
             className="challenge-next"
             type="button"
             onClick={() => {
+              if (!isLastQuestion) {
+                setCurrentIndex((index) => Math.min(index + 1, quiz.questions.length - 1));
+                return;
+              }
               thread.append({
                 role: "user",
-                content: [{ type: "text", text: copy.agent.challengeUserMessage }],
+                content: [{ type: "text", text: copy.agent.challengeUserMessage(quiz.questions.length) }],
               });
             }}
           >
-            {copy.agent.challengeNext}
+            {isLastQuestion ? copy.agent.challengeNewSet : copy.agent.challengeNext}
           </button>
         </div>
       )}
@@ -477,18 +535,32 @@ function SelectedSourcePreview({ context, onRemove }: { context: SelectedContext
 
 // ── Utility ──────────────────────────────────────────────────
 
-function parseChallengeQuiz(text: string): ChallengeQuiz | null {
+function parseChallengeQuiz(text: string): ChallengeQuizSet | null {
   const raw = extractJsonObjectText(text);
   if (!raw) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
+  const parsed = parseChallengeJson(raw);
   if (!parsed || typeof parsed !== "object") return null;
   const value = parsed as Record<string, unknown>;
   if (value.type !== "synchropage.challenge_quiz.v1") return null;
+
+  const rawQuestions = Array.isArray(value.questions) && value.questions.length
+    ? value.questions
+    : [value];
+  const questions = rawQuestions
+    .map((item) => normalizeChallengeQuestion(item))
+    .filter((item): item is ChallengeQuizQuestion => Boolean(item))
+    .slice(0, 10);
+  if (!questions.length) return null;
+
+  return {
+    title: stringField(value.title) || "Challenge Quiz",
+    questions,
+  };
+}
+
+function normalizeChallengeQuestion(item: unknown): ChallengeQuizQuestion | null {
+  if (!item || typeof item !== "object") return null;
+  const value = item as Record<string, unknown>;
   const rawOptions = Array.isArray(value.options) ? value.options : [];
   const options = rawOptions
     .map((item, index) => {
@@ -509,7 +581,6 @@ function parseChallengeQuiz(text: string): ChallengeQuiz | null {
     ? value.feedback as Record<string, unknown>
     : {};
   return {
-    title: stringField(value.title) || "Challenge Quiz",
     knowledgeType: stringField(value.knowledge_type ?? value.knowledgeType) || "mixed",
     challengeType: stringField(value.challenge_type ?? value.challengeType) || "diagnostic",
     question: stringField(value.question),
@@ -524,9 +595,79 @@ function parseChallengeQuiz(text: string): ChallengeQuiz | null {
   };
 }
 
+function parseChallengeJson(raw: string): unknown {
+  const repaired = escapeInvalidJsonStringCharacters(raw);
+  if (repaired !== raw) {
+    try {
+      return JSON.parse(repaired);
+    } catch {
+      // Fall through to the raw parse path. Some non-LaTeX JSON escapes are still valid as-is.
+    }
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function escapeInvalidJsonStringCharacters(input: string) {
+  let output = "";
+  let inString = false;
+  const structuralEscapes = new Set(['"', "\\", "/"]);
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input.charAt(index);
+    if (!inString) {
+      if (char === "\"") inString = true;
+      output += char;
+      continue;
+    }
+    if (char === "\\") {
+      const next = input.charAt(index + 1);
+      if (structuralEscapes.has(next)) {
+        output += char + next;
+        index += 1;
+      } else if (next === "u" && isJsonUnicodeEscape(input, index + 2)) {
+        output += input.slice(index, index + 6);
+        index += 5;
+      } else {
+        output += "\\\\";
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = false;
+      output += char;
+      continue;
+    }
+    if (char === "\n") {
+      output += "\\n";
+      continue;
+    }
+    if (char === "\r") {
+      output += "\\r";
+      continue;
+    }
+    if (char === "\t") {
+      output += "\\t";
+      continue;
+    }
+    output += char;
+  }
+  return output;
+}
+
+function isJsonUnicodeEscape(input: string, start: number) {
+  return /^[0-9a-fA-F]{4}$/.test(input.slice(start, start + 4));
+}
+
 function looksLikeChallengeQuizText(text: string) {
   const value = text.trim();
   return value.startsWith("{") || value.startsWith("```json") || value.includes("synchropage.challenge_quiz.v1");
+}
+
+function containsChallengeQuizMarker(text: string) {
+  return text.includes("synchropage.challenge_quiz.v1");
 }
 
 function extractJsonObjectText(text: string) {
@@ -547,6 +688,15 @@ function normalizeOptionId(value: unknown, fallback: string) {
 
 function stringField(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeChallengeCount(value: number) {
+  const rounded = Math.round(value);
+  if (!Number.isFinite(rounded)) return DEFAULT_CHALLENGE_COUNT;
+  if (rounded <= 1) return 1;
+  if (rounded <= 3) return 3;
+  if (rounded <= 5) return 5;
+  return 10;
 }
 
 function assistantContentText(content: unknown[]): string {

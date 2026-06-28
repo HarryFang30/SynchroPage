@@ -388,12 +388,15 @@ export type AppCopy = {
     challengeModeDiagnostic: string;
     challengeAction: string;
     challengeAria: string;
-    challengeUserMessage: string;
+    challengeUserMessage: (count: number) => string;
+    challengeCountLabel: string;
     challengeCorrect: string;
     challengeIncorrect: string;
     challengeAnswerLabel: string;
     challengeFollowUpLabel: string;
     challengeNext: string;
+    challengeNewSet: string;
+    challengeParseFailed: string;
     quickExplainPrompt: (label: string) => string;
     quickSummarizePrompt: (label: string) => string;
     continuePrompt: string;
@@ -841,12 +844,15 @@ const zhCN: AppCopy = {
     challengeModeDiagnostic: "漏洞诊断",
     challengeAction: "生成挑战",
     challengeAria: "当前页 Challenge",
-    challengeUserMessage: "Challenge：请基于当前页生成一个漏洞诊断问题",
+    challengeUserMessage: (count) => `Challenge：请基于当前页生成 ${count} 道互动选择题，用于漏洞诊断`,
+    challengeCountLabel: "题数",
     challengeCorrect: "判断正确",
     challengeIncorrect: "再想一下",
     challengeAnswerLabel: "正确选项：",
     challengeFollowUpLabel: "追问：",
     challengeNext: "下一题",
+    challengeNewSet: "再来一组",
+    challengeParseFailed: "Challenge 题目格式解析失败，请重新生成。",
     quickExplainPrompt: (label) => `请解释这段选中内容，优先基于该来源回答：${label}`,
     quickSummarizePrompt: (label) => `请总结这段选中内容，提炼关键概念和可能的公式关系：${label}`,
     continuePrompt: "请根据上下文继续。",
@@ -1294,12 +1300,15 @@ const enUS: AppCopy = {
     challengeModeDiagnostic: "Diagnostic",
     challengeAction: "Generate",
     challengeAria: "Current-page challenge",
-    challengeUserMessage: "Challenge: generate one diagnostic question for the current page",
+    challengeUserMessage: (count) => `Challenge: generate ${count} interactive multiple-choice question${count === 1 ? "" : "s"} for current-page diagnosis`,
+    challengeCountLabel: "Count",
     challengeCorrect: "Correct",
     challengeIncorrect: "Try again",
     challengeAnswerLabel: "Answer:",
     challengeFollowUpLabel: "Follow-up:",
     challengeNext: "Next",
+    challengeNewSet: "New set",
+    challengeParseFailed: "Could not parse the Challenge quiz format. Please regenerate it.",
     quickExplainPrompt: (label) => `Please explain this selected content. Prioritize answering from this source: ${label}`,
     quickSummarizePrompt: (label) => `Please summarize this selected content, extracting key concepts and possible formula relationships: ${label}`,
     continuePrompt: "Please continue based on the context.",
