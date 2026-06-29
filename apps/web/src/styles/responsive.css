@@ -266,6 +266,11 @@
     align-items: flex-start;
   }
 
+  .settings-provider-detail {
+    max-width: 100%;
+    padding-right: 0;
+  }
+
   .settings-text-input,
   .settings-text-area,
   .settings-secret-control {

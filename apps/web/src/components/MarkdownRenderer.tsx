@@ -26,7 +26,7 @@ const expressionListMath = /(?:[A-Za-z0-9(){}_.]+|\.\.\.|…)\s*(?:,|\\to|\\righ
 const latexCommandNames = new Set([
   "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon", "Phi", "Psi", "Omega",
   "Leftarrow", "Rightarrow", "Leftrightarrow",
-  "alpha", "approx", "arg", "bar", "begin", "beta", "bmod", "bmatrix", "binom", "cap", "cases",
+  "alpha", "approx", "arg", "bar", "begin", "beta", "bmod", "bmatrix", "binom", "boldsymbol", "cap", "cases",
   "cdot", "cdots", "chi", "choose", "cos", "cup", "delta", "dfrac", "div", "dot", "dots", "ddot",
   "end", "epsilon", "equiv", "eta", "exists", "exp", "forall", "frac", "gamma", "ge", "geq",
   "hat", "in", "infty", "int", "iota", "kappa", "lambda", "land", "ldots", "le", "left",
@@ -57,7 +57,7 @@ function displayMathAsInline(text: string) {
   return text.replace(/\$\$([\s\S]*?)\$\$/g, (_match, body: string) => `$${body.trim()}$`);
 }
 
-function preprocessMathMarkdown(text: string) {
+export function preprocessMathMarkdown(text: string) {
   return text
     .split(/(```[\s\S]*?```)/g)
     .map((segment) => {
@@ -72,22 +72,33 @@ function preprocessMarkdownTextSegment(text: string) {
     .split(/(`[^`\n]*`)/g)
     .map((segment) => {
       if (segment.startsWith("`") && segment.endsWith("`")) return repairInlineCodeMath(segment);
-      const normalized = normalizeDisplayMathBlocks(repairDisplayMathDelimiterSpillover(
-        repairBinaryTransitionMathSpillover(repairInlineDisplayMathDelimiters(normalizeMathDelimiters(escapeCurrencyDollarsPreservingMath(repairMalformedInlineMath(repairMalformedProseMath(normalizeEscapedMarkdownNewlines(segment))))))),
-      ));
-      return normalized
+      const withNewlines = normalizeEscapedMarkdownNewlines(segment);
+      const withRepairedDollars = repairLatexDollarArtifacts(withNewlines);
+      const withProseMath = repairMalformedProseMath(withRepairedDollars);
+      const withInlineMath = repairMalformedInlineMath(withProseMath);
+      const withCurrencyEscaped = escapeCurrencyDollarsPreservingMath(withInlineMath);
+      const withOperators = normalizeInlineOperatorDisplayMath(withCurrencyEscaped);
+      const withDelimiters = normalizeMathDelimiters(withOperators);
+      const withInlineDisplayMath = repairInlineDisplayMathDelimiters(withDelimiters);
+      const withBinaryTransitions = repairBinaryTransitionMathSpillover(withInlineDisplayMath);
+      const withDisplaySpillover = repairDisplayMathDelimiterSpillover(withBinaryTransitions);
+      const withOperatorTails = repairInlineOperatorMathTails(withDisplaySpillover);
+      const normalized = normalizeDisplayMathBlocks(withOperatorTails);
+      const rendered = normalized
         .split(markdownMathSpan)
         .map((part) => {
           if (part.startsWith("$")) return sanitizeMathMarkdownSegment(part);
           return wrapBareCircuitMath(wrapBareLatexMath(part));
         })
         .join("");
+      const repaired = repairFinalMathArtifacts(unwrapProseTextCommandsOutsideMath(rendered));
+      return repairFinalMathArtifacts(wrapBareLatexMath(repaired));
     })
     .join("");
 }
 
 function normalizeEscapedMarkdownNewlines(text: string) {
-  return text.replace(/\\n(?=(?:[ \t]*(?:\$?\s*[-*+]\s|\d+[.)]\s|#{1,6}\s)|\s*$))/g, "\n");
+  return text.replace(/\\n(?=(?:[ \t]*(?:\$?\s*[-*+]\s|\d+[.)]\s|#{1,6}\s|[\u3400-\u9fff])|\\[A-Za-z]|\s*$))/g, "\n");
 }
 
 function normalizeMathDelimiters(text: string) {
@@ -96,6 +107,20 @@ function normalizeMathDelimiters(text: string) {
     .replace(inlineTag, (_match, body: string) => `$${body.trim()}$`)
     .replace(latexInlineDelimiter, (_match, body: string) => `$${body.trim()}$`)
     .replace(latexDisplayDelimiter, (_match, body: string) => `$$${body.trim()}$$`);
+}
+
+function normalizeInlineOperatorDisplayMath(text: string) {
+  return text.replace(
+    /\$\$(\\(?:cdot|in|leq|geq|neq|approx|times|to|rightarrow))\$\$+/g,
+    (_match, operator: string) => `$${operator}$`,
+  );
+}
+
+function repairInlineOperatorMathTails(text: string) {
+  return text.replace(
+    /\$\$(\\(?:cdot|in|leq|geq|neq|approx|times|to|rightarrow))\$([^$\n]{1,120}?)\$(?=[A-Za-z(\\])/g,
+    (_match, operator: string, tail: string) => `$${operator}$ ${tail.trim()} $`,
+  );
 }
 
 function repairDisplayMathDelimiterSpillover(text: string) {
@@ -204,6 +229,88 @@ function repairMalformedInlineMath(text: string) {
         return `$${normalizeLooseMathBody(`${left} ${normalizedArrow} ${right}`)}$`;
       },
     );
+}
+
+function repairLatexDollarArtifacts(text: string) {
+  return text
+    .split("\n")
+    .map((line) => hasLatexDollarArtifact(line) ? repairUnbalancedInlineMathDollars(repairDollarsInsideLatexGroups(line)) : line)
+    .join("\n");
+}
+
+function hasLatexDollarArtifact(line: string) {
+  return (
+    /\\\([^$\n]*\$/.test(line) ||
+    /_\${1,2}\s*[A-Za-z]\b/.test(line) ||
+    /\\[A-Za-z]+\{\$/.test(line) ||
+    /=\$[A-Za-z](?=\\[A-Za-z]+\{)/.test(line) ||
+    /\$[A-Za-z]+_\{?[A-Za-z0-9]+\}?[,，]\\text\{[^{}]+\}\s*\$\$/.test(line) ||
+    /\\text\{[^{}]*[\u3400-\u9fff][^{}]*\}\s*\$\$(?!\s*(?:\\to|\\rightarrow|\\in|→)\b)/.test(line) ||
+    /\$(?!\$)[^$\n]*\\[A-Za-z][^$\n]*\$\$(?=\s|$)/.test(line) ||
+    /\$\\[A-Za-z][^$\n]{0,160}(?=\s*$|[，。；:：,。)]|\.(?!\d)|\s+-\s)/.test(line)
+  );
+}
+
+function repairDollarsInsideLatexGroups(line: string) {
+  return line
+    .replace(/\\text\{([^{}]*[\u3400-\u9fff][^{}]*)\}/g, "$1")
+    .replace(/(\\[A-Za-z]+\{)\$+/g, "$1")
+    .replace(/\$+(?=\})/g, "")
+    .replace(/\$(?=[，。；:：！？、])/g, "")
+    .replace(/_\${1,2}\s*([A-Za-z])\b/g, "_{$1}")
+    .replace(/=\$([A-Za-z](?=\\[A-Za-z]+\{))/g, "=$1");
+}
+
+function repairUnbalancedInlineMathDollars(line: string) {
+  return line
+    .replace(/\$([^$\n]{1,120}?)\$\$([^$\n]{1,120}?)\$\$/g, (_match, first: string, second: string) => {
+      const body = `${first.trim()}${second.trim()}`;
+      return isLikelyInlineMathBody(body) ? `$${body}$` : `$${first}$ $${second}$`;
+    })
+    .replace(/\\\(([^$\n]{1,160}?)\$/g, (_match, body: string) => `$${body.trim()}$`)
+    .replace(/\$([^$\n]{1,160}?)\\\)/g, (_match, body: string) => `$${body.trim()}$`)
+    .replace(
+      /\$([A-Za-z]+_\{?[A-Za-z0-9]+\}?)([,，])\\text\{([^{}]+)\}\s*\$\$([^$\n]{1,180}?)\$/g,
+      (_match, first: string, punctuation: string, prose: string, second: string) => `$${first}$${punctuation}${prose} $${second.trim()}$`,
+    )
+    .replace(/(\\mathbf\{[A-Za-z]\}_\{\\text\{[A-Za-z]+\}\})\$(?=\s|[，。；:：,.])/g, "$1")
+    .replace(/\$\$([^$\n]{1,160}?)\$(?!\$)/g, (_match, body: string) => `$${body.trim()}$`)
+    .replace(/\$(?!\$)([^$\n]{1,160}?)\$\$/g, (_match, body: string) => `$${body.trim()}$`)
+    .replace(/\$\$((?:\\[A-Za-z]+|[A-Za-z])[^$\n]{0,120}?)(?=\s*$|[，。；；:：,.。)]|\s+-\s)/g, (_match, body: string) => {
+      const normalized = body.trim();
+      return isLikelyInlineMathBody(normalized) ? `$${normalized}$` : normalized;
+    })
+    .replace(/\$(\\[A-Za-z][^$\n]{0,160}?)(?=\s*$|[，。；；:：,。)]|\.(?!\d)|\s+-\s)/g, (_match, body: string) => `$${body.trim()}$`)
+    .replace(/\$([\u3400-\u9fff][^$\n]*?)\$/g, (_match, body: string) => {
+      const normalized = body.trim();
+      return /\\[A-Za-z]|[_^=+\-*/<>]|[{}]/.test(normalized) ? `$${normalized}$` : normalized;
+    });
+}
+
+function unwrapProseTextCommandsOutsideMath(text: string) {
+  return text
+    .split(markdownMathSpan)
+    .map((part) => part.startsWith("$") ? part : part.replace(/\\text\{([^{}]*[\u3400-\u9fff][^{}]*)\}/g, "$1"))
+    .join("");
+}
+
+function repairFinalMathArtifacts(text: string) {
+  return text
+    .replace(/\\text\{([^{}]*[\u3400-\u9fff][^{}]*)\}/g, "$1")
+    .replace(/\$([A-Za-z]+_\{?[A-Za-z0-9]+\}?)([,，])([^$\n]{1,40})\$\$/g, (_match, first: string, punctuation: string, prose: string) => `$${first}$${punctuation}${prose.trim()} $`)
+    .replace(/\$([^$\n]{1,120}?)\$\$([^$\n]{1,120}?)\$\$/g, (_match, first: string, second: string) => {
+      const body = `${first.trim()}${second.trim()}`;
+      return isLikelyInlineMathBody(body) ? `$${body}$` : `$${first}$ $${second}$`;
+    })
+    .replace(/_\{([^{}\n$]+)\$\}/g, "_{$1}")
+    .replace(/(\$p=[^$\n\u3400-\u9fff。,.，]+?)\$([A-Za-z]_\{?[A-Za-z0-9]+\}?)\$/g, "$1$2$")
+    .replace(/(\$[^$\n\u3400-\u9fff]{1,160}?)\$([A-Za-z]\\?[A-Za-z]*_\{?[A-Za-z0-9]+\}?)(?=\$|[\s。,.，]|$)/g, "$1$2")
+    .replace(/([\u3400-\u9fff])((?:\\[A-Za-z]+)[^$\n]{0,120})\$(?=\s|[，。；:：,.。)]|$)/g, (_match, lead: string, body: string) => `${lead} $${body.trim()}$`)
+    .replace(/(\$\\mathbf\{[A-Za-z]\}_\{\\text\{[A-Za-z]+\}\})(\s+[\u3400-\u9fff])/g, (_match, formula: string, prose: string) => `${formula}$${prose}`)
+    .replace(/\$\$([^$\n]{1,120}?)\$\s*([A-Za-z]_\{?[A-Za-z0-9]+\}?)(?=[。,.，]|$)/g, (_match, first: string, second: string) => `$${first.trim()} ${second}$`)
+    .replace(/(\$p=[^$\n。,.，]+)(?=[。,.，])/g, "$1$")
+    .replace(/(\$[^$\n]*\\[A-Za-z][^$\n]*)(?=[。])/g, "$1$")
+    .replace(/([\u3400-\u9fff])\$(?=[，。；:：！？、])/g, "$1");
 }
 
 function normalizeLooseMathBody(value: string) {
@@ -402,6 +509,8 @@ function bareLatexExpressionStart(text: string, slashIndex: number) {
   let cursor = slashIndex - 1;
   while (cursor >= 0 && " \t".includes(text[cursor])) cursor -= 1;
   if (cursor < 0 || !"=+-*/(^_".includes(text[cursor])) return slashIndex;
+  const lineStart = text.lastIndexOf("\n", cursor) + 1;
+  if (/^\s*[-*+]\s*$/.test(text.slice(lineStart, cursor + 1))) return slashIndex;
   let start = cursor;
   while (start > 0 && !"\n\r，。；：！？、".includes(text[start - 1])) {
     if ("$`".includes(text[start - 1])) break;
@@ -418,7 +527,7 @@ function bareLatexExpressionEnd(text: string, slashIndex: number) {
     cursor = tokenEnd;
     const spaceStart = cursor;
     while (cursor < text.length && " \t".includes(text[cursor])) cursor += 1;
-    if (!startsLatexMathContinuation(text, cursor)) {
+    if (!startsLatexMathContinuation(text, cursor, { afterWhitespace: cursor > spaceStart })) {
       cursor = spaceStart;
       break;
     }
@@ -427,12 +536,16 @@ function bareLatexExpressionEnd(text: string, slashIndex: number) {
   return cursor;
 }
 
-function startsLatexMathContinuation(text: string, index: number) {
+function startsLatexMathContinuation(text: string, index: number, options: { afterWhitespace?: boolean } = {}) {
   if (index >= text.length) return false;
   if (text[index] === "\\") {
     const match = /\\[A-Za-z]+/.exec(text.slice(index));
     return Boolean(match && latexCommandNames.has(match[0].slice(1)));
   }
+  if (options.afterWhitespace && text[index] === "(") return false;
+  if (options.afterWhitespace && text[index] === "-" && /\s/.test(text[index + 1] || "")) return false;
+  if (options.afterWhitespace && text[index] === "*") return false;
+  if (/[A-Za-z]/.test(text[index])) return true;
   return "{}()+-*/=^_[]<>|,.".includes(text[index]) || /\d/.test(text[index]);
 }
 
@@ -457,6 +570,11 @@ function consumeLatexMathToken(text: string, index: number) {
   if (/\d/.test(text[index])) {
     let cursor = index + 1;
     while (cursor < text.length && /[0-9.eE+-]/.test(text[cursor])) cursor += 1;
+    return cursor;
+  }
+  if (/[A-Za-z]/.test(text[index])) {
+    let cursor = index + 1;
+    while (cursor < text.length && /[A-Za-z0-9]/.test(text[cursor])) cursor += 1;
     return cursor;
   }
   if ("()+-*/=^_[]<>|,.".includes(text[index])) return index + 1;

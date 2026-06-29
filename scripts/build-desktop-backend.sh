@@ -36,6 +36,7 @@ PYTHONPATH="$ROOT_DIR/src" "$PYTHON_BIN" -m PyInstaller \
   --onedir \
   --name "$BACKEND_NAME" \
   --paths "$ROOT_DIR/src" \
+  --add-data "$ROOT_DIR/src/pdf_agent/provider_registry/data:pdf_agent/provider_registry/data" \
   --distpath "$DIST_DIR" \
   --workpath "$BUILD_DIR/work" \
   --specpath "$BUILD_DIR/spec" \

@@ -43,6 +43,7 @@ import {
   extractPdfPagesFromBlob,
   mergePdfContextPages,
   type PdfContextPage,
+  type PdfPageExtractionOptions,
 } from "../lib/pdf/textExtraction";
 import {
   createDraftPagePack,
@@ -75,6 +76,11 @@ import {
 
 const TEACHING_PAGE_REQUEST_TIMEOUT_MS = 120_000;
 const TEACHING_BATCH_REQUEST_TIMEOUT_MS = 150_000;
+const TEACHING_BATCH_STALL_TIMEOUT_MS = 35_000;
+const PDF_FETCH_TIMEOUT_MS = 30_000;
+const PDF_TEXT_EXTRACTION_BASE_TIMEOUT_MS = 45_000;
+const PDF_TEXT_EXTRACTION_PER_PAGE_TIMEOUT_MS = 2_000;
+const PDF_TEXT_EXTRACTION_MAX_TIMEOUT_MS = 240_000;
 const TEACHING_PAGE_MAX_ATTEMPTS = 3;
 const TEACHING_PAGE_RETRY_DELAYS_MS = [1_000, 3_000] as const;
 const TEACHING_RATE_LIMIT_EXTRA_COOLDOWN_MS = 8_000;
@@ -82,6 +88,9 @@ const TEACHING_RATE_LIMIT_EXTRA_JITTER_MS = 4_000;
 
 type GenerationRequestWatchdogOptions = {
   timeoutMessage?: string;
+  stallMs?: number;
+  stallMessage?: string;
+  onStall?: () => void;
 };
 
 export interface GenerationEngineParams {
@@ -189,6 +198,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
         });
         const persistQueue = createPersistenceQueue(persistPage);
         const commitGeneratedPage = (generatedPage: PageData) => {
+          if (generationSignal.aborted) return;
           workingPack = mergePageIntoPack(workingPack, generatedPage);
           workingPagesByNumber.set(generatedPage.page_no, generatedPage);
           p.setPack(workingPack);
@@ -311,6 +321,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               requestGeneratedPage,
               commitGeneratedPage,
               markRetryingPage: (page, attempt, totalAttempts) => {
+                if (generationSignal.aborted) return;
                 const retryingPage = buildRetryingPageData(page, pageOutputLanguage);
                 workingPack = mergePageIntoPack(workingPack, retryingPage);
                 workingPagesByNumber.set(pageNo, retryingPage);
@@ -318,6 +329,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 p.setJobStatus(p.copy.status.generationPageRetrying(pageNo, attempt, totalAttempts));
               },
               commitFailedPage: (failedPage) => {
+                if (generationSignal.aborted) return;
                 workingPack = mergePageIntoPack(workingPack, failedPage);
                 workingPagesByNumber.set(pageNo, failedPage);
                 p.setPack(workingPack);
@@ -338,6 +350,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             try {
               const documentFile = await getDocumentFileForPlan(pageBatch.plan);
               const priority = teachingModelRequestPriority(runningPages, p.currentPdfPageNo, "now", "next");
+              const batchStallMs = generationBatchStallTimeoutMs();
               const response = await runTeachingModelRequest(() =>
                 runGenerationRequestWithTimeout(generationSignal, TEACHING_BATCH_REQUEST_TIMEOUT_MS, (requestSignal) =>
                   requestJson<GeneratedTeachingPagesResponse>(
@@ -365,6 +378,9 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                     p.copy.errors.accountNotFound,
                   ),
                 {
+                  stallMs: batchStallMs,
+                  stallMessage: p.copy.errors.generationBatchRequestStalled(timeoutSeconds(batchStallMs)),
+                  onStall: () => p.setJobStatus(p.copy.errors.generationBatchRequestStalled(timeoutSeconds(batchStallMs))),
                   timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_BATCH_REQUEST_TIMEOUT_MS)),
                 }),
                 { priority, signal: generationSignal },
@@ -389,6 +405,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                   retryPages.push({ runningPage, retryPlan, fallback: generatedPage });
                   continue;
                 }
+                if (generationSignal.aborted) return;
                 workingPack = mergePageIntoPack(workingPack, generatedPage);
                 workingPagesByNumber.set(generatedPage.page_no, generatedPage);
                 completed += 1;
@@ -409,24 +426,22 @@ export function useGenerationEngine(p: GenerationEngineParams) {
 
         if (p.pdfUrl && missingTargetSourceText.length) {
           p.setJobStatus(p.copy.status.pdfTextExtracting(targetPageNumbers.length - missingTargetSourceText.length, targetPageNumbers.length));
-          const pdfBlob = await fetch(p.pdfUrl)
-            .then((response) => {
-              if (!response.ok) throw new Error(response.statusText || p.copy.agent.generationFailed);
-              return response.blob();
-            })
-            .catch(() => null);
+          const pdfBlob = await fetchPdfBlobForGeneration(p.pdfUrl, generationSignal, p.copy).catch(() => null);
           if (pdfBlob && missingTargetSourceText.length > TEACHING_PROJECT_WARMUP_PAGE_COUNT) {
             const warmupPageNumbers = teachingWarmupPageNumbers(totalPages, p.currentPdfPageNo, targetPageNumbers);
             const warmupPageSet = new Set(warmupPageNumbers);
             const warmupExtractionPageNumbers = teachingExtractionPageNumbers(totalPages, warmupPageNumbers)
               .filter((pageNo) => !sourceTextByPage.has(pageNo));
             const warmupExtracted = warmupExtractionPageNumbers.length
-              ? await extractPdfPagesFromBlob(pdfBlob, {
+              ? await extractPdfPagesForGeneration(pdfBlob, {
                   priorityPageNumbers: warmupPageNumbers,
                   pageNumbers: warmupExtractionPageNumbers,
                   shouldCancel: () => generationSignal.aborted,
                   concurrency: PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
-                }).catch(() => null)
+                }, generationSignal).catch(() => {
+                  if (!generationSignal.aborted) p.setJobStatus(p.copy.status.pdfTextExtractionFallback);
+                  return null;
+                })
               : null;
             if (warmupExtracted?.pages.length) mergeExtractedPages(warmupExtracted.pages);
             if (generationSignal.aborted) return;
@@ -434,12 +449,15 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             const remainingExtractionPageNumbers = teachingExtractionPageNumbers(totalPages, targetPageNumbers)
               .filter((pageNo) => !sourceTextByPage.has(pageNo));
             const remainingExtractionPromise = remainingExtractionPageNumbers.length
-              ? extractPdfPagesFromBlob(pdfBlob, {
+              ? extractPdfPagesForGeneration(pdfBlob, {
                   priorityPageNumbers: [p.currentPdfPageNo, ...targetPageNumbers],
                   pageNumbers: remainingExtractionPageNumbers,
                   shouldCancel: () => generationSignal.aborted,
                   concurrency: PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
-                }).catch(() => null)
+                }, generationSignal).catch(() => {
+                  if (!generationSignal.aborted) p.setJobStatus(p.copy.status.pdfTextExtractionFallback);
+                  return null;
+                })
               : Promise.resolve(null);
             void remainingExtractionPromise.catch(() => undefined);
 
@@ -457,12 +475,15 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             );
             await runGenerationPass(remainingPagesToGenerate, extractedPagesForGeneration);
           } else if (pdfBlob) {
-            const extracted = await extractPdfPagesFromBlob(pdfBlob, {
+            const extracted = await extractPdfPagesForGeneration(pdfBlob, {
               priorityPageNumbers: targetPageNumbers,
               pageNumbers: teachingExtractionPageNumbers(totalPages, targetPageNumbers),
               shouldCancel: () => generationSignal.aborted,
               concurrency: PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
-            }).catch(() => null);
+            }, generationSignal).catch(() => {
+              if (!generationSignal.aborted) p.setJobStatus(p.copy.status.pdfTextExtractionFallback);
+              return null;
+            });
             if (extracted?.pages.length) mergeExtractedPages(extracted.pages);
             if (generationSignal.aborted) return;
             await runGenerationPass(pagesToGenerate, extractedPagesForGeneration);
@@ -479,6 +500,12 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           await p.refreshDocumentItems(p.workspaceId, p.documentId, p.activeProjectId);
         }
         p.setJobStatus(p.copy.status.generationDone(completed, scopedPages.length, skippedPages));
+      } catch (error) {
+        if (generationSignal.aborted || (error as Error).name === "AbortError") return;
+        const message = generationErrorMessage(error, p.copy);
+        workingPack = failActiveGenerationPages(workingPack, message, pageOutputLanguage, p.copy);
+        p.setPack(workingPack);
+        p.setJobStatus(message);
       } finally {
         if (p.generationAbortControllerRef.current === generationAbortController) {
           p.generationAbortControllerRef.current = null;
@@ -601,11 +628,14 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 pageCount: Math.max(p.pdfPageCount || p.pack.document.page_count || item.pageCount || p.pdfExtractedPages.length, 1),
                 pages: p.pdfExtractedPages,
               }
-            : await extractPdfPagesFromBlob(pdfBlob, {
+            : await extractPdfPagesForGeneration(pdfBlob, {
                 priorityPageNumbers: [item.currentPdfPageNumber || 1, ...targetPageNumbers, ...warmupPageNumbers],
                 pageNumbers: selectiveExtractionPageNumbers,
                 shouldCancel: () => generationSignal.aborted,
                 concurrency: PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
+              }, generationSignal).catch(() => {
+                if (!generationSignal.aborted) p.setJobStatus(p.copy.status.pdfTextExtractionFallback);
+                return { pageCount: knownPageCount, pages: [] as PdfContextPage[] };
               });
           if (generationSignal.aborted) return;
           let totalPages = Math.max(extracted.pageCount, bundle.document.pageCount || 0, bundle.generatedPages.length, 1);
@@ -664,6 +694,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           const persistQueue = createPersistenceQueue(persistPage);
 
           const commitGeneratedPage = (generatedPage: PageData) => {
+            if (generationSignal.aborted) return;
             workingPack = mergePageIntoPack(workingPack, generatedPage);
             workingPagesByNumber.set(generatedPage.page_no, generatedPage);
             completedTotal += 1;
@@ -783,6 +814,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 requestGeneratedPage,
                 commitGeneratedPage,
                 markRetryingPage: (page, attempt, totalAttempts) => {
+                  if (generationSignal.aborted) return;
                   const retryingPage = buildRetryingPageData(page, p.teachingOutputLanguage);
                   workingPack = mergePageIntoPack(workingPack, retryingPage);
                   workingPagesByNumber.set(pageNo, retryingPage);
@@ -790,6 +822,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                   p.setJobStatus(`${p.copy.status.generationBatchDocument(index + 1, projectDocumentItems.length, item.title || "")} · ${p.copy.status.generationPageRetrying(pageNo, attempt, totalAttempts)}`);
                 },
                 commitFailedPage: (failedPage) => {
+                  if (generationSignal.aborted) return;
                   workingPack = mergePageIntoPack(workingPack, failedPage);
                   workingPagesByNumber.set(pageNo, failedPage);
                   if (item.documentId === _documentId) p.setPack(workingPack);
@@ -812,6 +845,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 const priority = item.documentId === _documentId
                   ? teachingModelRequestPriority(runningPages, p.currentPdfPageNo, "next", "later")
                   : "later";
+                const batchStallMs = generationBatchStallTimeoutMs();
                 const response = await runTeachingModelRequest(() =>
                   runGenerationRequestWithTimeout(generationSignal, TEACHING_BATCH_REQUEST_TIMEOUT_MS, (requestSignal) =>
                     requestJson<GeneratedTeachingPagesResponse>(
@@ -839,6 +873,9 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                       p.copy.errors.accountNotFound,
                     ),
                   {
+                    stallMs: batchStallMs,
+                    stallMessage: p.copy.errors.generationBatchRequestStalled(timeoutSeconds(batchStallMs)),
+                    onStall: () => p.setJobStatus(p.copy.errors.generationBatchRequestStalled(timeoutSeconds(batchStallMs))),
                     timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_BATCH_REQUEST_TIMEOUT_MS)),
                   }),
                   { priority, signal: generationSignal },
@@ -863,6 +900,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                     retryPages.push({ runningPage, retryPlan, fallback: generatedPage });
                     continue;
                   }
+                  if (generationSignal.aborted) return;
                   workingPack = mergePageIntoPack(workingPack, generatedPage);
                   workingPagesByNumber.set(generatedPage.page_no, generatedPage);
                   completedTotal += 1;
@@ -889,11 +927,14 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             const remainingExtractionPageNumbers = teachingExtractionPageNumbers(totalPages, remainingInitialTargetPageNumbers)
               .filter((pageNo) => !sourceTextByPage.has(pageNo));
             const remainingExtractionPromise = remainingExtractionPageNumbers.length
-              ? extractPdfPagesFromBlob(pdfBlob, {
+              ? extractPdfPagesForGeneration(pdfBlob, {
                   priorityPageNumbers: [item.currentPdfPageNumber || 1, ...remainingInitialTargetPageNumbers],
                   pageNumbers: remainingExtractionPageNumbers,
                   shouldCancel: () => generationSignal.aborted,
                   concurrency: PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
+                }, generationSignal).catch(() => {
+                  if (!generationSignal.aborted) p.setJobStatus(p.copy.status.pdfTextExtractionFallback);
+                  return { pageCount: totalPages, pages: [] as PdfContextPage[] };
                 })
               : Promise.resolve({ pageCount: totalPages, pages: [] as PdfContextPage[] });
             void remainingExtractionPromise.catch(() => undefined);
@@ -932,7 +973,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
         p.setJobStatus(p.copy.status.generationBatchDone(completedTotal, checkedTotal || estimatedPages, processedDocuments, skippedTotal));
       } catch (error) {
         if (generationSignal.aborted || (error as Error).name === "AbortError") return;
-        p.setJobStatus((error as Error).message || p.copy.agent.generationFailed);
+        p.setJobStatus(generationErrorMessage(error, p.copy));
       } finally {
         if (p.generationAbortControllerRef.current === generationAbortController) {
           p.generationAbortControllerRef.current = null;
@@ -1054,6 +1095,26 @@ function generationFailureMessage(page: PageData) {
   return page.teaching.speaker_notes_md.replace(/^## .+?\n\n/s, "").trim() || "Generation failed";
 }
 
+function generationErrorMessage(error: unknown, copy: AppCopy) {
+  const message = (error as Error | null)?.message || String(error || "");
+  return message.trim() || copy.agent.generationFailed;
+}
+
+function failActiveGenerationPages(
+  pack: PagePack,
+  message: string,
+  outputLanguage: TeachingOutputLanguage,
+  copy: AppCopy,
+): PagePack {
+  return {
+    ...pack,
+    pages: pack.pages.map((page) => {
+      if (page.status !== "running" && page.status !== "retrying") return page;
+      return buildFailedPageData(page, message, outputLanguage, copy);
+    }),
+  };
+}
+
 async function waitBeforeTeachingRetry(attempt: number, error: unknown, signal: AbortSignal) {
   const baseDelay = TEACHING_PAGE_RETRY_DELAYS_MS[Math.min(Math.max(attempt - 1, 0), TEACHING_PAGE_RETRY_DELAYS_MS.length - 1)];
   const rateLimitDelay = isRateLimitGenerationError(error)
@@ -1103,6 +1164,38 @@ function abortableDelay(ms: number, signal: AbortSignal) {
   });
 }
 
+async function fetchPdfBlobForGeneration(pdfUrl: string, signal: AbortSignal, copy: AppCopy) {
+  const response = await runGenerationRequestWithTimeout(
+    signal,
+    PDF_FETCH_TIMEOUT_MS,
+    (requestSignal) => fetch(pdfUrl, { signal: requestSignal }),
+    { timeoutMessage: copy.errors.generationRequestTimedOut(timeoutSeconds(PDF_FETCH_TIMEOUT_MS)) },
+  );
+  if (!response.ok) throw new Error(response.statusText || copy.agent.generationFailed);
+  return runGenerationRequestWithTimeout(
+    signal,
+    PDF_FETCH_TIMEOUT_MS,
+    () => response.blob(),
+    { timeoutMessage: copy.errors.generationRequestTimedOut(timeoutSeconds(PDF_FETCH_TIMEOUT_MS)) },
+  );
+}
+
+async function extractPdfPagesForGeneration(
+  blob: Blob,
+  options: PdfPageExtractionOptions,
+  signal: AbortSignal,
+) {
+  const timeoutMs = pdfExtractionTimeoutMs(options.pageNumbers || options.priorityPageNumbers);
+  return runGenerationRequestWithTimeout(
+    signal,
+    timeoutMs,
+    (requestSignal) => extractPdfPagesFromBlob(blob, {
+      ...options,
+      shouldCancel: () => signal.aborted || requestSignal.aborted || Boolean(options.shouldCancel?.()),
+    }),
+  );
+}
+
 async function runGenerationRequestWithTimeout<T>(
   parentSignal: AbortSignal,
   timeoutMs: number,
@@ -1112,23 +1205,69 @@ async function runGenerationRequestWithTimeout<T>(
   if (parentSignal.aborted) throw createAbortError();
 
   const controller = new AbortController();
-  let timedOut = false;
-  const timer = window.setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  const abortFromParent = () => controller.abort(parentSignal.reason);
-  parentSignal.addEventListener("abort", abortFromParent, { once: true });
+  const timeoutError = createGenerationTimeoutError(timeoutMs, options.timeoutMessage);
+  const stallMs = options.stallMs && options.stallMs > 0 && options.stallMs < timeoutMs ? options.stallMs : 0;
+  const stallError = stallMs ? createGenerationStalledError(stallMs, options.stallMessage) : null;
+  let timeoutTimer: number | null = null;
+  let stallTimer: number | null = null;
+  let abortFromParent: (() => void) | null = null;
+
+  const runPromise = Promise.resolve().then(() => run(controller.signal));
+  const abortRace = new Promise<never>((_resolve, reject) => {
+    abortFromParent = () => {
+      controller.abort(parentSignal.reason);
+      reject(createAbortError());
+    };
+    parentSignal.addEventListener("abort", abortFromParent, { once: true });
+  });
+  const timeoutRace = new Promise<never>((_resolve, reject) => {
+    timeoutTimer = window.setTimeout(() => {
+      controller.abort();
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+  const races: Array<Promise<T> | Promise<never>> = [runPromise, abortRace, timeoutRace];
+  if (stallError && stallMs) {
+    races.push(new Promise<never>((_resolve, reject) => {
+      stallTimer = window.setTimeout(() => {
+        options.onStall?.();
+        controller.abort();
+        reject(stallError);
+      }, stallMs);
+    }));
+  }
 
   try {
-    return await run(controller.signal);
-  } catch (error) {
-    if (timedOut) throw createGenerationTimeoutError(timeoutMs, options.timeoutMessage);
-    throw error;
+    return await Promise.race(races);
   } finally {
-    window.clearTimeout(timer);
-    parentSignal.removeEventListener("abort", abortFromParent);
+    runPromise.catch(() => undefined);
+    if (timeoutTimer !== null) window.clearTimeout(timeoutTimer);
+    if (stallTimer !== null) window.clearTimeout(stallTimer);
+    if (abortFromParent) parentSignal.removeEventListener("abort", abortFromParent);
   }
+}
+
+function createGenerationStalledError(timeoutMs: number, message?: string) {
+  const seconds = timeoutSeconds(timeoutMs);
+  const error = new Error(message || `讲解生成超过 ${seconds} 秒没有响应，已自动切换重试。`);
+  error.name = "GenerationStalledError";
+  return error;
+}
+
+function generationBatchStallTimeoutMs() {
+  const override = typeof window === "undefined"
+    ? NaN
+    : Number((window as Window & { __SYNCHROPAGE_GENERATION_BATCH_STALL_TIMEOUT_MS?: unknown }).__SYNCHROPAGE_GENERATION_BATCH_STALL_TIMEOUT_MS);
+  if (Number.isFinite(override) && override > 0) return Math.max(100, Math.floor(override));
+  return TEACHING_BATCH_STALL_TIMEOUT_MS;
+}
+
+function pdfExtractionTimeoutMs(pageNumbers?: number[]) {
+  const pageCount = Math.max(1, pageNumbers?.length || 1);
+  return Math.min(
+    PDF_TEXT_EXTRACTION_MAX_TIMEOUT_MS,
+    PDF_TEXT_EXTRACTION_BASE_TIMEOUT_MS + pageCount * PDF_TEXT_EXTRACTION_PER_PAGE_TIMEOUT_MS,
+  );
 }
 
 function createGenerationTimeoutError(timeoutMs: number, message?: string) {

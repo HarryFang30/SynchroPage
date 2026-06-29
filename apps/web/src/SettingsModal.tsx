@@ -2,8 +2,10 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Bot,
   Box,
+  CheckCircle2,
   Cloud,
   Database,
+  ExternalLink,
   FileText,
   FolderOpen,
   KeyRound,
@@ -12,14 +14,17 @@ import {
   RefreshCcw,
   RefreshCw,
   RotateCcw,
+  Search,
   Settings2,
+  ShieldCheck,
   Trash2,
   UserCircle,
   Wrench,
   X,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { getAppCopy } from "./i18n";
+import { requestJson } from "./lib/http/requestJson";
 import type { ModelApiConfig, ModelApiProvider, ModelRef, UiPreferences } from "./settings";
 
 type OAuthMode = "unknown" | "ready" | "connected" | "polling" | "offline" | "mock";
@@ -46,6 +51,19 @@ type ConfirmAction = {
   onConfirm: () => void;
 };
 
+type CatalogModelDetail = {
+  id: string;
+  apiModelId: string;
+  name: string;
+  family?: string;
+  ownedBy?: string;
+  capabilities?: string[];
+  inputModalities?: string[];
+  outputModalities?: string[];
+  contextWindow?: number | null;
+  maxOutputTokens?: number | null;
+};
+
 type SettingsModalProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -58,6 +76,7 @@ type SettingsModalProps = {
   onModelApiConfigChange: (next: ModelApiConfig | ((current: ModelApiConfig) => ModelApiConfig)) => void;
   onSaveModelApiConfig: (config?: ModelApiConfig) => Promise<ModelApiConfig>;
   onFetchProviderModels: (provider: ModelApiProvider) => Promise<string[]>;
+  onCheckProviderModel: (provider: ModelApiProvider, model: string) => Promise<{ ok?: boolean; endpoint?: string; model?: string; text?: string }>;
   onResetLayout: () => void;
   onResetPreferences: () => void;
   onConnectOAuth: () => void;
@@ -169,6 +188,7 @@ export function SettingsModal(props: SettingsModalProps) {
                   onChange={props.onModelApiConfigChange}
                   onSave={props.onSaveModelApiConfig}
                   onFetchModels={props.onFetchProviderModels}
+                  onCheckModel={props.onCheckProviderModel}
                 />
               )}
 
@@ -533,13 +553,49 @@ function ProviderSettingsPanel(props: {
   onChange: (next: ModelApiConfig | ((current: ModelApiConfig) => ModelApiConfig)) => void;
   onSave: (config?: ModelApiConfig) => Promise<ModelApiConfig>;
   onFetchModels: (provider: ModelApiProvider) => Promise<string[]>;
+  onCheckModel: (provider: ModelApiProvider, model: string) => Promise<{ ok?: boolean; endpoint?: string; model?: string; text?: string }>;
 }) {
   const [selectedProviderId, setSelectedProviderId] = useState(props.config.selectedProviderId);
   const [panelStatus, setPanelStatus] = useState("");
+  const [providerSearch, setProviderSearch] = useState("");
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [catalogModels, setCatalogModels] = useState<CatalogModelDetail[]>([]);
+  const [catalogStatus, setCatalogStatus] = useState("");
   const selectedProvider =
     props.config.providers.find((provider) => provider.id === selectedProviderId) ||
     props.config.providers.find((provider) => provider.id === props.config.selectedProviderId) ||
     props.config.providers[0];
+  const filteredProviders = props.config.providers.filter((provider) => {
+    const query = providerSearch.trim().toLowerCase();
+    if (!query) return true;
+    return `${provider.name} ${provider.id} ${provider.description || ""}`.toLowerCase().includes(query);
+  });
+
+  useEffect(() => {
+    if (!selectedProvider) return;
+    let canceled = false;
+    const params = new URLSearchParams({
+      providerId: selectedProvider.id,
+      limit: "8",
+    });
+    if (catalogSearch.trim()) params.set("q", catalogSearch.trim());
+    setCatalogStatus("Loading catalog models...");
+    requestJson<{ models?: CatalogModelDetail[] }>(`/api/model-catalog/models?${params.toString()}`)
+      .then((result) => {
+        if (canceled) return;
+        const models = result.models || [];
+        setCatalogModels(models);
+        setCatalogStatus(models.length ? `${models.length} catalog models` : "No catalog models");
+      })
+      .catch((error) => {
+        if (canceled) return;
+        setCatalogModels([]);
+        setCatalogStatus((error as Error).message || "Catalog model load failed");
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [selectedProvider?.id, catalogSearch]);
 
   const updateProvider = (patch: Partial<ModelApiProvider>) => {
     if (!selectedProvider) return;
@@ -554,8 +610,12 @@ function ProviderSettingsPanel(props: {
     const provider: ModelApiProvider = {
       id,
       name: "Custom Provider",
-      type: "openai-compatible",
-      apiHost: "https://api.example.com",
+      type: "openai-chat-completions",
+      defaultChatEndpoint: "openai-chat-completions",
+      endpointConfigs: {
+        "openai-chat-completions": { baseUrl: "https://api.example.com/v1", adapterFamily: "openai-compatible" },
+      },
+      apiHost: "https://api.example.com/v1",
       apiKeyRequired: true,
       enabled: false,
       models: ["custom-model"],
@@ -568,7 +628,7 @@ function ProviderSettingsPanel(props: {
     setSelectedProviderId(id);
   };
   const removeProvider = () => {
-    if (!selectedProvider || selectedProvider.type === "codex-oauth") return;
+    if (!selectedProvider || selectedProvider.type === "codex-oauth" || selectedProvider.catalog?.source) return;
     props.onChange((current) => {
       const providers = current.providers.filter((provider) => provider.id !== selectedProvider.id);
       const nextProviderId = providers[0]?.id || "codex_oauth";
@@ -600,8 +660,24 @@ function ProviderSettingsPanel(props: {
       setPanelStatus((error as Error).message || "Save failed");
     }
   };
+  const checkModel = async () => {
+    if (!selectedProvider) return;
+    const model = selectedProvider.models[0] || "";
+    setPanelStatus("Checking provider...");
+    try {
+      const result = await props.onCheckModel(selectedProvider, model);
+      setPanelStatus(`Check passed${result.text ? ` · ${result.text.slice(0, 80)}` : ""}`);
+    } catch (error) {
+      setPanelStatus((error as Error).message || "Provider check failed");
+    }
+  };
+  const addCatalogModel = (modelId: string) => {
+    if (!selectedProvider || !modelId || selectedProvider.models.includes(modelId)) return;
+    updateProvider({ models: [...selectedProvider.models, modelId] });
+  };
 
   if (!selectedProvider) return null;
+  const selectedEndpoint = selectedProvider.defaultChatEndpoint || selectedProvider.type;
   return (
     <div className="settings-provider-panel">
       <div className="settings-provider-list">
@@ -611,8 +687,16 @@ function ProviderSettingsPanel(props: {
             <Plus />
           </SettingsIconButton>
         </div>
+        <div className="settings-provider-search">
+          <Search />
+          <input
+            value={providerSearch}
+            onChange={(event) => setProviderSearch(event.target.value)}
+            placeholder="Search providers"
+          />
+        </div>
         <div className="settings-provider-list-items">
-          {props.config.providers.map((provider) => (
+          {filteredProviders.map((provider) => (
             <button
               key={provider.id}
               type="button"
@@ -625,7 +709,7 @@ function ProviderSettingsPanel(props: {
               <span className="settings-provider-avatar">{provider.name.slice(0, 1).toUpperCase()}</span>
               <span>
                 <strong>{provider.name}</strong>
-                <small>{provider.enabled ? "Enabled" : "Disabled"}</small>
+                <small>{provider.enabled ? "Enabled" : "Disabled"} · {provider.models.length} models</small>
               </span>
             </button>
           ))}
@@ -637,6 +721,12 @@ function ProviderSettingsPanel(props: {
           <div>
             <h3>{selectedProvider.name}</h3>
             <p>{providerPreviewUrl(selectedProvider)}</p>
+            <div className="settings-provider-chips">
+              <span>{endpointLabel(selectedEndpoint)}</span>
+              {selectedProvider.catalog?.source && <span>Cherry catalog</span>}
+              <span>{selectedProvider.models.length} models</span>
+              <span className={providerSecurityClass(selectedProvider)}><ShieldCheck /> {providerSecurityLabel(selectedProvider)}</span>
+            </div>
           </div>
           <SettingsSwitch checked={selectedProvider.enabled} onCheckedChange={(enabled) => updateProvider({ enabled })} />
         </div>
@@ -645,18 +735,19 @@ function ProviderSettingsPanel(props: {
           <SettingsRow label="Provider name" description="Shown in model selectors and request status.">
             <SettingsTextInput value={selectedProvider.name} onChange={(name) => updateProvider({ name })} />
           </SettingsRow>
-          <SettingsRow label="API type" description="Use Chat Completions for most OpenAI-compatible providers.">
+          <SettingsRow label="Endpoint" description="Primary protocol for chat and generation requests.">
             <SettingsSelect
-              value={selectedProvider.type}
-              onChange={(type) => updateProvider({
-                type: type as ModelApiProvider["type"],
-                apiKeyRequired: type !== "codex-oauth",
-              })}
-              options={[
-                ["codex-oauth", "OpenAI OAuth"],
-                ["openai-compatible", "OpenAI-compatible Chat"],
-                ["openai-responses", "OpenAI Responses"],
-              ]}
+              value={selectedEndpoint}
+              onChange={(type) => {
+                const endpoint = type as ModelApiProvider["type"];
+                updateProvider({
+                  type: endpoint,
+                  defaultChatEndpoint: endpoint,
+                  apiHost: selectedProvider.endpointConfigs?.[endpoint]?.baseUrl || selectedProvider.apiHost,
+                  apiKeyRequired: providerNeedsApiKey(selectedProvider, endpoint),
+                });
+              }}
+              options={providerEndpointOptions(selectedProvider)}
             />
           </SettingsRow>
           <SettingsRow label="API Key" description={selectedProvider.hasApiKey ? "A key is saved on the backend. Leave blank to keep it." : "Stored by the local backend model config."}>
@@ -672,12 +763,70 @@ function ProviderSettingsPanel(props: {
               />
             </div>
           </SettingsRow>
+          {selectedProvider.websites?.apiKey && (
+            <SettingsRow label="Provider links" description={selectedProvider.websites.official || selectedProvider.id}>
+              <div className="settings-inline-actions">
+                <a className="settings-link-button" href={selectedProvider.websites.apiKey} target="_blank" rel="noreferrer">
+                  <KeyRound />
+                  API keys
+                  <ExternalLink />
+                </a>
+                {selectedProvider.websites.docs && (
+                  <a className="settings-link-button" href={selectedProvider.websites.docs} target="_blank" rel="noreferrer">
+                    Docs
+                    <ExternalLink />
+                  </a>
+                )}
+                {selectedProvider.websites.models && (
+                  <a className="settings-link-button" href={selectedProvider.websites.models} target="_blank" rel="noreferrer">
+                    Models
+                    <ExternalLink />
+                  </a>
+                )}
+              </div>
+            </SettingsRow>
+          )}
           <SettingsRow label="API Host" description="Preview follows the selected API type.">
             <SettingsTextInput
               value={selectedProvider.apiHost}
               onChange={(apiHost) => updateProvider({ apiHost })}
               disabled={selectedProvider.type === "codex-oauth"}
             />
+          </SettingsRow>
+          <SettingsRow label="Catalog models" description={catalogStatus}>
+            <div className="settings-catalog-models">
+              <div className="settings-provider-search compact">
+                <Search />
+                <input
+                  value={catalogSearch}
+                  onChange={(event) => setCatalogSearch(event.target.value)}
+                  placeholder="Search catalog models"
+                />
+              </div>
+              <div className="settings-catalog-model-list">
+                {catalogModels.map((model) => {
+                  const modelId = model.apiModelId || model.id;
+                  const alreadyAdded = selectedProvider.models.includes(modelId);
+                  return (
+                    <div className="settings-catalog-model-item" key={`${model.id}-${model.apiModelId}`}>
+                      <div>
+                        <strong>{model.name || modelId}</strong>
+                        <small>{modelId}</small>
+                        <div className="settings-catalog-model-tags">
+                          {model.family && <span>{model.family}</span>}
+                          {model.ownedBy && <span>{model.ownedBy}</span>}
+                          {model.contextWindow ? <span>{formatCompactNumber(model.contextWindow)} ctx</span> : null}
+                          {(model.capabilities || []).slice(0, 3).map((capability) => <span key={capability}>{capability}</span>)}
+                        </div>
+                      </div>
+                      <SettingsButton disabled={alreadyAdded} onClick={() => addCatalogModel(modelId)}>
+                        {alreadyAdded ? "Added" : "Add"}
+                      </SettingsButton>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </SettingsRow>
           <SettingsRow label="Models" description="Comma or newline separated. Fetching replaces this list.">
             <SettingsTextArea value={selectedProvider.models.join("\n")} onChange={(value) => updateProvider({ models: splitModels(value) })} />
@@ -688,8 +837,12 @@ function ProviderSettingsPanel(props: {
                 <RefreshCw />
                 Fetch models
               </SettingsButton>
+              <SettingsButton onClick={() => void checkModel()} disabled={!selectedProvider.models.length}>
+                <CheckCircle2 />
+                Check
+              </SettingsButton>
               <SettingsButton variant="primary" onClick={() => void save()}>Save</SettingsButton>
-              <SettingsIconButton disabled={selectedProvider.type === "codex-oauth"} label="Delete provider" onClick={removeProvider}>
+              <SettingsIconButton disabled={selectedProvider.type === "codex-oauth" || Boolean(selectedProvider.catalog?.source)} label="Delete provider" onClick={removeProvider}>
                 <Trash2 />
               </SettingsIconButton>
             </div>
@@ -930,6 +1083,13 @@ function formatBytes(value: number) {
   return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
 }
 
+function formatCompactNumber(value: number) {
+  if (!Number.isFinite(value)) return "";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  if (value >= 1_000) return `${Math.round(value / 1000)}K`;
+  return String(value);
+}
+
 function splitModels(value: string) {
   const seen = new Set<string>();
   return value
@@ -943,15 +1103,18 @@ function splitModels(value: string) {
 }
 
 function providerPreviewUrl(provider: ModelApiProvider) {
-  if (provider.type === "codex-oauth") return "https://chatgpt.com/backend-api/codex/responses";
+  const endpoint = provider.defaultChatEndpoint || provider.type;
+  if (endpoint === "codex-oauth") return "https://chatgpt.com/backend-api/codex/responses";
   const host = provider.apiHost.trim().replace(/\/+$/, "");
   if (!host) return "";
-  if (provider.type === "openai-compatible" && isDeepSeekOfficialHost(host)) {
+  if ((endpoint === "openai-compatible" || endpoint === "openai-chat-completions") && isDeepSeekOfficialHost(host)) {
     return `${host}/chat/completions`;
   }
-  const hasVersion = /\/v1$/i.test(host);
-  const base = hasVersion ? host : `${host}/v1`;
-  return `${base}/${provider.type === "openai-responses" ? "responses" : "chat/completions"}`;
+  if (endpoint === "anthropic-messages") return `${versionedHost(host, "v1")}/messages`;
+  if (endpoint === "google-generate-content") return `${versionedHost(host, "v1beta")}/models/{model}:generateContent`;
+  if (endpoint === "ollama-chat") return `${ollamaApiHost(host)}/chat`;
+  const base = versionedHost(host, "v1");
+  return `${base}/${endpoint === "openai-responses" ? "responses" : "chat/completions"}`;
 }
 
 function isDeepSeekOfficialHost(host: string) {
@@ -960,4 +1123,48 @@ function isDeepSeekOfficialHost(host: string) {
   } catch {
     return false;
   }
+}
+
+function versionedHost(host: string, version: string) {
+  if (host.endsWith("#")) return host.slice(0, -1).replace(/\/+$/, "");
+  if (/\/v\d+(?:beta\d*)?$/i.test(host)) return host;
+  return `${host}/${version}`;
+}
+
+function ollamaApiHost(host: string) {
+  const unversioned = host.replace(/\/v\d+(?:beta\d*)?$/i, "");
+  return unversioned.endsWith("/api") ? unversioned : `${unversioned}/api`;
+}
+
+function providerEndpointOptions(provider: ModelApiProvider): Array<[string, string]> {
+  const endpoints = new Set<string>([provider.type, provider.defaultChatEndpoint || provider.type]);
+  for (const endpoint of Object.keys(provider.endpointConfigs || {})) endpoints.add(endpoint);
+  return Array.from(endpoints)
+    .filter(Boolean)
+    .map((endpoint) => [endpoint, endpointLabel(endpoint)]);
+}
+
+function endpointLabel(endpoint: string) {
+  if (endpoint === "codex-oauth") return "OpenAI OAuth";
+  if (endpoint === "openai-responses") return "OpenAI Responses";
+  if (endpoint === "anthropic-messages") return "Anthropic Messages";
+  if (endpoint === "google-generate-content") return "Gemini generateContent";
+  if (endpoint === "ollama-chat") return "Ollama Chat";
+  return "OpenAI Chat Completions";
+}
+
+function providerNeedsApiKey(provider: ModelApiProvider, endpoint: ModelApiProvider["type"]) {
+  if (endpoint === "codex-oauth" || endpoint === "ollama-chat") return false;
+  return !["ollama", "lmstudio", "ovms"].includes(provider.id);
+}
+
+function providerSecurityLabel(provider: ModelApiProvider) {
+  if (provider.type === "codex-oauth") return "OAuth";
+  if (!provider.apiKeyRequired) return "No key";
+  return provider.hasApiKey || provider.apiKey ? "Key saved" : "Key required";
+}
+
+function providerSecurityClass(provider: ModelApiProvider) {
+  if (!provider.apiKeyRequired || provider.hasApiKey || provider.apiKey) return "secure";
+  return "warning";
 }

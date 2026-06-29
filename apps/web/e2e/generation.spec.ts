@@ -126,6 +126,101 @@ test.describe("Teaching Generation (mocked)", () => {
     await expect.poll(() => Math.max(...pageCalls.values())).toBeGreaterThan(1);
   });
 
+  test("stalled batch request falls back to single-page generation", async ({ page }) => {
+    test.setTimeout(15_000);
+    const textPack = {
+      document: {
+        id: "batch-text-doc",
+        title: "Batch Text Fixture",
+        source_pdf_url: "",
+        page_count: 3,
+      },
+      pages: Array.from({ length: 3 }, (_, index) => {
+        const pageNo = index + 1;
+        return {
+          page_no: pageNo,
+          source: {
+            pdf_page_ref: `#page=${pageNo}`,
+            text_md: `Batch text source page ${pageNo}. This page has enough plain text to use the fast text generation path. It avoids diagrams, tables, code, and formulas so the batch endpoint is selected during one-click generation.`,
+            ocr_used: false,
+            parser: "test",
+          },
+          teaching: {
+            output_language: "zh-CN",
+            slide_title: "",
+            speaker_notes_md: "",
+            concepts: [],
+            visual_explanations: [],
+            prerequisites: [],
+            contextual_bridge: "",
+            formula_explanations: [],
+            evidence: [],
+            needs_review: false,
+            needs_parser_fallback: false,
+            confidence: 0,
+          },
+          status: "draft",
+        };
+      }),
+    };
+    await page.locator('input[type="file"][accept="application/json,.json"]').first().setInputFiles({
+      name: "batch-text-fixture.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify(textPack)),
+    });
+    await expect(page.locator(".brand")).toContainText("Batch Text Fixture", { timeout: 10_000 });
+    await page.evaluate(() => {
+      (window as Window & { __SYNCHROPAGE_GENERATION_BATCH_STALL_TIMEOUT_MS?: number }).__SYNCHROPAGE_GENERATION_BATCH_STALL_TIMEOUT_MS = 250;
+    });
+    await page.unroute("**/api/**");
+
+    let batchCalls = 0;
+    const pageCalls = new Map<number, number>();
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/generate/pages")) {
+        batchCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ pages: [] }),
+        }).catch(() => undefined);
+        return;
+      }
+      if (url.includes("/api/generate/page")) {
+        const body = JSON.parse(route.request().postData() || "{}") as { page?: { page_no?: number } };
+        const pageNo = Number(body.page?.page_no || 1);
+        pageCalls.set(pageNo, (pageCalls.get(pageNo) || 0) + 1);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            page: {
+              page_no: pageNo,
+              teaching: {
+                slide_title: `Fallback Page ${pageNo}`,
+                speaker_notes_md: `Fallback single-page notes for page ${pageNo}. The batch request stalled, so this page was generated individually with enough detail to avoid weak-output retry.`,
+                confidence: 0.9,
+                concepts: [`fallback-${pageNo}`],
+                output_language: "zh-CN",
+              },
+              status: "completed",
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await page.locator(".generate-main-button").click();
+
+    await expect(page.locator(".notes-content")).toContainText(/Fallback single-page notes for page/i, { timeout: 10_000 });
+    await expect.poll(() => batchCalls).toBe(1);
+    await expect.poll(() => Array.from(pageCalls.values()).reduce((sum, calls) => sum + calls, 0)).toBeGreaterThan(0);
+  });
+
   test("slow successful single-page request is not aborted at the old stall threshold", async ({ page }) => {
     test.setTimeout(40_000);
     await uploadPdfFromRail(page);

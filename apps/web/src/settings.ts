@@ -8,7 +8,14 @@ export type Language = "zh-CN" | "en-US";
 export type ExplanationLanguage = "auto" | Language;
 export type ModelReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 export type AgentAnswerMode = "concise" | "guided" | "detailed";
-export type ApiProviderType = "codex-oauth" | "openai-compatible" | "openai-responses";
+export type ApiProviderType =
+  | "codex-oauth"
+  | "openai-compatible"
+  | "openai-chat-completions"
+  | "openai-responses"
+  | "anthropic-messages"
+  | "google-generate-content"
+  | "ollama-chat";
 
 export type ModelRef = {
   providerId: string;
@@ -17,18 +24,42 @@ export type ModelRef = {
 
 export type ModelApiProvider = {
   id: string;
+  presetProviderId?: string;
   name: string;
+  description?: string;
   type: ApiProviderType;
+  defaultChatEndpoint?: ApiProviderType;
+  endpointConfigs?: Record<string, {
+    baseUrl?: string;
+    modelsApiUrls?: Record<string, string>;
+    reasoningFormatType?: string;
+    adapterFamily?: string;
+  }>;
   apiHost: string;
   apiKey?: string;
   hasApiKey?: boolean;
   apiKeyRequired: boolean;
   enabled: boolean;
   models: string[];
+  apiFeatures?: Record<string, unknown>;
+  websites?: {
+    official?: string;
+    docs?: string;
+    apiKey?: string;
+    models?: string;
+  };
+  catalog?: {
+    source?: string;
+    versions?: Record<string, string>;
+  };
 };
 
 export type ModelApiConfig = {
   version: number;
+  catalog?: {
+    source?: string;
+    versions?: Record<string, string>;
+  };
   selectedProviderId: string;
   providers: ModelApiProvider[];
   defaults: {
@@ -83,6 +114,7 @@ export const defaultUiPreferences: UiPreferences = {
 
 export const defaultModelApiConfig: ModelApiConfig = {
   version: 1,
+  catalog: undefined,
   selectedProviderId: "codex_oauth",
   providers: [
     {
@@ -196,6 +228,7 @@ export function normalizeModelApiConfig(value: unknown): ModelApiConfig {
     : providers[0]?.id || defaultModelApiConfig.selectedProviderId;
   return {
     version: 1,
+    catalog: isPlainRecord(source.catalog) ? source.catalog as ModelApiConfig["catalog"] : undefined,
     selectedProviderId,
     providers,
     defaults: {
@@ -218,19 +251,28 @@ export function providerForModelRef(config: ModelApiConfig, ref: ModelRef) {
 
 function normalizeModelApiProvider(value: unknown, index: number): ModelApiProvider {
   const provider = (value && typeof value === "object" ? value : {}) as Partial<ModelApiProvider>;
-  const type = provider.type === "codex-oauth" || provider.type === "openai-responses" ? provider.type : "openai-compatible";
+  const type = normalizeApiProviderType(provider.type);
   const fallback = defaultModelApiConfig.providers[index] || defaultModelApiConfig.providers[0];
   const id = cleanProviderId(provider.id) || fallback.id || `provider_${index + 1}`;
+  const endpointConfigs = normalizeEndpointConfigs(provider.endpointConfigs);
+  const defaultChatEndpoint = normalizeApiProviderType(provider.defaultChatEndpoint || type);
   return {
     id,
+    presetProviderId: cleanString(provider.presetProviderId) || undefined,
     name: cleanString(provider.name) || fallback.name || id,
+    description: cleanString(provider.description) || undefined,
     type,
-    apiHost: cleanString(provider.apiHost) || fallback.apiHost || "",
+    defaultChatEndpoint,
+    endpointConfigs,
+    apiHost: cleanString(provider.apiHost) || endpointConfigs[defaultChatEndpoint]?.baseUrl || fallback.apiHost || "",
     apiKey: typeof provider.apiKey === "string" ? provider.apiKey : undefined,
     hasApiKey: Boolean(provider.hasApiKey),
-    apiKeyRequired: typeof provider.apiKeyRequired === "boolean" ? provider.apiKeyRequired : type !== "codex-oauth",
+    apiKeyRequired: typeof provider.apiKeyRequired === "boolean" ? provider.apiKeyRequired : defaultApiKeyRequired(id, type),
     enabled: typeof provider.enabled === "boolean" ? provider.enabled : type === "codex-oauth",
     models: normalizeModelList(provider.models).length ? normalizeModelList(provider.models) : fallback.models,
+    apiFeatures: isPlainRecord(provider.apiFeatures) ? provider.apiFeatures : undefined,
+    websites: normalizeProviderWebsites(provider.websites),
+    catalog: isPlainRecord(provider.catalog) ? provider.catalog as ModelApiProvider["catalog"] : undefined,
   };
 }
 
@@ -254,6 +296,63 @@ function normalizeModelList(value: unknown) {
       seen.add(item);
       return true;
     });
+}
+
+function normalizeApiProviderType(value: unknown): ApiProviderType {
+  if (value === "openai-compatible" || value === "openai-chat") return "openai-chat-completions";
+  if (value === "openai-response") return "openai-responses";
+  if (
+    value === "codex-oauth" ||
+    value === "openai-chat-completions" ||
+    value === "openai-responses" ||
+    value === "anthropic-messages" ||
+    value === "google-generate-content" ||
+    value === "ollama-chat"
+  ) {
+    return value;
+  }
+  return "openai-chat-completions";
+}
+
+function normalizeEndpointConfigs(value: unknown): NonNullable<ModelApiProvider["endpointConfigs"]> {
+  if (!isPlainRecord(value)) return {};
+  const configs: NonNullable<ModelApiProvider["endpointConfigs"]> = {};
+  for (const [rawKey, rawConfig] of Object.entries(value)) {
+    if (!isPlainRecord(rawConfig)) continue;
+    const key = normalizeApiProviderType(rawKey);
+    configs[key] = {
+      baseUrl: cleanString(rawConfig.baseUrl) || undefined,
+      modelsApiUrls: isPlainRecord(rawConfig.modelsApiUrls)
+        ? Object.fromEntries(Object.entries(rawConfig.modelsApiUrls).flatMap(([name, url]) => {
+          const cleanUrl = cleanString(url);
+          return cleanUrl ? [[name, cleanUrl]] : [];
+        }))
+        : undefined,
+      reasoningFormatType: cleanString(rawConfig.reasoningFormatType) || undefined,
+      adapterFamily: cleanString(rawConfig.adapterFamily) || undefined,
+    };
+  }
+  return configs;
+}
+
+function normalizeProviderWebsites(value: unknown): ModelApiProvider["websites"] {
+  if (!isPlainRecord(value)) return undefined;
+  const websites = {
+    official: cleanString(value.official) || undefined,
+    docs: cleanString(value.docs) || undefined,
+    apiKey: cleanString(value.apiKey) || undefined,
+    models: cleanString(value.models) || undefined,
+  };
+  return Object.values(websites).some(Boolean) ? websites : undefined;
+}
+
+function defaultApiKeyRequired(providerId: string, type: ApiProviderType) {
+  if (type === "codex-oauth" || type === "ollama-chat") return false;
+  return !["ollama", "lmstudio", "ovms"].includes(providerId);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function cleanProviderId(value: unknown) {

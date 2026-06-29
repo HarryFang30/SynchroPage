@@ -696,6 +696,16 @@ export default function App() {
     return models;
   }, []);
 
+  const checkProviderModel = useCallback(async (provider: ModelApiProvider, model: string) => {
+    const response = await requestJson<{ ok?: boolean; endpoint?: string; model?: string; text?: string }>("/api/model-config/check", {
+      method: "POST",
+      body: JSON.stringify({ provider, model }),
+    });
+    if (!response.ok) throw new Error("Provider returned an empty check response");
+    setModelApiStatus(`Model API: checked ${response.model || model} via ${response.endpoint || provider.type}`);
+    return response;
+  }, []);
+
   const getSnapshot = useCallback(
     () => ({
       contexts,
@@ -2109,6 +2119,7 @@ export default function App() {
             onModelApiConfigChange={updateModelApiConfig}
             onSaveModelApiConfig={saveModelApiConfig}
             onFetchProviderModels={fetchProviderModels}
+            onCheckProviderModel={checkProviderModel}
             onResetLayout={() => {
               setPanels(defaultPanelVisibility);
               setJobStatus(copy.status.layoutReset);

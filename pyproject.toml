@@ -21,6 +21,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"pdf_agent.provider_registry" = ["data/*.json"]
+
 [project.scripts]
 pdf-agent-web = "pdf_agent.server.web_app:main"
 

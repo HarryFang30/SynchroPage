@@ -32,7 +32,7 @@ from pdf_agent.server.json_utils import (
 )
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.model_config import ModelConfigStore
-from pdf_agent.server.model_gateway import fetch_provider_models, provider_endpoint_preview
+from pdf_agent.server.model_gateway import check_provider_model, fetch_provider_models, provider_endpoint_preview
 from pdf_agent.server.pdf_file_cache import (
     PdfFileCache,
     raw_pdf_file_data as _raw_pdf_file_data,
@@ -41,6 +41,7 @@ from pdf_agent.server.value_utils import (
     env_positive_int as _env_positive_int,
     string_value as _string_value,
 )
+from pdf_agent.server.provider_catalog import catalog_summary, provider_model_details
 from pdf_agent.server.agent_gateway import AgentChatGateway
 from pdf_agent.server.teaching_gateway import TeachingGenerationGateway
 
@@ -131,7 +132,9 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
     server: PdfAgentHttpServer
 
     def do_GET(self) -> None:
-        path = urllib.parse.urlparse(self.path).path
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+        query = urllib.parse.parse_qs(parsed_url.query)
         try:
             if path == "/api/health":
                 self._send_json({"ok": True, "service": "pdf-agent"})
@@ -139,6 +142,19 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.server.runner.run(self.server.oauth_api.status()))
             elif path == "/api/model-config":
                 self._send_json(self.server.model_config_store.load_public())
+            elif path == "/api/model-catalog":
+                self._send_json(catalog_summary())
+            elif path == "/api/model-catalog/models":
+                provider_id = _string_value((query.get("providerId") or [""])[0], "")
+                if not provider_id:
+                    raise HttpError(400, "providerId is required", code="model_provider_required")
+                search_query = _string_value((query.get("q") or [""])[0], "")
+                limit_raw = _string_value((query.get("limit") or ["200"])[0], "200")
+                try:
+                    limit = max(1, min(int(limit_raw), 1000))
+                except ValueError:
+                    limit = 200
+                self._send_json({"models": provider_model_details(provider_id, query=search_query, limit=limit)})
             else:
                 self._send_static(path)
         except Exception as exc:
@@ -183,6 +199,17 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
                 if not isinstance(provider, Mapping):
                     raise HttpError(400, "Model provider is required", code="model_provider_required")
                 self._send_json({"url": provider_endpoint_preview(provider)})
+            elif path == "/api/model-config/check":
+                body = self._read_json()
+                provider = body.get("provider")
+                if not isinstance(provider, Mapping):
+                    raise HttpError(400, "Model provider is required", code="model_provider_required")
+                self._send_json(self.server.runner.run(check_provider_model(
+                    provider_value=provider,
+                    model=_string_value(body.get("model"), ""),
+                    post_with_retries=self.server.chat_gateway._post_with_retries,
+                    config_store=self.server.model_config_store,
+                )))
             elif path == "/api/agent/chat":
                 body = self._read_json()
                 self._send_json(self.server.runner.run(self.server.chat_gateway.chat(body)))

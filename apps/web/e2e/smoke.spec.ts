@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { resetStorage } from "./helpers";
+import { mockApi, resetStorage } from "./helpers";
 
 test.describe("Smoke", () => {
   test.beforeEach(async ({ page }) => {
@@ -21,6 +21,61 @@ test.describe("Smoke", () => {
     await expect(page.locator(".settings-dialog")).toBeVisible();
     await expect(page.locator(".settings-nav-item")).toHaveCount(9);
     await expect(page.locator(".settings-nav")).toContainText(/Provider|模型|Models|服务/i);
+  });
+
+  test("provider settings show catalog model metadata", async ({ page }) => {
+    await mockApi(page, {
+      "/api/model-config": {
+        version: 1,
+        selectedProviderId: "anthropic",
+        providers: [
+          {
+            id: "anthropic",
+            name: "Anthropic",
+            type: "anthropic-messages",
+            defaultChatEndpoint: "anthropic-messages",
+            apiHost: "https://api.anthropic.com",
+            apiKeyRequired: true,
+            enabled: true,
+            models: ["claude-sonnet-4-5"],
+            hasApiKey: true,
+            endpointConfigs: {
+              "anthropic-messages": { baseUrl: "https://api.anthropic.com", adapterFamily: "anthropic" },
+            },
+            catalog: { source: "cherry-studio" },
+          },
+        ],
+        defaults: {
+          assistant: { providerId: "anthropic", model: "claude-sonnet-4-5" },
+          teachingFast: { providerId: "anthropic", model: "claude-sonnet-4-5" },
+          teachingBalanced: { providerId: "anthropic", model: "claude-sonnet-4-5" },
+          teachingQuality: { providerId: "anthropic", model: "claude-sonnet-4-5" },
+        },
+      },
+      "/api/model-catalog/models": {
+        models: [
+          {
+            id: "claude-sonnet-4-5",
+            apiModelId: "claude-sonnet-4-5",
+            name: "Claude Sonnet 4.5",
+            family: "claude",
+            ownedBy: "anthropic",
+            capabilities: ["function-call", "reasoning"],
+            contextWindow: 200000,
+          },
+        ],
+      },
+    });
+    await page.reload();
+    await page.waitForSelector(".app-shell", { timeout: 10_000 });
+
+    await page.locator(".rail-settings-button").click();
+    await page.locator(".settings-nav-item").nth(1).click();
+
+    await expect(page.locator(".settings-catalog-models")).toBeVisible();
+    await expect(page.locator(".settings-catalog-model-item")).toContainText("Claude Sonnet 4.5");
+    await expect(page.locator(".settings-catalog-model-item")).toContainText("function-call");
+    await expect(page.locator(".settings-catalog-model-item")).toContainText("200K ctx");
   });
 
   test("desktop save folder settings stay inside the dialog with long paths", async ({ page }) => {

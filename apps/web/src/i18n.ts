@@ -227,6 +227,7 @@ export type AppCopy = {
     generationScopeAlreadyComplete: (scope: string) => string;
     generationInvalidPageRange: (total: number) => string;
     pdfTextExtracting: (ready: number, total: number) => string;
+    pdfTextExtractionFallback: string;
   };
   errors: {
     accountNotFound: string;
@@ -695,7 +696,8 @@ const zhCN: AppCopy = {
     generationAlreadyComplete: (total) => `${total} 页讲解已全部生成，无需重复生成`,
     generationScopeAlreadyComplete: (scope) => `选定页码 ${scope} 已全部生成，无需重复生成`,
     generationInvalidPageRange: (total) => `页码范围无效，请输入 1-${total} 之间的页码，例如 1-3, 8`,
-    pdfTextExtracting: (ready, total) => `正在读取 PDF 文本层，已就绪 ${ready}/${total} 页，请稍后再生成`,
+    pdfTextExtracting: (ready, total) => `正在读取 PDF 文本层，已就绪 ${ready}/${total} 页`,
+    pdfTextExtractionFallback: "PDF 文本层读取较慢，先使用已就绪内容继续生成",
   },
   errors: {
     accountNotFound: "请先连接 OpenAI OAuth 后再发送。",
@@ -1166,7 +1168,8 @@ const enUS: AppCopy = {
     generationAlreadyComplete: (total) => `All ${total} pages already have notes`,
     generationScopeAlreadyComplete: (scope) => `Selected pages ${scope} already have notes`,
     generationInvalidPageRange: (total) => `Invalid page range. Enter pages from 1-${total}, for example 1-3, 8`,
-    pdfTextExtracting: (ready, total) => `Reading PDF text layer: ${ready}/${total} pages ready. Try generating again shortly.`,
+    pdfTextExtracting: (ready, total) => `Reading PDF text layer: ${ready}/${total} pages ready`,
+    pdfTextExtractionFallback: "PDF text extraction is slow, continuing with the text that is ready",
   },
   errors: {
     accountNotFound: "Connect OpenAI OAuth before sending.",
