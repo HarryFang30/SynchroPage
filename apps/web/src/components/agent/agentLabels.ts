@@ -7,6 +7,7 @@ export function contextSourceLabel(context: AgentContextItem, copy: AppCopy) {
   if (context.type === "formula") return copy.agent.contextFormula(context.page_no);
   if (context.type === "selection") return copy.agent.contextSelection(context.page_no);
   if (context.type === "pdf_reference") return copy.agent.contextPdfReference(context.page_no);
+  if (context.type === "learner_note") return copy.agent.contextLearnerNote(context.page_no);
   return copy.agent.contextSource(context.page_no, compactText(context.source || context.title, 28));
 }
 

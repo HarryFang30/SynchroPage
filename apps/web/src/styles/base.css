@@ -3,6 +3,26 @@
 @import "@fontsource-variable/jetbrains-mono/wght.css";
 @import "./tokens.css";
 
+/* Anthropic Sans for Latin text. The files live in public/fonts, copied in by
+   scripts/install-local-fonts.sh and never committed (proprietary). When they
+   are missing the browser moves on to the next family in --font-ui; CJK
+   glyphs always come from the CJK families later in the stack. */
+@font-face {
+  font-family: "Anthropic Sans";
+  src: local("Anthropic Sans"), url("/fonts/AnthropicSans-Roman.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Anthropic Sans";
+  src: local("Anthropic Sans Italic"), url("/fonts/AnthropicSans-Italic.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light;
   --background: oklch(0.98 0.01 95.10);
@@ -24,8 +44,9 @@
   --ring: oklch(0.59 0.17 253.06);
   --sidebar: oklch(0.97 0.01 98.88);
   --sidebar-foreground: oklch(0.36 0.01 106.65);
-  --font-ui: "Geist Sans", Inter, "SF Pro Text", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
-  --font-reading: "Source Serif 4 Variable", "Source Serif 4", "Noto Serif SC", "Songti SC", Georgia, "Times New Roman", serif;
+  --font-ui: "Anthropic Sans", "Geist Sans", Inter, "SF Pro Text", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  /* Reading text is the same face as the UI: Anthropic Sans for Latin, the CJK sans for Chinese. */
+  --font-reading: "Anthropic Sans", "Geist Sans", Inter, "SF Pro Text", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --font-mono: "JetBrains Mono Variable", "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
   --font-heading: var(--font-ui);
   --font-body: var(--font-reading);

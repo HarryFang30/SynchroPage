@@ -9,6 +9,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -92,6 +93,11 @@ function isPdfRenderCancel(error: unknown) {
   return name === "RenderingCancelledException" || name === "AbortException";
 }
 
+/** The scaled page box inside a page shell (rendered page or placeholder). */
+function pageBoxOf(shell: HTMLElement): HTMLElement {
+  return shell.querySelector<HTMLElement>(".pdf-page-layered, .pdf-page-placeholder") || shell;
+}
+
 // ── useElementWidth hook ─────────────────────────────────────
 
 export function useElementWidth(ref: RefObject<HTMLElement | null>) {
@@ -150,22 +156,15 @@ function PdfPageLayer({
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [pageStatus, setPageStatus] = useState<PdfPageRenderStatus>("loading");
   const [pageError, setPageError] = useState("");
+  // The page box is sized from the same formula pdf.js renders with, straight
+  // from props, so a pane-width change resizes real pages and placeholders in
+  // the same layout pass (the scroll re-anchoring below relies on that).
   const displayMetrics = pdfPageDisplayMetrics(viewportWidth, geometry);
   const [viewportMeta, setViewportMeta] = useState({
-    width: displayMetrics.width,
-    height: displayMetrics.height,
     scale: 1,
     rotation: 0,
     pageNumber,
   });
-
-  useEffect(() => {
-    setViewportMeta((current) => ({
-      ...current,
-      width: displayMetrics.width,
-      height: displayMetrics.height,
-    }));
-  }, [displayMetrics.height, displayMetrics.width]);
 
   useEffect(() => {
     if (!canvasRef.current || !textLayerRef.current) return undefined;
@@ -210,8 +209,6 @@ function PdfPageLayer({
       textLayerElement.style.setProperty("--total-scale-factor", String(scale));
       textLayerElement.style.setProperty("--user-unit", "1");
       setViewportMeta({
-        width: viewport.width,
-        height: viewport.height,
         scale,
         rotation: viewport.rotation,
         pageNumber: safePageNumber,
@@ -291,17 +288,19 @@ function PdfPageLayer({
         data-viewport-rotation={viewportMeta.rotation}
         data-viewport-scale={viewportMeta.scale}
         style={{
-          width: viewportMeta.width ? `${viewportMeta.width}px` : undefined,
-          height: viewportMeta.height ? `${viewportMeta.height}px` : undefined,
-          aspectRatio: `${Math.max(viewportMeta.width, 1)} / ${Math.max(viewportMeta.height, 1)}`,
+          width: `${displayMetrics.width}px`,
+          height: `${displayMetrics.height}px`,
+          aspectRatio: displayMetrics.aspectRatio,
         }}
         onClick={handleLayerClick}
       >
         <canvas ref={canvasRef} className="pdf-visual-layer" />
         {renderPageOverlay?.(viewportMeta.pageNumber)}
         <div ref={textLayerRef} className="textLayer pdf-text-layer" aria-label="PDF 可选文本层" />
+        {/* Overlaid, not stacked below the page: a transient block here would
+            shift every following page while a re-render is in flight. */}
+        {pageStatus === "loading" && <div className="pdf-layer-note pdf-layer-note-loading">正在渲染 PDF 页面...</div>}
       </div>
-      {pageStatus === "loading" && <div className="pdf-layer-note">正在渲染 PDF 页面...</div>}
       {pageStatus === "empty-text" && (
         <div className="pdf-layer-note">当前 PDF 页没有可选文本层。可以继续查看页面，OCR/text extraction 接口预留后续接入。</div>
       )}
@@ -337,6 +336,20 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
   const lastActivePageRef = useRef(pageNumber);
   const restoredUrlRef = useRef("");
   const viewportWidth = useElementWidth(scrollContainerRef);
+  // Where the reader is: the page under the container's 50% line and how far
+  // down that page the line sits. Captured on scroll, restored after a
+  // width-driven rescale so panel toggles never move the reader.
+  // `fraction` is clamped to the page box; `offsetPx` is the part of the
+  // distance that lies outside the box (label, gap, notes footer), which
+  // keeps its pixel height when the box rescales.
+  const readingAnchorRef = useRef<{ pageNo: number; fraction: number; offsetPx: number } | null>(null);
+  const lastViewportWidthRef = useRef(0);
+  const restoringAnchorRef = useRef(false);
+  // A programmatic jump (page arrows, keys, note jump, initial restore) that
+  // may still be animating; a rescale lands it instead of restoring the
+  // mid-animation anchor.
+  const navigationTargetRef = useRef<{ pageNo: number; until: number } | null>(null);
+  const initialRestoreTimersRef = useRef<number[]>([]);
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [documentError, setDocumentError] = useState("");
   const [renderWindowCenter, setRenderWindowCenter] = useState(pageNumber);
@@ -380,9 +393,34 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
     }, 130);
   }, [onActivePageChange, updateRenderWindowCenter]);
 
-  const chooseActivePage = useCallback(() => {
+  const captureReadingAnchor = useCallback(() => {
     const root = scrollContainerRef.current;
     if (!root) return;
+    const rootRect = root.getBoundingClientRect();
+    const anchorY = rootRect.top + rootRect.height * 0.5;
+    // Anchor to the page box itself: labels, notes and status lines around it
+    // keep a fixed height while the box scales with the pane width. The line
+    // may sit between two boxes, so fall back to the nearest one.
+    let best: { pageNo: number; fraction: number; offsetPx: number; distance: number } | null = null;
+    for (const [pageNo, element] of pageElementsRef.current) {
+      const rect = pageBoxOf(element).getBoundingClientRect();
+      if (!(rect.height > 0)) continue;
+      const distance = anchorY < rect.top ? rect.top - anchorY : anchorY > rect.bottom ? anchorY - rect.bottom : 0;
+      if (!best || distance < best.distance) {
+        const raw = anchorY - rect.top;
+        const fraction = Math.min(1, Math.max(0, raw / rect.height));
+        best = { pageNo, fraction, offsetPx: raw - fraction * rect.height, distance };
+      }
+    }
+    if (best) readingAnchorRef.current = { pageNo: best.pageNo, fraction: best.fraction, offsetPx: best.offsetPx };
+  }, []);
+
+  const chooseActivePage = useCallback(() => {
+    const root = scrollContainerRef.current;
+    if (!root || restoringAnchorRef.current) return;
+    // Page boxes also change height without a scroll (a placeholder gets its
+    // real geometry); keep the anchor in step with the current layout.
+    captureReadingAnchor();
     const rootRect = root.getBoundingClientRect();
     const anchorY = rootRect.top + rootRect.height * 0.5;
     const visiblePages = Array.from(pageElementsRef.current.entries())
@@ -403,6 +441,13 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
 
     const currentPage = visiblePages.find((entry) => entry.pageNo === lastActivePageRef.current);
     if (currentPage && currentPage.top <= anchorY && currentPage.bottom >= anchorY) {
+      // The page under the line is still the active one: a change scheduled
+      // by an earlier frame (mid-animation, before a relayout landed here)
+      // must not fire later and report a page the reader is not on.
+      if (activePageTimerRef.current) {
+        window.clearTimeout(activePageTimerRef.current);
+        activePageTimerRef.current = null;
+      }
       updateRenderWindowCenter(currentPage.pageNo);
       return;
     }
@@ -417,7 +462,7 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
     });
     updateRenderWindowCenter(candidates[0].pageNo);
     scheduleActivePage(candidates[0].pageNo);
-  }, [scheduleActivePage, updateRenderWindowCenter]);
+  }, [captureReadingAnchor, scheduleActivePage, updateRenderWindowCenter]);
 
   const requestActivePageFromLayout = useCallback(() => {
     if (activePageFrameRef.current) return;
@@ -439,6 +484,9 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
     const rootRect = root.getBoundingClientRect();
     const pageRect = pageElement.getBoundingClientRect();
     const top = Math.max(0, root.scrollTop + pageRect.top - rootRect.top - 14);
+    // The container's CSS scroll-behavior animates "auto"/"smooth" for
+    // roughly half a second; remember the destination for that long.
+    navigationTargetRef.current = { pageNo, until: performance.now() + 900 };
     root.scrollTo({ top, behavior });
   }, [onActivePageChange, pageCount, updateRenderWindowCenter]);
 
@@ -574,13 +622,73 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
     if (!pdfDocument || !pageCount || !viewportWidth || restoredUrlRef.current === url) return undefined;
     restoredUrlRef.current = url;
     const targetPage = Math.min(Math.max(pageNumber, 1), pageCount);
-    const firstTimer = window.setTimeout(() => scrollToPage(targetPage, "auto"), 80);
-    const secondTimer = window.setTimeout(() => scrollToPage(targetPage, "auto"), 320);
-    return () => {
-      window.clearTimeout(firstTimer);
-      window.clearTimeout(secondTimer);
+    // The timers are deliberately not cleared when a dependency (the pane
+    // width, say) changes: the restore has already been claimed for this url
+    // and a re-run would return early, so clearing here would drop it. A
+    // document switch resets restoredUrlRef, which makes stale timers no-ops.
+    const restore = () => {
+      if (restoredUrlRef.current === url) scrollToPage(targetPage, "auto");
     };
+    initialRestoreTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    initialRestoreTimersRef.current = [window.setTimeout(restore, 80), window.setTimeout(restore, 320)];
+    return undefined;
   }, [pageCount, pageNumber, pdfDocument, scrollToPage, url, viewportWidth]);
+
+  useEffect(() => () => {
+    initialRestoreTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+  }, []);
+
+  // Page heights are a function of the pane width, scrollTop is not. When a
+  // side panel opens or the window is resized, put the same spot of the same
+  // page back under the 50% line before paint; two more passes catch pages
+  // whose boxes settle a frame later. Active-page tracking is paused so the
+  // relayout is never mistaken for the reader scrolling to the next page.
+  useLayoutEffect(() => {
+    const previousWidth = lastViewportWidthRef.current;
+    lastViewportWidthRef.current = viewportWidth;
+    const anchor = readingAnchorRef.current;
+    if (!viewportWidth || !previousWidth || previousWidth === viewportWidth) return undefined;
+    if (!pdfDocument || viewMode !== "continuous") return undefined;
+    const navigation = navigationTargetRef.current;
+    const inFlight = navigation && performance.now() < navigation.until ? navigation : null;
+    if (!anchor && !inFlight) return undefined;
+
+    restoringAnchorRef.current = true;
+    const apply = () => {
+      if (inFlight) {
+        // The reader asked for a page and the animation has not landed yet:
+        // land it in the new layout rather than freezing a frame of it.
+        scrollToPage(inFlight.pageNo, "instant");
+        return;
+      }
+      if (!anchor) return;
+      const root = scrollContainerRef.current;
+      const element = pageElementsRef.current.get(anchor.pageNo);
+      if (!root || !element) return;
+      const rootRect = root.getBoundingClientRect();
+      const rect = pageBoxOf(element).getBoundingClientRect();
+      if (!(rect.height > 0)) return;
+      const pageTop = root.scrollTop + rect.top - rootRect.top;
+      const target = Math.max(0, pageTop + rect.height * anchor.fraction + anchor.offsetPx - rootRect.height * 0.5);
+      // scrollTo with an explicit behavior bypasses the container's CSS
+      // scroll-behavior: smooth; an animated restore would let intermediate
+      // scroll events overwrite the anchor before the layout settles.
+      if (Math.abs(root.scrollTop - target) >= 1) root.scrollTo({ top: target, behavior: "instant" });
+    };
+    apply();
+    let frame = window.requestAnimationFrame(() => {
+      apply();
+      frame = window.requestAnimationFrame(() => {
+        apply();
+        restoringAnchorRef.current = false;
+        requestActivePageFromLayout();
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      restoringAnchorRef.current = false;
+    };
+  }, [pdfDocument, requestActivePageFromLayout, scrollToPage, viewMode, viewportWidth]);
 
   const handleKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented) return;
@@ -602,9 +710,12 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
   }, [pageCount, safePageNumber, scrollToPage]);
 
   const handleScroll = useCallback(() => {
+    // Scroll events raised by the re-anchoring itself are not the reader moving.
+    if (restoringAnchorRef.current) return;
+    captureReadingAnchor();
     onViewerScroll?.();
     requestActivePageFromLayout();
-  }, [onViewerScroll, requestActivePageFromLayout]);
+  }, [captureReadingAnchor, onViewerScroll, requestActivePageFromLayout]);
 
   if (documentError) {
     return (

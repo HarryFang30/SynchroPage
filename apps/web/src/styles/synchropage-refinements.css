@@ -585,15 +585,28 @@ body {
 }
 
 .note-markdown {
-  max-width: 74ch;
+  max-width: 62ch;
 }
 
-.note-markdown h2 {
+.note-markdown h2,
+.note-section-title {
+  color: var(--pp-text-muted);
+  border-bottom-color: var(--pp-border-subtle);
+}
+
+.note-markdown .markdown-body th,
+.note-markdown .markdown-body td,
+.note-answer {
+  border-color: var(--pp-border-subtle);
+}
+
+.note-section-lead .note-markdown-content {
+  background: color-mix(in oklch, var(--annot-yellow, oklch(0.9 0.17 96)) 18%, var(--pp-bg-panel));
+}
+
+.note-section-lead .note-markdown-content p,
+.note-section-keep .note-markdown-content p {
   color: var(--pp-text-primary);
-  font-family: var(--font-ui);
-  font-size: clamp(24px, 4cqi, 32px);
-  font-weight: 690;
-  letter-spacing: 0;
 }
 
 .note-markdown h3 {

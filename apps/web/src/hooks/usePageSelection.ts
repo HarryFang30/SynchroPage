@@ -46,6 +46,8 @@ export type SelectedContext = {
   viewportScale?: number;
   viewportRotation?: number;
   pdfSource?: SelectedPdfSource;
+  /** The text is the learner's own note about the page, not page text. */
+  learnerNote?: boolean;
   createdAt: number;
 };
 

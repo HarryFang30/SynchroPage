@@ -63,6 +63,7 @@ export function AssistantThread({
   onRemoveSelectedContext,
   composerInputRef,
   onPasteImages,
+  learnerNoteCount = 0,
 }: {
   page: PageData;
   suggestions: string[];
@@ -73,6 +74,7 @@ export function AssistantThread({
   onRemoveSelectedContext: () => void;
   composerInputRef: RefObject<HTMLTextAreaElement | null>;
   onPasteImages: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
+  learnerNoteCount?: number;
 }) {
   const copy = useAppCopy();
   const assistantUi = useAssistantUi();
@@ -124,6 +126,7 @@ export function AssistantThread({
               count={challengeCount}
               onCountChange={setChallengeCount}
               onStart={sendChallenge}
+              learnerNoteCount={learnerNoteCount}
             />
             <AssistantComposer
               contextPreview={contextPreview}
@@ -147,12 +150,14 @@ function ChallengePanel({
   count,
   onCountChange,
   onStart,
+  learnerNoteCount = 0,
 }: {
   kind: ChallengeKind;
   onKindChange: (kind: ChallengeKind) => void;
   count: number;
   onCountChange: (count: number) => void;
   onStart: (kind: ChallengeKind, count: number) => void;
+  learnerNoteCount?: number;
 }) {
   const copy = useAppCopy();
   const weakPointCount = useWeakPointCount();
@@ -165,6 +170,9 @@ function ChallengePanel({
       </div>
       {weakPointCount > 0 && (
         <p className="quiz-weak-note">{copy.agent.quizWeakPointNote(weakPointCount)}</p>
+      )}
+      {learnerNoteCount > 0 && (
+        <p className="quiz-weak-note quiz-note-note">{copy.agent.quizNoteNote(learnerNoteCount)}</p>
       )}
       <div className="challenge-controls">
         <div className="challenge-kind-control" role="group" aria-label={copy.agent.challengeKindLabel}>

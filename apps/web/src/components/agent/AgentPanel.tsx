@@ -90,6 +90,8 @@ export type AgentPanelProps = {
   oauthMode: OAuthMode;
   showSourcePills: boolean;
   pageAwareSuggestions: boolean;
+  /** Written notes on the current PDF page that the next quiz will target. */
+  learnerNoteCount: number;
   persistChatMessage?: (input: ChatPersistInput) => Promise<void>;
   onNewConversation: () => void;
 };
@@ -109,17 +111,49 @@ function QuickSelectionPromptRunner(props: {
   const assistantUi = useAssistantUi();
   const thread = assistantUi.useThreadRuntime();
   const consumedRef = useRef<string | null>(null);
+  const onConsumedRef = useRef(props.onConsumed);
+  onConsumedRef.current = props.onConsumed;
 
   useEffect(() => {
-    if (!props.prompt) return;
-    if (consumedRef.current === props.prompt.id) return;
-    consumedRef.current = props.prompt.id;
-    thread.append({
-      role: "user",
-      content: [{ type: "text", text: props.prompt.prompt }],
-    });
-    props.onConsumed(props.prompt.id);
-  }, [props.prompt, props.onConsumed, thread]);
+    const prompt = props.prompt;
+    if (!prompt || consumedRef.current === prompt.id) return undefined;
+    let timer: number | null = null;
+    let unsubscribe: (() => void) | null = null;
+    const send = () => {
+      timer = null;
+      consumedRef.current = prompt.id;
+      thread.append({
+        role: "user",
+        content: [{ type: "text", text: prompt.prompt }],
+      });
+      onConsumedRef.current(prompt.id);
+    };
+    const isRunning = () => Boolean(thread.getState?.().isRunning);
+    const attempt = () => {
+      timer = null;
+      // Appending while an answer is still streaming would cancel that
+      // answer. Wait for the run to finish (or be stopped), then send.
+      if (isRunning() && thread.subscribe) {
+        unsubscribe = thread.subscribe(() => {
+          if (isRunning() || timer !== null) return;
+          unsubscribe?.();
+          unsubscribe = null;
+          timer = window.setTimeout(send, 0);
+        });
+        return;
+      }
+      send();
+    };
+    // Append on the next tick, not inside the mount effect itself: when the
+    // panel is opened by the prompt, the runtime mounts in the same commit
+    // and React's development effect replay detaches it once, which aborts
+    // a run started synchronously here ("生成已停止").
+    timer = window.setTimeout(attempt, 0);
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+      unsubscribe?.();
+    };
+  }, [props.prompt, thread]);
 
   return null;
 }
@@ -272,6 +306,7 @@ function AgentPanelLoaded(props: AgentPanelProps) {
           onRemoveSelectedContext={() => props.setSelectedContext(null)}
           composerInputRef={props.composerInputRef}
           onPasteImages={addClipboardImages}
+          learnerNoteCount={props.learnerNoteCount}
         />
       </AssistantRuntimeProvider>
     </aside>
