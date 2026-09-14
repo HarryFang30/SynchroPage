@@ -1,7 +1,27 @@
-import type { ModelApiConfig, ModelRef, UiPreferences } from "../../settings";
+import type { ModelApiConfig, ModelApiProvider, ModelRef, UiPreferences } from "../../settings";
 import type { PdfContextPage, PdfContextPayload } from "../pdf/textExtraction";
 
 export type TeachingOutputLanguage = "zh-CN" | "en-US";
+
+/**
+ * Why the last generation attempt for a page failed. Derived from the typed
+ * transport error (status + backend error code), never from message text.
+ * "quality" is the only kind that may escalate to the heavy quality plan.
+ */
+export type GenerationFailureKind =
+  | "timeout"
+  | "rate_limit"
+  | "network"
+  | "invalid_json"
+  | "truncated"
+  | "server"
+  | "quality";
+
+export type GenerationErrorRecord = {
+  kind: GenerationFailureKind;
+  attempts: number;
+  at: number;
+};
 
 export type PagePack = {
   schema: string;
@@ -32,12 +52,15 @@ export type PageData = {
     prerequisites: string[];
     contextual_bridge?: string;
     formula_explanations?: string[];
+    stuck_points?: string[];
+    exam_angles?: string[];
     evidence?: Array<{
       kind: string;
       quote_or_reference: string;
     }>;
     needs_review?: boolean;
     needs_parser_fallback?: boolean;
+    generation_error?: GenerationErrorRecord;
     confidence: number;
   };
   status: string;
@@ -58,6 +81,10 @@ export type TeachingGenerationQualityPlan = {
   retryOnWeakOutput: boolean;
   attempt: TeachingGenerationAttempt;
   reasons: string[];
+  /** Model-derived: this plan can use the compact "fast text" prompt/context. */
+  fastPath: boolean;
+  /** Model-derived upper bound on pages per /api/generate/pages request. */
+  maxBatchSize: number;
 };
 
 export type TeachingGenerationBatch = {
@@ -120,7 +147,132 @@ const teachingReasoningRank: Record<UiPreferences["modelReasoningEffort"], numbe
   medium: 2,
   high: 3,
   xhigh: 4,
+  max: 5,
 };
+
+const teachingReasoningOrder: UiPreferences["modelReasoningEffort"][] = ["none", "low", "medium", "high", "xhigh", "max"];
+
+/** Text length under which even a reasoning model gets the cheapest effort. */
+const TEACHING_TINY_PAGE_TEXT_CHARS = 300;
+
+export type TeachingModelFamily = "gpt-6" | "gpt-5" | "mini" | "gemini" | "grok" | "other";
+
+export type TeachingModelCapabilities = {
+  family: TeachingModelFamily;
+  minEffort: UiPreferences["modelReasoningEffort"];
+  maxEffort: UiPreferences["modelReasoningEffort"];
+  /** The model is cheap enough for the compact fast-text prompt. */
+  fastPath: boolean;
+  recommendedBatchSize: number;
+  /** The model reasons before answering, so runs start with a small window. */
+  reasoning: boolean;
+};
+
+/**
+ * Model family from the model id alone. Deliberately prefix/segment based so
+ * new gateway models (gpt-6-astra, gpt-5.6-sol, …) are classified without a
+ * hard-coded allow list. "gemini" must not be read as a "mini" model.
+ */
+export function modelFamily(model: string): TeachingModelFamily {
+  const name = String(model || "").trim().toLowerCase();
+  if (!name) return "other";
+  if (name.includes("gemini")) return "gemini";
+  if (name.includes("grok")) return "grok";
+  if (/(?:^|[-_/.\s])mini(?:$|[-_/.\s])/.test(name)) return "mini";
+  if (name.startsWith("gpt-6")) return "gpt-6";
+  if (/^gpt-5(?:[.\-]|$)/.test(name)) return "gpt-5";
+  return "other";
+}
+
+const teachingModelFamilyDefaults: Record<TeachingModelFamily, Omit<TeachingModelCapabilities, "family">> = {
+  "gpt-6": { minEffort: "low", maxEffort: "max", fastPath: false, recommendedBatchSize: 4, reasoning: true },
+  "gpt-5": { minEffort: "none", maxEffort: "max", fastPath: false, recommendedBatchSize: 4, reasoning: true },
+  mini: { minEffort: "none", maxEffort: "high", fastPath: true, recommendedBatchSize: TEACHING_TEXT_PAGE_BATCH_SIZE, reasoning: false },
+  gemini: { minEffort: "low", maxEffort: "high", fastPath: false, recommendedBatchSize: 4, reasoning: false },
+  grok: { minEffort: "low", maxEffort: "high", fastPath: false, recommendedBatchSize: 4, reasoning: false },
+  other: { minEffort: "none", maxEffort: "high", fastPath: false, recommendedBatchSize: 2, reasoning: false },
+};
+
+function normalizeReasoningEffortValue(value: unknown): UiPreferences["modelReasoningEffort"] | undefined {
+  return typeof value === "string" && teachingReasoningOrder.includes(value as UiPreferences["modelReasoningEffort"])
+    ? (value as UiPreferences["modelReasoningEffort"])
+    : undefined;
+}
+
+function apiFeatureOverrides(provider: ModelApiProvider | undefined, model: string): Record<string, unknown> {
+  const features = provider?.apiFeatures;
+  if (!features || typeof features !== "object") return {};
+  const perModelSource = (features as { models?: unknown }).models;
+  const perModel =
+    perModelSource && typeof perModelSource === "object" && !Array.isArray(perModelSource)
+      ? (perModelSource as Record<string, unknown>)[model]
+      : undefined;
+  const perModelRecord = perModel && typeof perModel === "object" && !Array.isArray(perModel)
+    ? (perModel as Record<string, unknown>)
+    : {};
+  return { ...(features as Record<string, unknown>), ...perModelRecord };
+}
+
+/**
+ * Effort range / batch size / fast-path for a model, honouring
+ * provider.apiFeatures (minEffort, maxEffort, recommendedBatchSize, fastPath)
+ * and falling back to family defaults.
+ */
+export function teachingModelCapabilities(
+  provider: ModelApiProvider | undefined,
+  model: string,
+): TeachingModelCapabilities {
+  const family = modelFamily(model);
+  const defaults = teachingModelFamilyDefaults[family];
+  const overrides = apiFeatureOverrides(provider, model);
+  const minEffort = normalizeReasoningEffortValue(overrides.minEffort) || defaults.minEffort;
+  const maxEffortCandidate = normalizeReasoningEffortValue(overrides.maxEffort) || defaults.maxEffort;
+  const maxEffort = teachingReasoningRank[maxEffortCandidate] < teachingReasoningRank[minEffort] ? minEffort : maxEffortCandidate;
+  const batchSize = Math.floor(Number(overrides.recommendedBatchSize));
+  return {
+    family,
+    minEffort,
+    maxEffort,
+    fastPath: typeof overrides.fastPath === "boolean" ? overrides.fastPath : defaults.fastPath,
+    recommendedBatchSize: Number.isFinite(batchSize) && batchSize >= 1 ? Math.min(batchSize, 24) : defaults.recommendedBatchSize,
+    reasoning: typeof overrides.reasoning === "boolean" ? overrides.reasoning : defaults.reasoning,
+  };
+}
+
+export function clampTeachingReasoningEffort(
+  effort: UiPreferences["modelReasoningEffort"],
+  capabilities: TeachingModelCapabilities,
+): UiPreferences["modelReasoningEffort"] {
+  const rank = teachingReasoningRank[effort] ?? teachingReasoningRank.low;
+  if (rank < teachingReasoningRank[capabilities.minEffort]) return capabilities.minEffort;
+  if (rank > teachingReasoningRank[capabilities.maxEffort]) return capabilities.maxEffort;
+  return effort;
+}
+
+export function lowerTeachingReasoningEffort(
+  effort: UiPreferences["modelReasoningEffort"],
+  capabilities?: TeachingModelCapabilities,
+): UiPreferences["modelReasoningEffort"] {
+  const index = Math.max(0, teachingReasoningOrder.indexOf(effort));
+  const lowered = teachingReasoningOrder[Math.max(0, index - 1)];
+  return capabilities ? clampTeachingReasoningEffort(lowered, capabilities) : lowered;
+}
+
+export function teachingProviderForPlan(
+  config: ModelApiConfig | undefined,
+  providerId: string,
+): ModelApiProvider | undefined {
+  return config?.providers.find((provider) => provider.id === providerId);
+}
+
+/** gpt-6 style models: content pages get a medium floor, tiny pages stay low. */
+function teachingModelEffortFloor(
+  capabilities: TeachingModelCapabilities,
+  sourceTextLength: number,
+): UiPreferences["modelReasoningEffort"] | undefined {
+  if (capabilities.family !== "gpt-6") return undefined;
+  return sourceTextLength < TEACHING_TINY_PAGE_TEXT_CHARS ? "low" : "medium";
+}
 
 export function normalizeTeachingOutputLanguage(value: unknown): TeachingOutputLanguage | undefined {
   return value === "zh-CN" || value === "en-US" ? value : undefined;
@@ -150,6 +302,7 @@ export function teachingGenerationReasoningEffort(
   requested: UiPreferences["modelReasoningEffort"] = "low",
 ): UiPreferences["modelReasoningEffort"] {
   if (requested === "low") return preference === "none" ? "none" : "low";
+  if (preference === "max") return "max";
   if (preference === "xhigh") return "xhigh";
   if (preference === "high") return "high";
   return requested;
@@ -182,8 +335,10 @@ export function teachingGenerationQualityPlan(
     !codeLike &&
     !visualLike &&
     sourceText.length >= TEACHING_FILE_INPUT_MIN_TEXT_CHARS;
+  // Only model-reported quality problems may escalate. A page that failed for
+  // transport reasons (timeout / 429 / network) carries teaching.generation_error
+  // instead and must be retried with the same — not a heavier — plan.
   const previousWeak =
-    page.status === "failed" ||
     Boolean(page.teaching.needs_review) ||
     Boolean(page.teaching.needs_parser_fallback);
 
@@ -262,6 +417,19 @@ export function teachingGenerationQualityPlan(
         ? modelDefaults.balanced
         : modelDefaults.fast;
   const fallbackRef = modelDefaults.quality;
+  const capabilities = teachingModelCapabilities(
+    teachingProviderForPlan(modelApiConfig, selectedRef.providerId),
+    selectedRef.model,
+  );
+  const effortFloor = teachingModelEffortFloor(capabilities, sourceText.length);
+  if (effortFloor) {
+    requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, effortFloor);
+    reasons.push(`model-effort-floor-${effortFloor}`);
+  }
+  const reasoningEffort = clampTeachingReasoningEffort(
+    teachingGenerationReasoningEffort(preference, requestedReasoning),
+    capabilities,
+  );
   return {
     providerId: selectedRef.providerId,
     model: selectedRef.model,
@@ -272,11 +440,67 @@ export function teachingGenerationQualityPlan(
     fallbackModel: selectedRef.providerId === fallbackRef.providerId && selectedRef.model === fallbackRef.model
       ? undefined
       : fallbackRef.model,
-    reasoningEffort: teachingGenerationReasoningEffort(preference, requestedReasoning),
+    reasoningEffort,
     attachPdf,
     batchable,
     retryOnWeakOutput,
     attempt,
+    reasons,
+    fastPath: capabilities.fastPath && (reasoningEffort === "none" || reasoningEffort === "low"),
+    maxBatchSize: capabilities.recommendedBatchSize,
+  };
+}
+
+export type PlanForRetryContext = {
+  page: PageData;
+  preference: UiPreferences["modelReasoningEffort"];
+  modelApiConfig?: ModelApiConfig;
+};
+
+/**
+ * Next plan after a failed attempt, keyed on WHY it failed.
+ * - timeout / network / server: same effort, no PDF; a second such failure steps
+ *   the effort down once (a slow upstream is not a quality problem).
+ * - rate_limit: identical plan — the shared limiter gate provides the wait.
+ * - invalid_json / truncated: same plan once, then one step lower.
+ * - quality: the only kind that escalates to the heavy "retry" plan (high + PDF).
+ */
+export function planForRetry(
+  kind: GenerationFailureKind,
+  previousPlan: TeachingGenerationQualityPlan,
+  attempt: number,
+  context: PlanForRetryContext,
+): TeachingGenerationQualityPlan {
+  if (kind === "quality") {
+    return teachingGenerationQualityPlan(context.page, context.preference, "retry", context.modelApiConfig);
+  }
+  if (kind === "rate_limit") return previousPlan;
+
+  const capabilities = teachingModelCapabilities(
+    teachingProviderForPlan(context.modelApiConfig, previousPlan.providerId),
+    previousPlan.model,
+  );
+  // A truncated body is deterministic for the same budget: step down at once.
+  const stepDown = kind === "truncated" || attempt >= 2;
+  const reasoningEffort = stepDown
+    ? lowerTeachingReasoningEffort(previousPlan.reasoningEffort, capabilities)
+    : clampTeachingReasoningEffort(previousPlan.reasoningEffort, capabilities);
+  // Transport failures must not grow the request; a truncated/invalid body keeps
+  // whatever grounding the previous attempt had.
+  const attachPdf = kind === "invalid_json" || kind === "truncated" ? previousPlan.attachPdf : false;
+  const reasons = [
+    ...previousPlan.reasons.filter((reason) => !reason.startsWith("retry-kind:")),
+    `retry-kind:${kind}`,
+    ...(stepDown ? ["retry-effort-step-down"] : []),
+  ];
+  return {
+    ...previousPlan,
+    attempt: "initial",
+    reasoningEffort,
+    attachPdf,
+    batchable: false,
+    retryOnWeakOutput: false,
+    fastPath: previousPlan.fastPath && (reasoningEffort === "none" || reasoningEffort === "low"),
     reasons,
   };
 }
@@ -398,8 +622,20 @@ export function teachingModelRequestPriority(
   return pages.some((page) => page.page_no === priorityPageNo) ? priority : fallback;
 }
 
+/**
+ * Structural pages (title, agenda, blank, summary) legitimately produce short
+ * notes; they must never trigger the heavy weak-output retry.
+ */
+export function isLowContentTeachingPageType(page: PageData) {
+  const pageType = String(page.source.page_type || "").trim().toLowerCase();
+  return pageType === "title" || pageType === "agenda" || pageType === "blank" || pageType === "summary";
+}
+
 export function generatedTeachingNeedsRetry(page: PageData) {
   const notes = page.teaching.speaker_notes_md.trim();
+  if (isLowContentTeachingPageType(page)) {
+    return page.status === "failed" || (Boolean(page.teaching.needs_parser_fallback) && !notes.length);
+  }
   return (
     page.status === "failed" ||
     Boolean(page.teaching.needs_parser_fallback) ||
@@ -588,6 +824,14 @@ function pageHasVisualSignals(page: PageData, text: string) {
   );
 }
 
+function compactTeachingPages(pages: PageData[]) {
+  if (!pages.length) return false;
+  const sourceLengths = pages.map((page) => page.source.text_md.trim().length);
+  const maxChars = Math.max(...sourceLengths);
+  const avgChars = sourceLengths.reduce((sum, length) => sum + length, 0) / sourceLengths.length;
+  return maxChars <= TEACHING_TEXT_COMPACT_PAGE_MAX_CHARS && avgChars <= TEACHING_TEXT_COMPACT_AVG_CHARS;
+}
+
 function teachingBatchSizeForPlan(plan: TeachingGenerationQualityPlan, pages: PageData[] = []) {
   if (plan.attachPdf) return 1;
   if (isFastTextTeachingPlan(plan)) {
@@ -603,21 +847,21 @@ function teachingBatchSizeForPlan(plan: TeachingGenerationQualityPlan, pages: Pa
     }
     return TEACHING_TEXT_PAGE_BATCH_SIZE;
   }
-  if (!plan.attachPdf && plan.model === TEACHING_BALANCED_MODEL) return TEACHING_BALANCED_TEXT_PAGE_BATCH_SIZE;
-  return TEACHING_BALANCED_PAGE_BATCH_SIZE;
+  // Reasoning models: only compact text pages are worth grouping, and never
+  // beyond the model's recommended batch size.
+  const limit = Math.max(1, plan.maxBatchSize || TEACHING_BALANCED_TEXT_PAGE_BATCH_SIZE);
+  return compactTeachingPages(pages) ? limit : Math.min(limit, TEACHING_BALANCED_PAGE_BATCH_SIZE);
 }
 
 function isFastTextTeachingPlan(plan: TeachingGenerationQualityPlan) {
-  return plan.model === TEACHING_FAST_MODEL && (plan.reasoningEffort === "none" || plan.reasoningEffort === "low") && !plan.attachPdf;
+  return plan.fastPath && !plan.attachPdf;
 }
 
 function teachingSourceRequestLimitForPlan(plan: TeachingGenerationQualityPlan) {
-  if (plan.attachPdf || plan.reasoningEffort === "high" || plan.reasoningEffort === "xhigh") {
+  if (plan.attachPdf || plan.reasoningEffort === "high" || plan.reasoningEffort === "xhigh" || plan.reasoningEffort === "max") {
     return TEACHING_QUALITY_SOURCE_REQUEST_CHARS;
   }
-  if (plan.model === TEACHING_FAST_MODEL && (plan.reasoningEffort === "none" || plan.reasoningEffort === "low")) {
-    return TEACHING_FAST_SOURCE_REQUEST_CHARS;
-  }
+  if (isFastTextTeachingPlan(plan)) return TEACHING_FAST_SOURCE_REQUEST_CHARS;
   return TEACHING_BALANCED_SOURCE_REQUEST_CHARS;
 }
 
@@ -638,10 +882,13 @@ function teachingPlansCanShareBatch(left: TeachingGenerationQualityPlan, right: 
 
 function generatedTeachingLooksWeak(page: PageData) {
   const notes = page.teaching.speaker_notes_md.trim();
-  return (
+  const modelReportedWeak =
     page.status === "failed" ||
     Boolean(page.teaching.needs_review) ||
-    Boolean(page.teaching.needs_parser_fallback) ||
+    Boolean(page.teaching.needs_parser_fallback);
+  if (isLowContentTeachingPageType(page)) return modelReportedWeak || !notes.length;
+  return (
+    modelReportedWeak ||
     page.teaching.confidence < TEACHING_LOW_QUALITY_CONFIDENCE ||
     notes.length < TEACHING_LOW_QUALITY_NOTE_CHARS
   );

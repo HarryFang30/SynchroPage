@@ -161,6 +161,8 @@ export function StructurePanel({ page, copy }: { page: PageData; copy: AppCopy }
     [copy.structure.confidence, `${Math.round(page.teaching.confidence * 100)}%`],
     [copy.structure.prerequisites, page.teaching.prerequisites.join(copy.common.listSeparator) || copy.common.none],
     [copy.structure.visualNotes, page.teaching.visual_explanations.join(copy.common.sentenceSeparator) || copy.common.none],
+    [copy.structure.stuckPoints, (page.teaching.stuck_points || []).join(copy.common.sentenceSeparator) || copy.common.none],
+    [copy.structure.examAngles, (page.teaching.exam_angles || []).join(copy.common.sentenceSeparator) || copy.common.none],
     [copy.structure.sourceText, page.source.text_md || copy.common.none],
   ];
   return (

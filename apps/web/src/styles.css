@@ -9,5 +9,8 @@
 @import "./styles/dark-overrides.css";
 @import "./styles/synchropage-refinements.css";
 @import "./styles/responsive.css";
+@import "./styles/quiz.css";
+@import "./styles/calm-surface.css";
+@import "./styles/annotations.css";
 
 @tailwind utilities;

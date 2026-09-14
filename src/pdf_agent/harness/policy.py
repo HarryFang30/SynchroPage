@@ -38,7 +38,5 @@ class DeterministicPolicyGate:
             return True
         if not page.teaching.evidence:
             return True
-        if page.teaching.confidence < self.low_confidence_threshold:
-            return True
-        return False
+        return page.teaching.confidence < self.low_confidence_threshold
 

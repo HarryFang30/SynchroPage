@@ -6,7 +6,7 @@ export type FontScale = "compact" | "default" | "large";
 export type ScrollbarStyle = "thin" | "subtle" | "native";
 export type Language = "zh-CN" | "en-US";
 export type ExplanationLanguage = "auto" | Language;
-export type ModelReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
+export type ModelReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type AgentAnswerMode = "concise" | "guided" | "detailed";
 export type ApiProviderType =
   | "codex-oauth"
@@ -127,6 +127,25 @@ export const defaultModelApiConfig: ModelApiConfig = {
       models: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
     },
     {
+      id: "coproxy",
+      name: "coproxy (GPT-6 gateway)",
+      type: "openai-responses",
+      apiHost: "https://us.taohuang.info/v1",
+      apiKeyRequired: true,
+      enabled: false,
+      models: ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gemini-3.8-flash", "grok-4.6"],
+      // Read by teachingModelCapabilities(): reasoning-effort range and batch
+      // size per model. gpt-6 rejects reasoning.effort "none", hence minEffort.
+      apiFeatures: {
+        models: {
+          "gpt-6-astra": { minEffort: "low", maxEffort: "max", recommendedBatchSize: 4 },
+          "gpt-5.6-sol": { minEffort: "low", maxEffort: "max", recommendedBatchSize: 4 },
+          "gemini-3.8-flash": { minEffort: "low", maxEffort: "high", recommendedBatchSize: 4 },
+          "grok-4.6": { minEffort: "low", maxEffort: "high", recommendedBatchSize: 4 },
+        },
+      },
+    },
+    {
       id: "openai_api",
       name: "OpenAI API Key",
       type: "openai-responses",
@@ -211,7 +230,9 @@ export function normalizeExplanationLanguage(value: unknown): ExplanationLanguag
 }
 
 export function normalizeModelReasoningEffort(value: unknown): ModelReasoningEffort {
-  return value === "none" || value === "low" || value === "medium" || value === "high" || value === "xhigh" ? value : "medium";
+  return value === "none" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max"
+    ? value
+    : "medium";
 }
 
 export function normalizeAgentAnswerMode(value: unknown): AgentAnswerMode {

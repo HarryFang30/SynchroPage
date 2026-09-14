@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import type { AppCopy } from "../i18n";
 import type {
+  GenerationFailureKind,
   PageData,
   PagePack,
   TeachingGenerationQualityPlan,
@@ -12,6 +13,7 @@ import {
   generatedTeachingNeedsRetry,
   lightPdfContextForFastTeachingGeneration,
   PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
+  planForRetry,
   prioritizeTeachingPages,
   shouldPreferTeachingCandidate,
   teachingDocumentContextForPlan,
@@ -24,20 +26,28 @@ import {
   teachingOutputLanguageName,
   TEACHING_PROJECT_MODEL_REQUEST_CONCURRENCY,
   TEACHING_PROJECT_WARMUP_PAGE_COUNT,
-  teachingQualityPlanPayload,
-  teachingRequestPage,
   teachingWarmupPageNumbers,
   type GeneratedTeachingPageResponse,
   type GeneratedTeachingPagesResponse,
 } from "../lib/generation/teachingGeneration";
 import {
+  classifyGenerationFailure,
   createAsyncLimiter,
+  generationWindowStorageKey,
+  initialGenerationWindow,
+  isAbortError,
+  isReasoningGenerationModel,
+  limiterOutcomeForFailure,
+  loadPersistedGenerationWindow,
   mergePageIntoPack,
   missingSourceTextPageNumbers,
   normalizeGeneratedPage,
   pageWithSourceText,
   runWithConcurrencyLimit,
+  type AsyncLimiter,
+  type GenerationFailureClassification,
 } from "../lib/generation/generationRuntime";
+import type { AsyncLimiterPriority } from "../lib/generation/teachingGeneration";
 import { requestJson } from "../lib/http/requestJson";
 import {
   extractPdfPagesFromBlob,
@@ -74,23 +84,46 @@ import {
   createDocumentFileLoaderFromBlob,
 } from "./generationPersistence";
 
-const TEACHING_PAGE_REQUEST_TIMEOUT_MS = 120_000;
-const TEACHING_BATCH_REQUEST_TIMEOUT_MS = 150_000;
-const TEACHING_BATCH_STALL_TIMEOUT_MS = 35_000;
+/**
+ * Backend per-request deadline by reasoning effort (seconds), mirrored from
+ * GET /api/generate/status. The client timeout must always sit ABOVE it, or a
+ * request the server would have answered is counted as a client timeout and
+ * re-issued while the server is still working on it (F10).
+ */
+const TEACHING_BACKEND_DEADLINE_SECONDS: Record<string, number> = {
+  none: 180,
+  low: 180,
+  medium: 300,
+  high: 480,
+  xhigh: 600,
+  max: 600,
+};
+const TEACHING_BATCH_EXTRA_SECONDS_PER_PAGE = 60;
+const TEACHING_BATCH_EXTRA_FREE_PAGES = 2;
+const TEACHING_REQUEST_TIMEOUT_MARGIN_MS = 20_000;
+/** Informational "still generating" notice cadence — never aborts (F02). */
+const TEACHING_SLOW_NOTICE_INTERVAL_MS = 30_000;
 const PDF_FETCH_TIMEOUT_MS = 30_000;
 const PDF_TEXT_EXTRACTION_BASE_TIMEOUT_MS = 45_000;
 const PDF_TEXT_EXTRACTION_PER_PAGE_TIMEOUT_MS = 2_000;
 const PDF_TEXT_EXTRACTION_MAX_TIMEOUT_MS = 240_000;
-const TEACHING_PAGE_MAX_ATTEMPTS = 3;
-const TEACHING_PAGE_RETRY_DELAYS_MS = [1_000, 3_000] as const;
-const TEACHING_RATE_LIMIT_EXTRA_COOLDOWN_MS = 8_000;
-const TEACHING_RATE_LIMIT_EXTRA_JITTER_MS = 4_000;
+const TEACHING_PAGE_MAX_ATTEMPTS = 4;
+const TEACHING_PAGE_RETRY_DELAYS_MS = [3_000, 10_000, 30_000] as const;
+const TEACHING_RETRY_JITTER_RATIO = 0.3;
+/** Dispatch bound only; the adaptive limiter is the real concurrency knob. */
+const TEACHING_BATCH_DISPATCH_CONCURRENCY = 6;
+const GENERATION_STATUS_REQUEST_TIMEOUT_MS = 5_000;
 
 type GenerationRequestWatchdogOptions = {
   timeoutMessage?: string;
-  stallMs?: number;
-  stallMessage?: string;
-  onStall?: () => void;
+  /** Interval between informational slow notices; the request is never aborted. */
+  slowMs?: number;
+  onSlow?: (elapsedSeconds: number) => void;
+};
+
+type GenerationRuntimeLimits = {
+  deadlines?: Record<string, number>;
+  concurrency?: number;
 };
 
 export interface GenerationEngineParams {
@@ -164,7 +197,9 @@ export function useGenerationEngine(p: GenerationEngineParams) {
       scopedPages.filter((item) => !hasCompletedTeaching(item, pageOutputLanguage)),
       p.currentPdfPageNo,
     );
-    let skippedPages = scopedPages.length - pagesToGenerate.length;
+    // Pages already complete before this run; a pre-run fact, never recomputed
+    // after a pass has finished pages (F07).
+    const skippedPages = scopedPages.length - pagesToGenerate.length;
     if (!pagesToGenerate.length) {
       p.setPack(workingPack);
       p.setJobStatus(p.copy.status.generationScopeAlreadyComplete(formatPageRanges(targetPageNumbers)));
@@ -184,7 +219,19 @@ export function useGenerationEngine(p: GenerationEngineParams) {
 
     void (async () => {
       let completed = 0;
-      const runTeachingModelRequest = createAsyncLimiter(TEACHING_GENERATION_CONCURRENCY);
+      // Pages this run gave up on; excluded from later passes of the same run
+      // only, so a page that failed in an earlier session is still retried.
+      const failedThisRun = new Set<number>();
+      const runtimeLimits: GenerationRuntimeLimits = {};
+      const runTeachingModelRequest = createTeachingRequestLimiter({
+        modelRef: p.modelApiConfig.defaults.teachingBalanced,
+        maxConcurrency: TEACHING_GENERATION_CONCURRENCY,
+        onRateLimited: (seconds) => p.setJobStatus(p.copy.status.generationRateLimited(seconds)),
+        onConcurrencyReduced: (limit) => p.setJobStatus(p.copy.status.generationConcurrencyReduced(limit)),
+      });
+      void fetchGenerationRuntimeLimits(generationSignal).then((limits) => {
+        if (limits) Object.assign(runtimeLimits, limits);
+      });
       try {
         let extractedPagesForGeneration = p.pdfExtractedPages;
         const getDocumentFileForPlan = createDocumentFileLoaderFromUrl({
@@ -223,7 +270,6 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             scopedPages.filter((item) => !hasCompletedTeaching(item, pageOutputLanguage)),
             p.currentPdfPageNo,
           );
-          skippedPages = scopedPages.length - pagesToGenerate.length;
           p.setPack(workingPack);
         };
 
@@ -246,6 +292,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           const markRunningPage = (pageToGenerate: PageData) => {
             const pageNo = pageToGenerate.page_no;
             const basePage = generationInputPagesByNumber.get(pageNo) || draftPack.pages[pageNo - 1];
+            if (generationSignal.aborted) return basePage;
             const runningPage = buildRunningPageData(basePage, pageOutputLanguage);
             workingPack = mergePageIntoPack(workingPack, runningPage);
             workingPagesByNumber.set(pageNo, runningPage);
@@ -262,42 +309,41 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             const nextPage = generationInputPagesByNumber.get(pageNo + 1);
             const documentFile = await getDocumentFileForPlan(plan);
             const priority = teachingModelRequestPriority([runningPage], p.currentPdfPageNo, "now", "next");
-            const response = await runTeachingModelRequest(() =>
-              runGenerationRequestWithTimeout(generationSignal, TEACHING_PAGE_REQUEST_TIMEOUT_MS, (requestSignal) =>
-                requestJson<GeneratedTeachingPageResponse>(
-                  "/api/generate/page",
-                  {
-                    method: "POST",
-                    signal: requestSignal,
-                    body: JSON.stringify({
-                      modelProviderId: plan.providerId,
-                      model: plan.model,
-                      fallbackModelProviderId: plan.fallbackProviderId,
-                      fallbackModel: plan.fallbackModel,
-                      reasoningEffort: plan.reasoningEffort,
-                      qualityPlan: teachingQualityPlanPayload(plan),
-                      document: workingPack.document,
-                      documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
-                      documentFile,
-                      outputLanguage: pageOutputLanguage,
-                      outputLanguageLabel: pageOutputLanguageLabel,
-                      uiLanguage: p.uiPreferences.language,
-                      page: teachingRequestPage(runningPage, plan),
-                      pageCount: totalPages,
-                      previousPage: previousPage
-                        ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
-                        : null,
-                      nextPage: nextPage
-                        ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
-                        : null,
-                    }),
-                  },
-                  p.copy.errors.accountNotFound,
-                ),
-              {
-                timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_PAGE_REQUEST_TIMEOUT_MS)),
-              }),
+            const timeoutMs = teachingRequestTimeoutMs(plan.reasoningEffort, 1, runtimeLimits.deadlines);
+            const response = await runLimitedGenerationRequest(
+              runTeachingModelRequest,
               { priority, signal: generationSignal },
+              () =>
+                runGenerationRequestWithTimeout(generationSignal, timeoutMs, (requestSignal) =>
+                  requestJson<GeneratedTeachingPageResponse>(
+                    "/api/generate/page",
+                    {
+                      ...buildSinglePageRequestBody({
+                        plan,
+                        document: workingPack.document,
+                        documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
+                        documentFile,
+                        outputLanguage: pageOutputLanguage,
+                        outputLanguageLabel: pageOutputLanguageLabel,
+                        uiLanguage: p.uiPreferences.language,
+                        runningPage,
+                        pageCount: totalPages,
+                        previousPage: previousPage
+                          ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
+                          : null,
+                        nextPage: nextPage
+                          ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
+                          : null,
+                      }),
+                      signal: requestSignal,
+                    },
+                    p.copy.errors.accountNotFound,
+                  ),
+                {
+                  timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(timeoutMs)),
+                  slowMs: generationSlowNoticeIntervalMs(),
+                  onSlow: (elapsedSeconds) => p.setJobStatus(p.copy.status.generationPageSlow(pageNo, elapsedSeconds)),
+                }),
             );
             return normalizeGeneratedWithLanguage(response, runningPage, pageOutputLanguage);
           };
@@ -320,13 +366,15 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               fallbackOnFailure,
               requestGeneratedPage,
               commitGeneratedPage,
-              markRetryingPage: (page, attempt, totalAttempts) => {
+              markRetryingPage: (page, attempt, totalAttempts, kind) => {
                 if (generationSignal.aborted) return;
                 const retryingPage = buildRetryingPageData(page, pageOutputLanguage);
                 workingPack = mergePageIntoPack(workingPack, retryingPage);
                 workingPagesByNumber.set(pageNo, retryingPage);
                 p.setPack(workingPack);
-                p.setJobStatus(p.copy.status.generationPageRetrying(pageNo, attempt, totalAttempts));
+                p.setJobStatus(
+                  p.copy.status.generationPageRetryingReason(pageNo, attempt, totalAttempts, retryReasonText(kind, p.copy)),
+                );
               },
               commitFailedPage: (failedPage) => {
                 if (generationSignal.aborted) return;
@@ -334,94 +382,98 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 workingPagesByNumber.set(pageNo, failedPage);
                 p.setPack(workingPack);
                 p.setJobStatus(p.copy.status.generationPageFailed(pageNo, generationFailureMessage(failedPage)));
+                failedThisRun.add(pageNo);
                 persistQueue.enqueue(failedPage);
               },
             });
           };
 
           const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort, p.modelApiConfig);
-          await runWithConcurrencyLimit(pageBatches, TEACHING_GENERATION_CONCURRENCY, async (pageBatch) => {
+          await runWithConcurrencyLimit(pageBatches, TEACHING_BATCH_DISPATCH_CONCURRENCY, async (pageBatch) => {
+            if (generationSignal.aborted) return;
             const runningPages = pageBatch.pages.map(markRunningPage);
             if (runningPages.length === 1) {
               await generateSinglePage(runningPages[0], pageBatch.plan);
               return;
             }
 
+            const handledPageNumbers = new Set<number>();
             try {
               const documentFile = await getDocumentFileForPlan(pageBatch.plan);
               const priority = teachingModelRequestPriority(runningPages, p.currentPdfPageNo, "now", "next");
-              const batchStallMs = generationBatchStallTimeoutMs();
-              const response = await runTeachingModelRequest(() =>
-                runGenerationRequestWithTimeout(generationSignal, TEACHING_BATCH_REQUEST_TIMEOUT_MS, (requestSignal) =>
-                  requestJson<GeneratedTeachingPagesResponse>(
-                    "/api/generate/pages",
-                    {
-                      method: "POST",
-                      signal: requestSignal,
-                      body: JSON.stringify({
-                        modelProviderId: pageBatch.plan.providerId,
-                        model: pageBatch.plan.model,
-                        fallbackModelProviderId: pageBatch.plan.fallbackProviderId,
-                        fallbackModel: pageBatch.plan.fallbackModel,
-                        reasoningEffort: pageBatch.plan.reasoningEffort,
-                        qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
-                        document: workingPack.document,
-                        documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
-                        documentFile,
-                        outputLanguage: pageOutputLanguage,
-                        outputLanguageLabel: pageOutputLanguageLabel,
-                        uiLanguage: p.uiPreferences.language,
-                        pages: runningPages.map((page) => teachingRequestPage(page, pageBatch.plan)),
-                        pageCount: totalPages,
-                      }),
-                    },
-                    p.copy.errors.accountNotFound,
-                  ),
-                {
-                  stallMs: batchStallMs,
-                  stallMessage: p.copy.errors.generationBatchRequestStalled(timeoutSeconds(batchStallMs)),
-                  onStall: () => p.setJobStatus(p.copy.errors.generationBatchRequestStalled(timeoutSeconds(batchStallMs))),
-                  timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_BATCH_REQUEST_TIMEOUT_MS)),
-                }),
+              const timeoutMs = teachingRequestTimeoutMs(
+                pageBatch.plan.reasoningEffort,
+                runningPages.length,
+                runtimeLimits.deadlines,
+              );
+              const response = await runLimitedGenerationRequest(
+                runTeachingModelRequest,
                 { priority, signal: generationSignal },
+                () =>
+                  runGenerationRequestWithTimeout(generationSignal, timeoutMs, (requestSignal) =>
+                    requestJson<BatchGenerationResponse>(
+                      "/api/generate/pages",
+                      {
+                        ...buildBatchPagesRequestBody({
+                          plan: pageBatch.plan,
+                          document: workingPack.document,
+                          documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
+                          documentFile,
+                          outputLanguage: pageOutputLanguage,
+                          outputLanguageLabel: pageOutputLanguageLabel,
+                          uiLanguage: p.uiPreferences.language,
+                          runningPages,
+                          pageCount: totalPages,
+                        }),
+                        signal: requestSignal,
+                      },
+                      p.copy.errors.accountNotFound,
+                    ),
+                  {
+                    timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(timeoutMs)),
+                    slowMs: generationSlowNoticeIntervalMs(),
+                    onSlow: (elapsedSeconds) =>
+                      p.setJobStatus(p.copy.status.generationBatchSlow(runningPages.length, elapsedSeconds)),
+                  }),
               );
-              const generatedPagesByNumber = new Map(
-                response.pages.map((page) => [Number(page.page_no || 0), page]),
-              );
-              const retryPages: Array<{ runningPage: PageData; retryPlan: TeachingGenerationQualityPlan; fallback: PageData }> = [];
-              for (const runningPage of runningPages) {
-                const rawGeneratedPage = generatedPagesByNumber.get(runningPage.page_no);
-                if (!rawGeneratedPage) throw new Error(`Batch response missed page ${runningPage.page_no}`);
-                const normalizedGeneratedPage = normalizeGeneratedPage(rawGeneratedPage, runningPage);
-                const generatedPage: PageData = {
-                  ...normalizedGeneratedPage,
-                  teaching: {
-                    ...normalizedGeneratedPage.teaching,
-                    output_language: pageOutputLanguage,
-                  },
-                };
-                if (pageBatch.plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
-                  const retryPlan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "retry", p.modelApiConfig);
-                  retryPages.push({ runningPage, retryPlan, fallback: generatedPage });
-                  continue;
-                }
-                if (generationSignal.aborted) return;
-                workingPack = mergePageIntoPack(workingPack, generatedPage);
-                workingPagesByNumber.set(generatedPage.page_no, generatedPage);
-                completed += 1;
-                persistQueue.enqueue(generatedPage);
-              }
+              const outcome = resolveBatchResponse({
+                response,
+                runningPages,
+                plan: pageBatch.plan,
+                outputLanguage: pageOutputLanguage,
+                preference: p.uiPreferences.modelReasoningEffort,
+                modelApiConfig: p.modelApiConfig,
+                isAborted: () => generationSignal.aborted,
+                commitGeneratedPage: (generatedPage) => {
+                  workingPack = mergePageIntoPack(workingPack, generatedPage);
+                  workingPagesByNumber.set(generatedPage.page_no, generatedPage);
+                  completed += 1;
+                  persistQueue.enqueue(generatedPage);
+                },
+                onHandled: (pageNo) => handledPageNumbers.add(pageNo),
+              });
+              if (generationSignal.aborted) return;
               p.setPack(workingPack);
-              await runWithConcurrencyLimit(retryPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async ({ runningPage, retryPlan, fallback }) => {
+              await runWithConcurrencyLimit(outcome.weakPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async ({ runningPage, retryPlan, fallback }) => {
                 await generateSinglePage(runningPage, retryPlan, fallback);
               });
-            } catch {
-              if (generationSignal.aborted) return;
-              await runWithConcurrencyLimit(runningPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async (runningPage) => {
-                await generateSinglePage(runningPage);
+              // Contract (b): a 200 with "missing" means those pages alone must be
+              // regenerated singly — the pages that did parse stay committed.
+              await runWithConcurrencyLimit(outcome.missingPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async (runningPage) => {
+                await generateSinglePage(runningPage, singlePageFallbackPlan(pageBatch.plan, runningPage, p.uiPreferences.modelReasoningEffort, p.modelApiConfig));
+              });
+            } catch (error) {
+              if (generationSignal.aborted || isAbortError(error)) return;
+              const classification = classifyGenerationFailure(error);
+              const pendingPages = runningPages.filter((page) => !handledPageNumbers.has(page.page_no));
+              await runWithConcurrencyLimit(pendingPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async (runningPage) => {
+                await generateSinglePage(
+                  runningPage,
+                  batchFailureFallbackPlan(classification, pageBatch.plan, runningPage, p.uiPreferences.modelReasoningEffort, p.modelApiConfig),
+                );
               });
             }
-          });
+          }, { signal: generationSignal });
         };
 
         if (p.pdfUrl && missingTargetSourceText.length) {
@@ -469,8 +521,11 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             const remainingExtracted = await remainingExtractionPromise;
             if (remainingExtracted?.pages.length) mergeExtractedPages(remainingExtracted.pages);
             if (generationSignal.aborted) return;
+            // Always recompute from the live workingPack: scopedPages is a
+            // pre-run snapshot and would re-select pages the warm-up pass just
+            // finished (F14).
             const remainingPagesToGenerate = prioritizeTeachingPages(
-              scopedPages.filter((page) => !hasCompletedTeaching(page, pageOutputLanguage)),
+              workingPack.pages.filter((page) => targetPageSet.has(page.page_no) && needsGenerationPass(page, pageOutputLanguage, failedThisRun)),
               p.currentPdfPageNo,
             );
             await runGenerationPass(remainingPagesToGenerate, extractedPagesForGeneration);
@@ -494,6 +549,9 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           if (generationSignal.aborted) return;
           await runGenerationPass(pagesToGenerate, extractedPagesForGeneration);
         }
+        // A stopped run must not write its half-marked working pack or claim
+        // completion; the app already reverted the in-flight pages to drafts.
+        if (generationSignal.aborted) return;
         if (p.workspaceId && p.documentId && workingPack.document.id === p.documentId) {
           await persistQueue.flush();
           await saveGeneratedPagesFromPack({ workspaceId: p.workspaceId, documentId: p.documentId, pack: workingPack });
@@ -501,9 +559,15 @@ export function useGenerationEngine(p: GenerationEngineParams) {
         }
         p.setJobStatus(p.copy.status.generationDone(completed, scopedPages.length, skippedPages));
       } catch (error) {
-        if (generationSignal.aborted || (error as Error).name === "AbortError") return;
+        if (generationSignal.aborted || isAbortError(error)) return;
         const message = generationErrorMessage(error, p.copy);
-        workingPack = failActiveGenerationPages(workingPack, message, pageOutputLanguage, p.copy);
+        workingPack = failActiveGenerationPages(
+          workingPack,
+          message,
+          pageOutputLanguage,
+          p.copy,
+          classifyGenerationFailure(error).kind,
+        );
         p.setPack(workingPack);
         p.setJobStatus(message);
       } finally {
@@ -567,7 +631,16 @@ export function useGenerationEngine(p: GenerationEngineParams) {
       let checkedTotal = 0;
       let skippedTotal = 0;
       let processedDocuments = 0;
-      const runTeachingModelRequest = createAsyncLimiter(TEACHING_PROJECT_MODEL_REQUEST_CONCURRENCY);
+      const runtimeLimits: GenerationRuntimeLimits = {};
+      const runTeachingModelRequest = createTeachingRequestLimiter({
+        modelRef: p.modelApiConfig.defaults.teachingBalanced,
+        maxConcurrency: TEACHING_PROJECT_MODEL_REQUEST_CONCURRENCY,
+        onRateLimited: (seconds) => p.setJobStatus(p.copy.status.generationRateLimited(seconds)),
+        onConcurrencyReduced: (limit) => p.setJobStatus(p.copy.status.generationConcurrencyReduced(limit)),
+      });
+      void fetchGenerationRuntimeLimits(generationSignal).then((limits) => {
+        if (limits) Object.assign(runtimeLimits, limits);
+      });
       try {
         await runWithConcurrencyLimit(projectDocumentItems, TEACHING_DOCUMENT_GENERATION_CONCURRENCY, async (item, index) => {
           processedDocuments += 1;
@@ -650,6 +723,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           mergeExtractedPages(extracted.pages);
 
           let workingPagesByNumber = new Map<number, PageData>();
+          const failedThisRun = new Set<number>();
           const rebuildWorkingPack = () => {
             draftPack = createDraftPagePack(sourcePack.document.title, sourcePack.document.source_pdf_url, totalPages, sourcePack.document.id);
             workingPack = {
@@ -720,18 +794,8 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             const markRunningPage = (pageToGenerate: PageData) => {
               const pageNo = pageToGenerate.page_no;
               const basePage = generationInputPagesByNumber.get(pageNo) || draftPack.pages[pageNo - 1];
-              const runningPage: PageData = {
-                ...basePage,
-                status: "running",
-                teaching: {
-                  ...basePage.teaching,
-                  output_language: p.teachingOutputLanguage,
-                  speaker_notes_md:
-                    basePage.status === "failed" || basePage.teaching.output_language !== p.teachingOutputLanguage
-                      ? ""
-                      : basePage.teaching.speaker_notes_md,
-                },
-              };
+              if (generationSignal.aborted) return basePage;
+              const runningPage = buildRunningPageData(basePage, p.teachingOutputLanguage);
               workingPack = mergePageIntoPack(workingPack, runningPage);
               workingPagesByNumber.set(pageNo, runningPage);
               if (item.documentId === _documentId) p.setPack(workingPack);
@@ -748,42 +812,41 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               const priority = item.documentId === _documentId
                 ? teachingModelRequestPriority([runningPage], p.currentPdfPageNo, "next", "later")
                 : "later";
-              const response = await runTeachingModelRequest(() =>
-                runGenerationRequestWithTimeout(generationSignal, TEACHING_PAGE_REQUEST_TIMEOUT_MS, (requestSignal) =>
-                  requestJson<GeneratedTeachingPageResponse>(
-                    "/api/generate/page",
-                    {
-                      method: "POST",
-                      signal: requestSignal,
-                      body: JSON.stringify({
-                        modelProviderId: plan.providerId,
-                        model: plan.model,
-                        fallbackModelProviderId: plan.fallbackProviderId,
-                        fallbackModel: plan.fallbackModel,
-                        reasoningEffort: plan.reasoningEffort,
-                        qualityPlan: teachingQualityPlanPayload(plan),
-                        document: workingPack.document,
-                        documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
-                        documentFile,
-                        outputLanguage: p.teachingOutputLanguage,
-                        outputLanguageLabel: teachingOutputLanguageName(p.teachingOutputLanguage),
-                        uiLanguage: p.uiPreferences.language,
-                        page: teachingRequestPage(runningPage, plan),
-                        pageCount: totalPages,
-                        previousPage: previousPage
-                          ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
-                          : null,
-                        nextPage: nextPage
-                          ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
-                          : null,
-                      }),
-                    },
-                    p.copy.errors.accountNotFound,
-                  ),
-                {
-                  timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_PAGE_REQUEST_TIMEOUT_MS)),
-                }),
+              const timeoutMs = teachingRequestTimeoutMs(plan.reasoningEffort, 1, runtimeLimits.deadlines);
+              const response = await runLimitedGenerationRequest(
+                runTeachingModelRequest,
                 { priority, signal: generationSignal },
+                () =>
+                  runGenerationRequestWithTimeout(generationSignal, timeoutMs, (requestSignal) =>
+                    requestJson<GeneratedTeachingPageResponse>(
+                      "/api/generate/page",
+                      {
+                        ...buildSinglePageRequestBody({
+                          plan,
+                          document: workingPack.document,
+                          documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
+                          documentFile,
+                          outputLanguage: p.teachingOutputLanguage,
+                          outputLanguageLabel: teachingOutputLanguageName(p.teachingOutputLanguage),
+                          uiLanguage: p.uiPreferences.language,
+                          runningPage,
+                          pageCount: totalPages,
+                          previousPage: previousPage
+                            ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
+                            : null,
+                          nextPage: nextPage
+                            ? { page_no: nextPage.page_no, title: nextPage.teaching.slide_title }
+                            : null,
+                        }),
+                        signal: requestSignal,
+                      },
+                      p.copy.errors.accountNotFound,
+                    ),
+                  {
+                    timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(timeoutMs)),
+                    slowMs: generationSlowNoticeIntervalMs(),
+                    onSlow: (elapsedSeconds) => p.setJobStatus(p.copy.status.generationPageSlow(pageNo, elapsedSeconds)),
+                  }),
               );
               const normalizedGeneratedPage = normalizeGeneratedPage(response.page, runningPage);
               return {
@@ -813,13 +876,13 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 fallbackOnFailure,
                 requestGeneratedPage,
                 commitGeneratedPage,
-                markRetryingPage: (page, attempt, totalAttempts) => {
+                markRetryingPage: (page, attempt, totalAttempts, kind) => {
                   if (generationSignal.aborted) return;
                   const retryingPage = buildRetryingPageData(page, p.teachingOutputLanguage);
                   workingPack = mergePageIntoPack(workingPack, retryingPage);
                   workingPagesByNumber.set(pageNo, retryingPage);
                   if (item.documentId === _documentId) p.setPack(workingPack);
-                  p.setJobStatus(`${p.copy.status.generationBatchDocument(index + 1, projectDocumentItems.length, item.title || "")} · ${p.copy.status.generationPageRetrying(pageNo, attempt, totalAttempts)}`);
+                  p.setJobStatus(`${p.copy.status.generationBatchDocument(index + 1, projectDocumentItems.length, item.title || "")} · ${p.copy.status.generationPageRetryingReason(pageNo, attempt, totalAttempts, retryReasonText(kind, p.copy))}`);
                 },
                 commitFailedPage: (failedPage) => {
                   if (generationSignal.aborted) return;
@@ -827,96 +890,98 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                   workingPagesByNumber.set(pageNo, failedPage);
                   if (item.documentId === _documentId) p.setPack(workingPack);
                   p.setJobStatus(p.copy.status.generationPageFailed(pageNo, generationFailureMessage(failedPage)));
+                  failedThisRun.add(pageNo);
                   persistQueue.enqueue(failedPage);
                 },
               });
             };
 
             const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort, p.modelApiConfig);
-            await runWithConcurrencyLimit(pageBatches, TEACHING_GENERATION_CONCURRENCY, async (pageBatch) => {
+            await runWithConcurrencyLimit(pageBatches, TEACHING_BATCH_DISPATCH_CONCURRENCY, async (pageBatch) => {
+              if (generationSignal.aborted) return;
               const runningPages = pageBatch.pages.map(markRunningPage);
               if (runningPages.length === 1) {
                 await generateSinglePage(runningPages[0], pageBatch.plan);
                 return;
               }
 
+              const handledPageNumbers = new Set<number>();
               try {
                 const documentFile = await getDocumentFileForPlan(pageBatch.plan);
                 const priority = item.documentId === _documentId
                   ? teachingModelRequestPriority(runningPages, p.currentPdfPageNo, "next", "later")
                   : "later";
-                const batchStallMs = generationBatchStallTimeoutMs();
-                const response = await runTeachingModelRequest(() =>
-                  runGenerationRequestWithTimeout(generationSignal, TEACHING_BATCH_REQUEST_TIMEOUT_MS, (requestSignal) =>
-                    requestJson<GeneratedTeachingPagesResponse>(
-                      "/api/generate/pages",
-                      {
-                        method: "POST",
-                        signal: requestSignal,
-                        body: JSON.stringify({
-                          modelProviderId: pageBatch.plan.providerId,
-                          model: pageBatch.plan.model,
-                          fallbackModelProviderId: pageBatch.plan.fallbackProviderId,
-                          fallbackModel: pageBatch.plan.fallbackModel,
-                          reasoningEffort: pageBatch.plan.reasoningEffort,
-                          qualityPlan: teachingQualityPlanPayload(pageBatch.plan),
-                          document: workingPack.document,
-                          documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
-                          documentFile,
-                          outputLanguage: p.teachingOutputLanguage,
-                          outputLanguageLabel: teachingOutputLanguageName(p.teachingOutputLanguage),
-                          uiLanguage: p.uiPreferences.language,
-                          pages: runningPages.map((page) => teachingRequestPage(page, pageBatch.plan)),
-                          pageCount: totalPages,
-                        }),
-                      },
-                      p.copy.errors.accountNotFound,
-                    ),
-                  {
-                    stallMs: batchStallMs,
-                    stallMessage: p.copy.errors.generationBatchRequestStalled(timeoutSeconds(batchStallMs)),
-                    onStall: () => p.setJobStatus(p.copy.errors.generationBatchRequestStalled(timeoutSeconds(batchStallMs))),
-                    timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(TEACHING_BATCH_REQUEST_TIMEOUT_MS)),
-                  }),
+                const timeoutMs = teachingRequestTimeoutMs(
+                  pageBatch.plan.reasoningEffort,
+                  runningPages.length,
+                  runtimeLimits.deadlines,
+                );
+                const response = await runLimitedGenerationRequest(
+                  runTeachingModelRequest,
                   { priority, signal: generationSignal },
+                  () =>
+                    runGenerationRequestWithTimeout(generationSignal, timeoutMs, (requestSignal) =>
+                      requestJson<BatchGenerationResponse>(
+                        "/api/generate/pages",
+                        {
+                          ...buildBatchPagesRequestBody({
+                            plan: pageBatch.plan,
+                            document: workingPack.document,
+                            documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
+                            documentFile,
+                            outputLanguage: p.teachingOutputLanguage,
+                            outputLanguageLabel: teachingOutputLanguageName(p.teachingOutputLanguage),
+                            uiLanguage: p.uiPreferences.language,
+                            runningPages,
+                            pageCount: totalPages,
+                          }),
+                          signal: requestSignal,
+                        },
+                        p.copy.errors.accountNotFound,
+                      ),
+                    {
+                      timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(timeoutMs)),
+                      slowMs: generationSlowNoticeIntervalMs(),
+                      onSlow: (elapsedSeconds) =>
+                        p.setJobStatus(p.copy.status.generationBatchSlow(runningPages.length, elapsedSeconds)),
+                    }),
                 );
-                const generatedPagesByNumber = new Map(
-                  response.pages.map((page) => [Number(page.page_no || 0), page]),
-                );
-                const retryPages: Array<{ runningPage: PageData; retryPlan: TeachingGenerationQualityPlan; fallback: PageData }> = [];
-                for (const runningPage of runningPages) {
-                  const rawGeneratedPage = generatedPagesByNumber.get(runningPage.page_no);
-                  if (!rawGeneratedPage) throw new Error(`Batch response missed page ${runningPage.page_no}`);
-                  const normalizedGeneratedPage = normalizeGeneratedPage(rawGeneratedPage, runningPage);
-                  const generatedPage: PageData = {
-                    ...normalizedGeneratedPage,
-                    teaching: {
-                      ...normalizedGeneratedPage.teaching,
-                      output_language: p.teachingOutputLanguage,
-                    },
-                  };
-                  if (pageBatch.plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
-                    const retryPlan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "retry", p.modelApiConfig);
-                    retryPages.push({ runningPage, retryPlan, fallback: generatedPage });
-                    continue;
-                  }
-                  if (generationSignal.aborted) return;
-                  workingPack = mergePageIntoPack(workingPack, generatedPage);
-                  workingPagesByNumber.set(generatedPage.page_no, generatedPage);
-                  completedTotal += 1;
-                  persistQueue.enqueue(generatedPage);
-                }
+                const outcome = resolveBatchResponse({
+                  response,
+                  runningPages,
+                  plan: pageBatch.plan,
+                  outputLanguage: p.teachingOutputLanguage,
+                  preference: p.uiPreferences.modelReasoningEffort,
+                  modelApiConfig: p.modelApiConfig,
+                  isAborted: () => generationSignal.aborted,
+                  commitGeneratedPage: (generatedPage) => {
+                    workingPack = mergePageIntoPack(workingPack, generatedPage);
+                    workingPagesByNumber.set(generatedPage.page_no, generatedPage);
+                    completedTotal += 1;
+                    persistQueue.enqueue(generatedPage);
+                  },
+                  onHandled: (pageNo) => handledPageNumbers.add(pageNo),
+                });
+                if (generationSignal.aborted) return;
                 if (item.documentId === _documentId) p.setPack(workingPack);
-                await runWithConcurrencyLimit(retryPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async ({ runningPage, retryPlan, fallback }) => {
+                await runWithConcurrencyLimit(outcome.weakPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async ({ runningPage, retryPlan, fallback }) => {
                   await generateSinglePage(runningPage, retryPlan, fallback);
                 });
-              } catch {
-                if (generationSignal.aborted) return;
-                await runWithConcurrencyLimit(runningPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async (runningPage) => {
-                  await generateSinglePage(runningPage);
+                await runWithConcurrencyLimit(outcome.missingPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async (runningPage) => {
+                  await generateSinglePage(runningPage, singlePageFallbackPlan(pageBatch.plan, runningPage, p.uiPreferences.modelReasoningEffort, p.modelApiConfig));
+                });
+              } catch (error) {
+                if (generationSignal.aborted || isAbortError(error)) return;
+                const classification = classifyGenerationFailure(error);
+                const pendingPages = runningPages.filter((page) => !handledPageNumbers.has(page.page_no));
+                await runWithConcurrencyLimit(pendingPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async (runningPage) => {
+                  await generateSinglePage(
+                    runningPage,
+                    batchFailureFallbackPlan(classification, pageBatch.plan, runningPage, p.uiPreferences.modelReasoningEffort, p.modelApiConfig),
+                  );
                 });
               }
-            });
+            }, { signal: generationSignal });
           };
 
           if (useWarmupExtraction) {
@@ -944,7 +1009,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             );
             if (generationSignal.aborted) return;
             const remainingTargetPageNumbers = prioritizeTeachingPages(
-              workingPack.pages.filter((page) => !hasCompletedTeaching(page, p.teachingOutputLanguage)),
+              workingPack.pages.filter((page) => needsGenerationPass(page, p.teachingOutputLanguage, failedThisRun)),
               documentPriorityPage,
             ).map((page) => page.page_no);
             if (remainingTargetPageNumbers.length) {
@@ -953,7 +1018,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               mergeExtractedPages(remainingExtracted.pages);
               rebuildWorkingPack();
               const remainingPagesToGenerate = prioritizeTeachingPages(
-                workingPack.pages.filter((page) => !hasCompletedTeaching(page, p.teachingOutputLanguage)),
+                workingPack.pages.filter((page) => needsGenerationPass(page, p.teachingOutputLanguage, failedThisRun)),
                 documentPriorityPage,
               );
               await runGenerationPass(remainingPagesToGenerate, extractedPagesForGeneration);
@@ -964,15 +1029,17 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             await runGenerationPass(initialPagesToGenerate, extractedPagesForGeneration);
           }
 
+          if (generationSignal.aborted) return;
           await persistQueue.flush();
           await saveGeneratedPagesFromPack({ workspaceId: _workspaceId, documentId: item.documentId, pack: workingPack });
           if (item.documentId === _documentId) p.setPack(workingPack);
-        }, { continueOnError: true });
+        }, { continueOnError: true, signal: generationSignal });
 
+        if (generationSignal.aborted) return;
         await p.refreshDocumentItems(_workspaceId, _documentId, _activeProjectId);
         p.setJobStatus(p.copy.status.generationBatchDone(completedTotal, checkedTotal || estimatedPages, processedDocuments, skippedTotal));
       } catch (error) {
-        if (generationSignal.aborted || (error as Error).name === "AbortError") return;
+        if (generationSignal.aborted || isAbortError(error)) return;
         p.setJobStatus(generationErrorMessage(error, p.copy));
       } finally {
         if (p.generationAbortControllerRef.current === generationAbortController) {
@@ -1014,9 +1081,19 @@ type GeneratePageWithAutoRetryOptions = {
   requestGeneratedPage: (runningPage: PageData, plan: TeachingGenerationQualityPlan) => Promise<PageData>;
   commitGeneratedPage: (generatedPage: PageData) => Promise<void> | void;
   commitFailedPage: (failedPage: PageData) => Promise<void> | void;
-  markRetryingPage: (runningPage: PageData, attempt: number, totalAttempts: number) => void;
+  markRetryingPage: (
+    runningPage: PageData,
+    attempt: number,
+    totalAttempts: number,
+    kind: GenerationFailureKind,
+  ) => void;
 };
 
+/**
+ * Per-page retry loop. The plan for attempt N+1 is derived from WHY attempt N
+ * failed (planForRetry), so a slow/rate-limited upstream never turns into a
+ * heavier, slower request. Only a weak model answer escalates, and only once.
+ */
 async function generatePageWithAutoRetry({
   runningPage,
   initialPlan,
@@ -1033,25 +1110,34 @@ async function generatePageWithAutoRetry({
 }: GeneratePageWithAutoRetryOptions) {
   let bestFallback = fallbackOnFailure;
   let lastError: unknown = null;
+  let lastFailureKind: GenerationFailureKind | null = null;
+  let plan = initialPlan;
+  let transportFailureSeen = false;
+  let qualityEscalations = 0;
+  let usedAttempts = 0;
+  const retryContext = { page: runningPage, preference, modelApiConfig };
 
   for (let attempt = 1; attempt <= TEACHING_PAGE_MAX_ATTEMPTS; attempt += 1) {
     if (signal.aborted) return;
-    const plan = attempt === 1
-      ? initialPlan
-      : teachingGenerationQualityPlan(runningPage, preference, "retry", modelApiConfig);
+    usedAttempts = attempt;
 
     try {
       const generatedPage = await requestGeneratedPage(runningPage, plan);
       const shouldRetryWeakOutput =
         plan.retryOnWeakOutput &&
         generatedTeachingNeedsRetry(generatedPage) &&
+        !transportFailureSeen &&
+        qualityEscalations < 1 &&
         attempt < TEACHING_PAGE_MAX_ATTEMPTS;
       if (shouldRetryWeakOutput) {
         bestFallback = bestFallback && shouldPreferTeachingCandidate(bestFallback, generatedPage)
           ? bestFallback
           : generatedPage;
-        markRetryingPage(runningPage, attempt + 1, TEACHING_PAGE_MAX_ATTEMPTS);
-        await waitBeforeTeachingRetry(attempt, null, signal);
+        qualityEscalations += 1;
+        lastFailureKind = "quality";
+        plan = planForRetry("quality", plan, attempt, retryContext);
+        markRetryingPage(runningPage, attempt + 1, TEACHING_PAGE_MAX_ATTEMPTS, "quality");
+        await waitBeforeTeachingRetry(attempt, "quality", signal);
         continue;
       }
 
@@ -1061,13 +1147,15 @@ async function generatePageWithAutoRetry({
       await commitGeneratedPage(finalPage);
       return;
     } catch (error) {
-      if ((error as Error).name === "AbortError" || signal.aborted) return;
+      if (isAbortError(error) || signal.aborted) return;
       lastError = error;
-      if (attempt >= TEACHING_PAGE_MAX_ATTEMPTS || !shouldAutoRetryGenerationError(error, copy)) {
-        break;
-      }
-      markRetryingPage(runningPage, attempt + 1, TEACHING_PAGE_MAX_ATTEMPTS);
-      await waitBeforeTeachingRetry(attempt, error, signal);
+      const classification = classifyGenerationFailure(error);
+      lastFailureKind = classification.kind;
+      if (attempt >= TEACHING_PAGE_MAX_ATTEMPTS || !classification.retryable) break;
+      transportFailureSeen = true;
+      plan = planForRetry(classification.kind, plan, attempt, retryContext);
+      markRetryingPage(runningPage, attempt + 1, TEACHING_PAGE_MAX_ATTEMPTS, classification.kind);
+      await waitBeforeTeachingRetry(attempt, classification.kind, signal);
     }
   }
 
@@ -1077,7 +1165,221 @@ async function generatePageWithAutoRetry({
   }
 
   const message = (lastError as Error | null)?.message || copy.agent.generationFailed;
-  await commitFailedPage(buildFailedPageData(runningPage, message, outputLanguage, copy));
+  await commitFailedPage(
+    buildFailedPageData(
+      runningPage,
+      message,
+      outputLanguage,
+      copy,
+      lastFailureKind ? { kind: lastFailureKind, attempts: usedAttempts } : undefined,
+    ),
+  );
+}
+
+// ── Shared request/limiter plumbing (used by both generation flows) ──
+
+export type BatchGenerationResponse = GeneratedTeachingPagesResponse & {
+  missing?: unknown;
+  timing?: { elapsed_ms?: number; attempts?: number; coalesced?: boolean };
+};
+
+/**
+ * Client timeout = backend deadline for this effort (+ per-extra-batch-page
+ * budget) + a margin, so the client never gives up on a request the backend is
+ * still legitimately working on.
+ */
+export function teachingRequestTimeoutMs(
+  effort: UiPreferences["modelReasoningEffort"],
+  pageCount = 1,
+  deadlines?: Record<string, number>,
+) {
+  const configured = Number(deadlines?.[effort]);
+  const baseSeconds = Number.isFinite(configured) && configured > 0
+    ? Math.max(configured, TEACHING_BACKEND_DEADLINE_SECONDS[effort] ?? 300)
+    : TEACHING_BACKEND_DEADLINE_SECONDS[effort] ?? 300;
+  const extraSeconds = Math.max(0, Math.floor(pageCount) - TEACHING_BATCH_EXTRA_FREE_PAGES) * TEACHING_BATCH_EXTRA_SECONDS_PER_PAGE;
+  return (baseSeconds + extraSeconds) * 1_000 + TEACHING_REQUEST_TIMEOUT_MARGIN_MS;
+}
+
+function createTeachingRequestLimiter(params: {
+  modelRef: { providerId: string; model: string };
+  maxConcurrency: number;
+  onRateLimited: (seconds: number) => void;
+  onConcurrencyReduced: (limit: number) => void;
+}): AsyncLimiter {
+  const { providerId, model } = params.modelRef;
+  const persistKey = generationWindowStorageKey(providerId, model);
+  const initial = initialGenerationWindow(model, loadPersistedGenerationWindow(persistKey));
+  // Reasoning models stay well under the backend semaphore; fast models may use it all.
+  const ceiling = Math.min(params.maxConcurrency, isReasoningGenerationModel(model) ? 4 : 6);
+  return createAsyncLimiter({
+    min: 1,
+    max: Math.max(initial, ceiling),
+    initial,
+    persistKey,
+    onGate: (gateMs) => params.onRateLimited(Math.max(1, Math.round(gateMs / 1_000))),
+    onWindowChange: (concurrency, direction) => {
+      if (direction === "decrease") params.onConcurrencyReduced(concurrency);
+    },
+  });
+}
+
+/** Runs a request through the shared limiter and feeds the outcome back to it. */
+async function runLimitedGenerationRequest<T>(
+  limiter: AsyncLimiter,
+  options: { priority: AsyncLimiterPriority; signal: AbortSignal },
+  run: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    const result = await limiter(run, options);
+    limiter.report({ outcome: "success", latencyMs: Date.now() - startedAt });
+    return result;
+  } catch (error) {
+    if (!isAbortError(error)) {
+      const classification = classifyGenerationFailure(error);
+      limiter.report({
+        outcome: limiterOutcomeForFailure(classification),
+        latencyMs: Date.now() - startedAt,
+        retryAfterMs: classification.retryAfterMs,
+      });
+    }
+    throw error;
+  }
+}
+
+type BatchResponseOutcome = {
+  missingPages: PageData[];
+  weakPages: Array<{ runningPage: PageData; retryPlan: TeachingGenerationQualityPlan; fallback: PageData }>;
+};
+
+/**
+ * Commits every page the batch actually returned and reports the rest.
+ * A partially parsed batch must never discard the pages that did come back.
+ */
+function resolveBatchResponse(params: {
+  response: BatchGenerationResponse;
+  runningPages: PageData[];
+  plan: TeachingGenerationQualityPlan;
+  outputLanguage: TeachingOutputLanguage;
+  preference: UiPreferences["modelReasoningEffort"];
+  modelApiConfig: ModelApiConfig;
+  isAborted: () => boolean;
+  commitGeneratedPage: (page: PageData) => void;
+  onHandled: (pageNo: number) => void;
+}): BatchResponseOutcome {
+  const { response, runningPages, plan, outputLanguage, preference, modelApiConfig } = params;
+  const generatedPagesByNumber = new Map(
+    (Array.isArray(response.pages) ? response.pages : []).map((page) => [Number(page.page_no || 0), page]),
+  );
+  const reportedMissing = new Set(
+    (Array.isArray(response.missing) ? response.missing : [])
+      .map((pageNo) => Number(pageNo))
+      .filter((pageNo) => Number.isFinite(pageNo)),
+  );
+  const outcome: BatchResponseOutcome = { missingPages: [], weakPages: [] };
+
+  for (const runningPage of runningPages) {
+    if (params.isAborted()) break;
+    const rawGeneratedPage = generatedPagesByNumber.get(runningPage.page_no);
+    if (!rawGeneratedPage || reportedMissing.has(runningPage.page_no)) {
+      outcome.missingPages.push(runningPage);
+      continue;
+    }
+    const normalizedGeneratedPage = normalizeGeneratedPage(rawGeneratedPage, runningPage);
+    const generatedPage: PageData = {
+      ...normalizedGeneratedPage,
+      teaching: {
+        ...normalizedGeneratedPage.teaching,
+        output_language: outputLanguage,
+      },
+    };
+    if (plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
+      outcome.weakPages.push({
+        runningPage,
+        retryPlan: teachingGenerationQualityPlan(runningPage, preference, "retry", modelApiConfig),
+        fallback: generatedPage,
+      });
+      params.onHandled(runningPage.page_no);
+      continue;
+    }
+    params.commitGeneratedPage(generatedPage);
+    params.onHandled(runningPage.page_no);
+  }
+  return outcome;
+}
+
+/** Plan for a page the batch did not return: same weight, single page. */
+function singlePageFallbackPlan(
+  batchPlan: TeachingGenerationQualityPlan,
+  runningPage: PageData,
+  preference: UiPreferences["modelReasoningEffort"],
+  modelApiConfig: ModelApiConfig,
+) {
+  return planForRetry("invalid_json", batchPlan, 1, { page: runningPage, preference, modelApiConfig });
+}
+
+/** Plan after the whole batch request failed — never heavier than the batch. */
+function batchFailureFallbackPlan(
+  classification: GenerationFailureClassification,
+  batchPlan: TeachingGenerationQualityPlan,
+  runningPage: PageData,
+  preference: UiPreferences["modelReasoningEffort"],
+  modelApiConfig: ModelApiConfig,
+) {
+  if (!classification.retryable) {
+    return teachingGenerationQualityPlan(runningPage, preference, "initial", modelApiConfig);
+  }
+  return planForRetry(classification.kind, batchPlan, 1, { page: runningPage, preference, modelApiConfig });
+}
+
+function retryReasonText(kind: GenerationFailureKind, copy: AppCopy) {
+  switch (kind) {
+    case "timeout":
+      return copy.status.generationRetryReasonTimeout;
+    case "rate_limit":
+      return copy.status.generationRetryReasonRateLimit;
+    case "network":
+      return copy.status.generationRetryReasonNetwork;
+    case "invalid_json":
+    case "truncated":
+      return copy.status.generationRetryReasonInvalidJson;
+    case "quality":
+      return copy.status.generationRetryReasonWeakOutput;
+    default:
+      return copy.status.generationRetryReasonServer;
+  }
+}
+
+/**
+ * A page still needs a generation pass and is not one THIS run already gave up
+ * on. Pages that failed in an earlier session stay eligible (F04).
+ */
+function needsGenerationPass(page: PageData, outputLanguage: TeachingOutputLanguage, failedThisRun: Set<number>) {
+  return !failedThisRun.has(page.page_no) && !hasCompletedTeaching(page, outputLanguage);
+}
+
+/** Optional backend runtime limits; old backends 404 and we keep the defaults. */
+async function fetchGenerationRuntimeLimits(signal: AbortSignal): Promise<GenerationRuntimeLimits | null> {
+  try {
+    const response = await runGenerationRequestWithTimeout(
+      signal,
+      GENERATION_STATUS_REQUEST_TIMEOUT_MS,
+      (requestSignal) =>
+        requestJson<{ concurrency?: number; deadlines_seconds?: Record<string, number> }>(
+          "/api/generate/status",
+          { method: "GET", signal: requestSignal },
+        ),
+    );
+    const deadlines = response?.deadlines_seconds;
+    const concurrency = Number(response?.concurrency);
+    return {
+      deadlines: deadlines && typeof deadlines === "object" ? deadlines : undefined,
+      concurrency: Number.isFinite(concurrency) && concurrency > 0 ? concurrency : undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function buildRetryingPageData(page: PageData, outputLanguage: TeachingOutputLanguage): PageData {
@@ -1105,48 +1407,31 @@ function failActiveGenerationPages(
   message: string,
   outputLanguage: TeachingOutputLanguage,
   copy: AppCopy,
+  kind?: GenerationFailureKind,
 ): PagePack {
   return {
     ...pack,
     pages: pack.pages.map((page) => {
       if (page.status !== "running" && page.status !== "retrying") return page;
-      return buildFailedPageData(page, message, outputLanguage, copy);
+      return buildFailedPageData(page, message, outputLanguage, copy, kind ? { kind, attempts: 1 } : undefined);
     }),
   };
 }
 
-async function waitBeforeTeachingRetry(attempt: number, error: unknown, signal: AbortSignal) {
+/**
+ * 3 s / 10 s / 30 s with +-30% jitter. Rate limits do NOT wait here: the shared
+ * limiter gate already holds every page until the cooldown expires, so adding a
+ * per-page sleep would only serialise the run.
+ */
+export function teachingRetryDelayMs(attempt: number, kind: GenerationFailureKind) {
+  if (kind === "rate_limit") return 0;
   const baseDelay = TEACHING_PAGE_RETRY_DELAYS_MS[Math.min(Math.max(attempt - 1, 0), TEACHING_PAGE_RETRY_DELAYS_MS.length - 1)];
-  const rateLimitDelay = isRateLimitGenerationError(error)
-    ? TEACHING_RATE_LIMIT_EXTRA_COOLDOWN_MS + Math.random() * TEACHING_RATE_LIMIT_EXTRA_JITTER_MS
-    : 0;
-  await abortableDelay(baseDelay + rateLimitDelay, signal);
+  const jitter = 1 - TEACHING_RETRY_JITTER_RATIO + Math.random() * TEACHING_RETRY_JITTER_RATIO * 2;
+  return Math.round(baseDelay * jitter);
 }
 
-function shouldAutoRetryGenerationError(error: unknown, copy: AppCopy) {
-  const typed = error as Error;
-  if (typed.name === "GenerationStalledError" || typed.name === "TimeoutError") return true;
-  const message = (typed.message || String(error || "")).toLowerCase();
-  if (!message) return false;
-  if (message === copy.errors.accountNotFound.toLowerCase()) return false;
-  if (message.includes("oauth client id") || message.includes("account_not_found")) return false;
-  if (message.includes("invalid_request") && !message.includes("timeout")) return false;
-  return (
-    message.includes("rate limit") ||
-    message.includes("429") ||
-    message.includes("timeout") ||
-    message.includes("timed out") ||
-    message.includes("stalled") ||
-    message.includes("network") ||
-    message.includes("failed to fetch") ||
-    message.includes("empty generation response") ||
-    /\b50[0-4]\b/.test(message)
-  );
-}
-
-function isRateLimitGenerationError(error: unknown) {
-  const message = ((error as Error | null)?.message || String(error || "")).toLowerCase();
-  return message.includes("rate limit") || message.includes("429") || message.includes("too many requests");
+async function waitBeforeTeachingRetry(attempt: number, kind: GenerationFailureKind, signal: AbortSignal) {
+  await abortableDelay(teachingRetryDelayMs(attempt, kind), signal);
 }
 
 function abortableDelay(ms: number, signal: AbortSignal) {
@@ -1196,6 +1481,12 @@ async function extractPdfPagesForGeneration(
   );
 }
 
+/**
+ * Runs a request with a hard deadline and an INFORMATIONAL slow-progress
+ * notice. The slow notice never aborts: on a reasoning model a 60-300 s request
+ * is normal, and aborting it left the backend burning tokens on a request
+ * nobody was listening to (F01/F02).
+ */
 async function runGenerationRequestWithTimeout<T>(
   parentSignal: AbortSignal,
   timeoutMs: number,
@@ -1206,11 +1497,11 @@ async function runGenerationRequestWithTimeout<T>(
 
   const controller = new AbortController();
   const timeoutError = createGenerationTimeoutError(timeoutMs, options.timeoutMessage);
-  const stallMs = options.stallMs && options.stallMs > 0 && options.stallMs < timeoutMs ? options.stallMs : 0;
-  const stallError = stallMs ? createGenerationStalledError(stallMs, options.stallMessage) : null;
+  const slowMs = options.onSlow && options.slowMs && options.slowMs > 0 ? options.slowMs : 0;
   let timeoutTimer: number | null = null;
-  let stallTimer: number | null = null;
+  let slowTimer: number | null = null;
   let abortFromParent: (() => void) | null = null;
+  const startedAt = Date.now();
 
   const runPromise = Promise.resolve().then(() => run(controller.signal));
   const abortRace = new Promise<never>((_resolve, reject) => {
@@ -1226,40 +1517,34 @@ async function runGenerationRequestWithTimeout<T>(
       reject(timeoutError);
     }, timeoutMs);
   });
-  const races: Array<Promise<T> | Promise<never>> = [runPromise, abortRace, timeoutRace];
-  if (stallError && stallMs) {
-    races.push(new Promise<never>((_resolve, reject) => {
-      stallTimer = window.setTimeout(() => {
-        options.onStall?.();
-        controller.abort();
-        reject(stallError);
-      }, stallMs);
-    }));
+  if (slowMs) {
+    slowTimer = window.setInterval(() => {
+      options.onSlow?.(Math.max(1, Math.round((Date.now() - startedAt) / 1_000)));
+    }, slowMs);
   }
 
   try {
-    return await Promise.race(races);
+    return await Promise.race([runPromise, abortRace, timeoutRace]);
   } finally {
     runPromise.catch(() => undefined);
     if (timeoutTimer !== null) window.clearTimeout(timeoutTimer);
-    if (stallTimer !== null) window.clearTimeout(stallTimer);
+    if (slowTimer !== null) window.clearInterval(slowTimer);
     if (abortFromParent) parentSignal.removeEventListener("abort", abortFromParent);
   }
 }
 
-function createGenerationStalledError(timeoutMs: number, message?: string) {
-  const seconds = timeoutSeconds(timeoutMs);
-  const error = new Error(message || `讲解生成超过 ${seconds} 秒没有响应，已自动切换重试。`);
-  error.name = "GenerationStalledError";
-  return error;
-}
-
-function generationBatchStallTimeoutMs() {
+/**
+ * Cadence of the informational "still generating" status line. The window
+ * override only shortens the notice interval now — it no longer aborts anything.
+ */
+function generationSlowNoticeIntervalMs() {
   const override = typeof window === "undefined"
     ? NaN
     : Number((window as Window & { __SYNCHROPAGE_GENERATION_BATCH_STALL_TIMEOUT_MS?: unknown }).__SYNCHROPAGE_GENERATION_BATCH_STALL_TIMEOUT_MS);
-  if (Number.isFinite(override) && override > 0) return Math.max(100, Math.floor(override));
-  return TEACHING_BATCH_STALL_TIMEOUT_MS;
+  if (Number.isFinite(override) && override > 0) {
+    return Math.min(TEACHING_SLOW_NOTICE_INTERVAL_MS, Math.max(100, Math.floor(override)));
+  }
+  return TEACHING_SLOW_NOTICE_INTERVAL_MS;
 }
 
 function pdfExtractionTimeoutMs(pageNumbers?: number[]) {

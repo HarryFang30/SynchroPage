@@ -17,7 +17,7 @@ import {
 import type { DocumentRecord, GeneratedPageRecord, StorageRepairResult } from "../persistence/schema";
 import type { ThreadMessageLike } from "../persistence/workspaceStore";
 
-export type ActiveTab = "notes" | "structure" | "json";
+export type ActiveTab = "notes" | "annotations" | "structure" | "json";
 export type GeneratePageMode = "missing" | "all" | "current" | "custom";
 export type PanelKey = "rail" | "notes" | "agent";
 export type PanelVisibility = Record<PanelKey, boolean>;
@@ -159,7 +159,7 @@ export function isPanelVisibility(value: unknown): value is PanelVisibility {
 }
 
 export function isActiveTab(value: unknown): value is ActiveTab {
-  return value === "notes" || value === "structure" || value === "json";
+  return value === "notes" || value === "annotations" || value === "structure" || value === "json";
 }
 
 export function asPersistedRecord(value: unknown): Record<string, unknown> {
@@ -182,6 +182,7 @@ export function storageRepairCount(result: StorageRepairResult) {
     result.orphanChatThreads +
     result.orphanChatMessages +
     result.orphanSelectedContexts +
+    (result.orphanAnnotations || 0) +
     result.workspacesRepaired +
     result.documentsMarkedMissing
   );
@@ -239,6 +240,8 @@ export function normalizePack(raw: unknown, copy: AppCopy): PagePack {
           prerequisites: Array.isArray(teaching.prerequisites) ? teaching.prerequisites : [],
           contextual_bridge: teaching.contextual_bridge || "",
           formula_explanations: Array.isArray(teaching.formula_explanations) ? teaching.formula_explanations : [],
+          stuck_points: Array.isArray(teaching.stuck_points) ? teaching.stuck_points : [],
+          exam_angles: Array.isArray(teaching.exam_angles) ? teaching.exam_angles : [],
           evidence: Array.isArray(teaching.evidence) ? teaching.evidence : [],
           needs_review: Boolean(teaching.needs_review),
           needs_parser_fallback: Boolean(teaching.needs_parser_fallback),

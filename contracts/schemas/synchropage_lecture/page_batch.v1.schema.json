@@ -91,6 +91,27 @@
               "type": "array",
               "items": { "type": "string" }
             },
+            "stuck_points": {
+              "description": "Where a learner typically gets stuck on this page, each resolved in one line.",
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "exam_angles": {
+              "description": "How an exam would test this page: question forms, traps, what graders look for.",
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "generation_error": {
+              "description": "Why the last generation attempt for this page failed (transport or quality). Written by the reader; absent on successful pages.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": { "type": "string", "enum": ["timeout", "rate_limit", "network", "invalid_json", "truncated", "server", "quality"] },
+                "attempts": { "type": "integer", "minimum": 0 },
+                "at": { "type": "number" }
+              },
+              "required": ["kind", "attempts", "at"]
+            },
             "evidence": {
               "type": "array",
               "minItems": 1,

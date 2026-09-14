@@ -1,6 +1,6 @@
 import type { UiPreferences } from "../../settings";
 
-export const persistenceSchemaVersion = 3;
+export const persistenceSchemaVersion = 4;
 export const lastWorkspaceStorageKey = "synchropage.lastWorkspaceId.v1";
 
 export type PersistedJson = Record<string, unknown>;
@@ -148,6 +148,32 @@ export type SettingsRecord = UiPreferences & {
   updatedAt: number;
 };
 
+export type AnnotationColor = "yellow" | "green" | "blue" | "pink";
+
+/** Highlight box as fractions of the page size, so it survives zoom. */
+export type AnnotationRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type AnnotationRecord = {
+  id: string;
+  workspaceId: string;
+  documentId: string;
+  pageNumber: number;
+  /** "highlight" is anchored to text rects; "note" is a page-level margin note. */
+  kind: "highlight" | "note";
+  color: AnnotationColor;
+  /** The highlighted source text (empty for page notes). */
+  quote: string;
+  rects: AnnotationRect[];
+  note: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type LoadedWorkspace = {
   workspace: WorkspaceRecord;
   courseProjects: CourseProjectRecord[];
@@ -178,6 +204,7 @@ export type StorageRepairResult = {
   orphanChatThreads: number;
   orphanChatMessages: number;
   orphanSelectedContexts: number;
+  orphanAnnotations: number;
   workspacesRepaired: number;
   documentsMarkedMissing: number;
 };
@@ -192,6 +219,7 @@ export type WorkspaceExportCounts = {
   selectedContexts: number;
   settings: number;
   courseProjects: number;
+  annotations?: number;
 };
 
 export type WorkspaceExportIntegrity = {
@@ -213,6 +241,8 @@ export type ExportedWorkspace = {
   chatThreads: ChatThreadRecord[];
   chatMessages: ChatMessageRecord[];
   selectedContexts: SelectedContextRecord[];
+  /** Added in schema v4; absent in older exports. */
+  annotations?: AnnotationRecord[];
   settings: SettingsRecord | null;
 };
 

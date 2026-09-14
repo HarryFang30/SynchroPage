@@ -344,6 +344,8 @@ class CoursePdfHarness:
                 contextual_bridge=teaching_raw.get("contextual_bridge", ""),
                 visual_explanations=list(teaching_raw.get("visual_explanations", [])),
                 formula_explanations=list(teaching_raw.get("formula_explanations", [])),
+                stuck_points=list(teaching_raw.get("stuck_points", [])),
+                exam_angles=list(teaching_raw.get("exam_angles", [])),
                 evidence=[
                     Evidence(
                         kind=item.get("kind", "other"),

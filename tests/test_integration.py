@@ -11,19 +11,22 @@ import asyncio
 import base64
 import io
 import json
+import os
+import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 from unittest import mock
 
+from pdf_agent.server.errors import HttpError
 from pdf_agent.server.web_app import (
     AsyncRunner,
     PdfAgentHttpServer,
     create_server,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -47,9 +50,23 @@ def _read_response(response: Any) -> tuple[int, dict[str, Any]]:
     return status, body
 
 
+# The backend resolves ``~/.pdf_agent`` (model providers, OAuth accounts) at
+# server construction time.  Redirect it to a throwaway directory so the
+# developer's real configuration -- which may select a network provider such
+# as the coproxy gateway -- never leaks into these hermetic tests.
+_TEST_HOME_DIR = tempfile.TemporaryDirectory(prefix="pdf-agent-test-home-")
+_HERMETIC_ENV = {
+    "PDF_AGENT_HOME": _TEST_HOME_DIR.name,
+    "PDF_AGENT_COPROXY_API_KEY": "",
+    "COPROXY_API_KEY": "",
+    "COPROXY_TOKEN": "",
+}
+
+
 def _start_test_server(port: int = 0) -> PdfAgentHttpServer:
     """Create a server on an ephemeral port and start serving in background."""
-    server = create_server(host="127.0.0.1", port=port)
+    with mock.patch.dict(os.environ, _HERMETIC_ENV):
+        server = create_server(host="127.0.0.1", port=port)
     thread = threading.Thread(target=server.serve_forever, name="test-server", daemon=True)
     thread.start()
     return server
@@ -162,8 +179,8 @@ class AsyncRunnerTimeoutTest(unittest.TestCase):
         self.assertEqual(result, "recovered")
 
     def test_run_timeout_records_log(self) -> None:
-        import logging
         import io as std_io
+        import logging
 
         stream = std_io.StringIO()
         handler = logging.StreamHandler(stream)
@@ -436,17 +453,37 @@ class FakeGatewayAuthContext:
 
 
 class _FakeHttpResponse:
-    """Minimal file-like object that mimics urllib.request.urlopen return."""
+    """Minimal file-like object that mimics urllib.request.urlopen return.
+
+    The body is handed out in chunks through ``read1`` so the streaming read
+    path in ``gateway_transport`` (inactivity timeout + overall deadline) is
+    the one these tests exercise, exactly like the real SSE responses.
+    """
+
+    CHUNK_BYTES = 16
 
     def __init__(self, text: str, content_type: str = "text/event-stream") -> None:
         self._text = text.encode("utf-8")
+        self._offset = 0
         self.headers = {"Content-Type": content_type}
         self.status = 200
 
-    def read(self) -> bytes:
-        return self._text
+    def read1(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            size = self.CHUNK_BYTES
+        end = min(self._offset + min(size, self.CHUNK_BYTES), len(self._text))
+        chunk = self._text[self._offset : end]
+        self._offset = end
+        return chunk
 
-    def __enter__(self) -> "_FakeHttpResponse":
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            chunk = self._text[self._offset :]
+            self._offset = len(self._text)
+            return chunk
+        return self.read1(size)
+
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -726,6 +763,77 @@ class FakeGatewayIntegrationTest(unittest.TestCase):
                         prompt_text += str(part.get("text", ""))
         # Batch prompt mentions multiple pages
         self.assertIn("3 PDF pages in one batch", prompt_text)
+
+    # -- stability contract ---------------------------------------------------
+
+    def test_generate_status_endpoint_reports_queue_state(self) -> None:
+        response = urllib.request.urlopen(f"{self.base_url}/api/generate/status", timeout=5)
+        status, result = _read_response(response)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["active"], 0)
+        self.assertEqual(result["queued"], 0)
+        self.assertEqual(result["cooldown_until_ms"], 0)
+        self.assertGreaterEqual(result["concurrency"], 1)
+        self.assertEqual(
+            result["deadlines_seconds"],
+            {"none": 180, "low": 180, "medium": 300, "high": 480, "xhigh": 600, "max": 600},
+        )
+
+    def test_generate_page_response_includes_timing_metadata(self) -> None:
+        body = json.dumps({"page": {"page_no": 3}, "outputLanguage": "en-US"}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/api/generate/page",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        _status, result = _read_response(urllib.request.urlopen(req, timeout=10))
+        timing = result["timing"]
+        self.assertIsInstance(timing["elapsed_ms"], int)
+        self.assertEqual(timing["attempts"], 1)
+        self.assertIs(timing["coalesced"], False)
+
+    def test_generate_pages_response_includes_missing_list(self) -> None:
+        body = json.dumps({
+            "pages": [{"page_no": 1}, {"page_no": 2}],
+            "outputLanguage": "en-US",
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/api/generate/pages",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        _status, result = _read_response(urllib.request.urlopen(req, timeout=10))
+        self.assertEqual(result["missing"], [])
+        self.assertIn("timing", result)
+
+    def test_rate_limited_error_body_and_retry_after_header(self) -> None:
+        async def _rate_limited(_body: Any) -> dict[str, Any]:
+            raise HttpError(
+                429,
+                "Model provider rate limited the request",
+                code="rate_limited",
+                retry_after_seconds=7.0,
+            )
+
+        body = json.dumps({"page": {"page_no": 1}, "outputLanguage": "en-US"}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/api/generate/page",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with mock.patch.object(
+            self.server.teaching_gateway, "generate_page", side_effect=_rate_limited
+        ), self.assertRaises(urllib.error.HTTPError) as raised:
+            urllib.request.urlopen(req, timeout=10)
+        error = raised.exception
+        self.assertEqual(error.code, 429)
+        self.assertEqual(error.headers.get("Retry-After"), "7")
+        payload = json.loads(error.read().decode("utf-8"))
+        self.assertEqual(payload["error"], "rate_limited")
+        self.assertIn("message", payload)
 
 
 if __name__ == "__main__":

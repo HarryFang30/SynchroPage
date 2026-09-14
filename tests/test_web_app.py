@@ -7,13 +7,23 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pdf_agent.server.document_context import _pdf_file_input
+from pdf_agent.gateway.openai_gateway import redacted_gateway_error
+from pdf_agent.server.document_context import _pdf_file_input, set_pdf_file_cache
 from pdf_agent.server.errors import HttpError
+from pdf_agent.server.gateway_transport import _redacted_upstream_detail
 from pdf_agent.server.generation_parsing import (
     _parse_generated_page,
     _parse_generated_pages,
+    _parse_generated_pages_with_missing,
 )
 from pdf_agent.server.json_utils import json_bytes_utf8_safe as _json_bytes_utf8_safe
+from pdf_agent.server.payload_builders import (
+    _build_responses_payload,
+    _build_teaching_generation_payload,
+    _build_teaching_generation_prompt,
+    _teaching_generation_candidate_bodies,
+)
+from pdf_agent.server.pdf_file_cache import PdfFileCache
 from pdf_agent.server.prompt_cache import (
     _retry_after_seconds,
     _transient_retry_delay_seconds,
@@ -24,12 +34,6 @@ from pdf_agent.server.response_parsing import (
     _extract_gateway_text,
     _extract_prompt_cache_usage,
 )
-from pdf_agent.server.payload_builders import (
-    _build_responses_payload,
-    _build_teaching_generation_payload,
-    _build_teaching_generation_prompt,
-    _teaching_generation_candidate_bodies,
-)
 from pdf_agent.server.web_app import (
     PdfAgentHttpServer,
     PdfAgentRequestHandler,
@@ -39,10 +43,6 @@ from pdf_agent.server.web_app import (
     _static_file_etag,
     create_server,
 )
-from pdf_agent.gateway.openai_gateway import redacted_gateway_error
-from pdf_agent.server.document_context import set_pdf_file_cache
-from pdf_agent.server.pdf_file_cache import PdfFileCache
-from pdf_agent.server.gateway_transport import _redacted_upstream_detail
 
 
 def _handler_with_cache() -> PdfAgentRequestHandler:
@@ -130,14 +130,129 @@ class WebAppTest(unittest.TestCase):
         self.assertIsNone(_retry_after_seconds("not a date"))
 
     def test_transient_retry_delay_respects_retry_after_and_cap(self) -> None:
+        # Retry-After is honoured as given (capped at 120 s); without it the
+        # delay is full jitter over the 2/6/15 s schedule.
+        self.assertEqual(_transient_retry_delay_seconds(HttpError(429, "rate limited", retry_after_seconds=2.0), 0), 2.0)
+        self.assertEqual(_transient_retry_delay_seconds(HttpError(429, "rate limited", retry_after_seconds=300.0), 0), 120.0)
+
         import pdf_agent.server.prompt_cache as prompt_cache_module
         original_uniform = prompt_cache_module.random.uniform
         try:
-            prompt_cache_module.random.uniform = lambda _start, _end: 0.0
-            self.assertEqual(_transient_retry_delay_seconds(HttpError(429, "rate limited", retry_after_seconds=2.0), 0), 2.0)
-            self.assertEqual(_transient_retry_delay_seconds(HttpError(429, "rate limited", retry_after_seconds=120.0), 0), 12.0)
+            prompt_cache_module.random.uniform = lambda start, end: end
+            self.assertEqual(_transient_retry_delay_seconds(HttpError(503, "busy"), 0), 2.0)
+            self.assertEqual(_transient_retry_delay_seconds(HttpError(503, "busy"), 1), 6.0)
+            self.assertEqual(_transient_retry_delay_seconds(HttpError(503, "busy"), 2), 15.0)
+            self.assertEqual(_transient_retry_delay_seconds(HttpError(503, "busy"), 9), 15.0)
+            prompt_cache_module.random.uniform = lambda start, _end: start
+            self.assertEqual(_transient_retry_delay_seconds(HttpError(503, "busy"), 1), 0.0)
         finally:
             prompt_cache_module.random.uniform = original_uniform
+
+    def test_transient_retry_classification_uses_new_status_set(self) -> None:
+        from pdf_agent.server.generation_policy import mark_received_bytes
+        from pdf_agent.server.prompt_cache import _should_retry_transient_upstream_error
+
+        for status in (408, 425, 429, 500, 502, 503, 504):
+            self.assertTrue(_should_retry_transient_upstream_error(HttpError(status, "boom")))
+        self.assertFalse(_should_retry_transient_upstream_error(HttpError(400, "bad request")))
+        self.assertFalse(
+            _should_retry_transient_upstream_error(HttpError(429, "usage limit reached"))
+        )
+
+        # A stream timeout is retryable only before the first byte arrives.
+        zero_bytes = HttpError(504, "timed out", code="upstream_timeout")
+        self.assertTrue(_should_retry_transient_upstream_error(zero_bytes))
+        partial = HttpError(504, "timed out", code="upstream_timeout")
+        mark_received_bytes(partial, 4096)
+        self.assertFalse(_should_retry_transient_upstream_error(partial))
+
+    def test_generation_policy_numbers(self) -> None:
+        from pdf_agent.server import generation_policy
+
+        self.assertEqual(generation_policy.request_deadline_seconds("low", 1), 180.0)
+        self.assertEqual(generation_policy.request_deadline_seconds("medium", 1), 300.0)
+        self.assertEqual(generation_policy.request_deadline_seconds("high", 1), 480.0)
+        self.assertEqual(generation_policy.request_deadline_seconds("xhigh", 1), 600.0)
+        self.assertEqual(generation_policy.request_deadline_seconds("max", 1), 600.0)
+        # Unknown effort falls back to the balanced budget.
+        self.assertEqual(generation_policy.request_deadline_seconds("", 1), 300.0)
+        # +60 s per batch page beyond the second.
+        self.assertEqual(generation_policy.request_deadline_seconds("low", 2), 180.0)
+        self.assertEqual(generation_policy.request_deadline_seconds("low", 5), 360.0)
+
+        self.assertEqual(generation_policy.max_output_tokens_for("low", 1), 16000)
+        self.assertEqual(generation_policy.max_output_tokens_for("medium", 1), 16000)
+        self.assertEqual(generation_policy.max_output_tokens_for("high", 1), 24000)
+        self.assertEqual(generation_policy.max_output_tokens_for("xhigh", 1), 32000)
+        self.assertEqual(generation_policy.max_output_tokens_for("max", 1), 32000)
+        self.assertEqual(generation_policy.max_output_tokens_for("high", 3), 24000)
+        self.assertEqual(generation_policy.max_output_tokens_for("high", 8), 48000)
+
+        self.assertEqual(
+            generation_policy.deadlines_seconds_payload(),
+            {"none": 180, "low": 180, "medium": 300, "high": 480, "xhigh": 600, "max": 600},
+        )
+
+    def test_lower_reasoning_effort_respects_clamp_table(self) -> None:
+        from pdf_agent.server.generation_policy import lower_reasoning_effort
+        from pdf_agent.server.model_gateway import supported_reasoning_efforts
+
+        astra = supported_reasoning_efforts("gpt-6-astra")
+        self.assertEqual(lower_reasoning_effort("high", astra), "medium")
+        self.assertEqual(lower_reasoning_effort("medium", astra), "low")
+        # gpt-6-astra has no "none": low is already the floor.
+        self.assertEqual(lower_reasoning_effort("low", astra), "low")
+        self.assertEqual(lower_reasoning_effort("low", supported_reasoning_efforts("gpt-5.5")), "none")
+        self.assertEqual(lower_reasoning_effort("", astra), "")
+
+    def test_response_incomplete_reason_detects_max_output_tokens(self) -> None:
+        from pdf_agent.server.response_parsing import response_incomplete_reason
+
+        json_body = json.dumps(
+            {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}
+        )
+        self.assertEqual(response_incomplete_reason(json_body, "application/json"), "max_output_tokens")
+        sse_body = (
+            "event: response.completed\n"
+            'data: {"type": "response.completed", "response": {"status": "incomplete",'
+            ' "incomplete_details": {"reason": "max_output_tokens"}}}\n\n'
+        )
+        self.assertEqual(response_incomplete_reason(sse_body, "text/event-stream"), "max_output_tokens")
+        self.assertEqual(
+            response_incomplete_reason(json.dumps({"status": "completed"}), "application/json"), ""
+        )
+        self.assertEqual(response_incomplete_reason("not json", "text/plain"), "")
+
+    def test_retry_after_header_is_sent_for_rate_limited_errors(self) -> None:
+        from pdf_agent.server.web_app import _retry_after_header
+
+        self.assertEqual(_retry_after_header(HttpError(429, "slow down", retry_after_seconds=12.4)), {"Retry-After": "13"})
+        self.assertEqual(_retry_after_header(HttpError(503, "queued", code="queue_timeout", retry_after_seconds=10)), {"Retry-After": "10"})
+        self.assertEqual(_retry_after_header(HttpError(502, "boom")), {})
+
+    def test_generated_pages_report_missing_pages_instead_of_failing(self) -> None:
+        content = json.dumps(
+            {
+                "pages": [
+                    {
+                        "page_no": 1,
+                        "teaching": {"slide_title": "One", "speaker_notes_md": "A", "confidence": 0.8},
+                    },
+                    {
+                        "page_no": 3,
+                        "teaching": {"slide_title": "Three", "speaker_notes_md": "C", "confidence": 0.8},
+                    },
+                ]
+            }
+        )
+        body = {"pages": [{"page_no": 1}, {"page_no": 2}, {"page_no": 3}], "outputLanguage": "en-US"}
+        pages, missing = _parse_generated_pages_with_missing(content, body)
+        self.assertEqual([page["page_no"] for page in pages], [1, 3])
+        self.assertEqual(missing, [2])
+
+        with self.assertRaises(HttpError) as raised:
+            _parse_generated_pages_with_missing("not json at all", body)
+        self.assertEqual(raised.exception.code, "invalid_generation_json")
 
     def test_gateway_usage_limit_error_is_readable(self) -> None:
         message = redacted_gateway_error(
@@ -1036,22 +1151,18 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(page["teaching"]["confidence"], 0.82)
 
     def test_extracts_streaming_response_text(self) -> None:
-        stream = "\n".join(
-            [
-                'data: {"type":"response.output_text.delta","delta":"hello "}',
-                'data: {"type":"response.output_text.delta","delta":"world"}',
-                "data: [DONE]",
-            ]
+        stream = (
+            'data: {"type":"response.output_text.delta","delta":"hello "}\n'
+            'data: {"type":"response.output_text.delta","delta":"world"}\n'
+            "data: [DONE]"
         )
         self.assertEqual(_extract_gateway_text(stream, "text/event-stream"), "hello world")
 
     def test_extracts_streaming_prompt_cache_usage(self) -> None:
-        stream = "\n".join(
-            [
-                'data: {"type":"response.output_text.delta","delta":"hello"}',
-                'data: {"type":"response.completed","response":{"usage":{"input_tokens":2048,"output_tokens":12,"total_tokens":2060,"input_tokens_details":{"cached_tokens":1536}}}}',
-                "data: [DONE]",
-            ]
+        stream = (
+            'data: {"type":"response.output_text.delta","delta":"hello"}\n'
+            'data: {"type":"response.completed","response":{"usage":{"input_tokens":2048,"output_tokens":12,"total_tokens":2060,"input_tokens_details":{"cached_tokens":1536}}}}\n'
+            "data: [DONE]"
         )
         self.assertEqual(
             _extract_prompt_cache_usage(stream, "text/event-stream"),

@@ -4,9 +4,9 @@
     "id": "sample-course",
     "title": "Sample Course PDF",
     "source_pdf_url": "sample.pdf",
-    "page_count": 1,
+    "page_count": 2,
     "prompt_version": "course-agent.prompt.v1",
-    "model": "gpt-5.5"
+    "model": "gpt-6-astra"
   },
   "pages": [
     {
@@ -20,19 +20,60 @@
       },
       "teaching": {
         "slide_title": "Course Introduction",
-        "speaker_notes_md": "This page introduces the course and sets up the main learning goal.",
+        "speaker_notes_md": "This block of the course builds up to the timing constraint that decides the maximum clock frequency; keep an eye on which delay belongs to the flip-flop and which to the logic.",
         "concepts": ["course overview"],
         "prerequisites": [],
         "contextual_bridge": "",
         "visual_explanations": [],
         "formula_explanations": [],
+        "stuck_points": [],
+        "exam_angles": [],
         "evidence": [
           {
             "kind": "title",
             "quote_or_reference": "Sample Course PDF"
           }
         ],
-        "confidence": 0.95,
+        "confidence": 0.9,
+        "needs_review": false,
+        "needs_parser_fallback": false
+      },
+      "status": "ready"
+    },
+    {
+      "page_no": 2,
+      "source": {
+        "pdf_page_ref": "#page=2",
+        "text_md": "Setup time constraint: T >= t_cq + t_logic + t_setup.",
+        "ocr_used": false,
+        "parser": "sample",
+        "page_type": "formula"
+      },
+      "teaching": {
+        "slide_title": "Setup Time Constraint",
+        "speaker_notes_md": "## What this page establishes\nThe clock period has a lower bound set by one path, so the slowest path decides the whole design's frequency.\n\n## Where students get stuck\n- **Students read setup time as a requirement after the clock edge** → It is the window before the edge during which the data must already be stable; hold time is the one that reaches past the edge.\n- **Students drop $t_{cq}$ because it belongs to the flip-flop, not the logic** → Without it the bound is too small and the design passes on paper but fails on silicon.\n\n## Reading the formula\n$t_{cq}$ is clock-to-Q of the launching flip-flop, $t_{logic}$ the combinational delay, $t_{setup}$ the capture requirement. Set $t_{logic} = 0$ and the bound degenerates to a pure flip-flop-to-flip-flop path, which is the sanity check for the formula.\n\n## How exams test this\n- Question forms: given the three delays, compute the minimum period or the maximum frequency; or judge whether raising the period fixes a hold violation.\n- Traps: adding hold time into the period; swapping setup and hold; mixing ns and ps.\n- What the grader looks for: the inequality $T \\ge t_{cq} + t_{logic} + t_{setup}$ written out before any numbers are substituted.",
+        "concepts": ["setup time", "clock period", "critical path"],
+        "prerequisites": ["flip-flop timing parameters"],
+        "contextual_bridge": "Uses the flip-flop delays introduced on p.1 to bound the clock period.",
+        "visual_explanations": [],
+        "formula_explanations": [
+          "$T \\ge t_{cq} + t_{logic} + t_{setup}$: the period must cover launch delay, logic delay and the capture requirement of the receiving flip-flop."
+        ],
+        "stuck_points": [
+          "Reading setup time as a constraint after the clock edge → it constrains the window before the edge; hold time is the one after it",
+          "Dropping $t_{cq}$ from the sum → the bound comes out too small and the frequency estimate is optimistic"
+        ],
+        "exam_angles": [
+          "Compute the maximum clock frequency from given delays → trap: adding hold time into the period → the grader wants $T \\ge t_{cq} + t_{logic} + t_{setup}$ written before substitution",
+          "True or false: increasing the clock period fixes a hold violation → trap: it does not, hold is measured against the same edge → the grader wants that reason stated"
+        ],
+        "evidence": [
+          {
+            "kind": "formula",
+            "quote_or_reference": "T >= t_cq + t_logic + t_setup"
+          }
+        ],
+        "confidence": 0.88,
         "needs_review": false,
         "needs_parser_fallback": false
       },

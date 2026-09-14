@@ -18,6 +18,16 @@ export async function upgradeToV2(transaction: Transaction) {
     });
 }
 
+/** v4 adds the annotations table; existing records only need the version bump. */
+export async function upgradeToV4(transaction: Transaction) {
+  await transaction
+    .table("workspaces")
+    .toCollection()
+    .modify((workspace: { version?: number }) => {
+      workspace.version = persistenceSchemaVersion;
+    });
+}
+
 export async function upgradeToV3(transaction: Transaction) {
   const workspaces = await transaction.table("workspaces").toArray();
   const documents = await transaction.table("documents").toArray();

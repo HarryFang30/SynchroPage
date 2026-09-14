@@ -4,13 +4,37 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 
 export const DB_NAME = "synchropage-reader";
-export const LS_KEYS = ["synchropage.lastWorkspaceId.v1", "synchropage.uiPreferences.v1"];
+export const LS_KEYS = [
+  "synchropage.lastWorkspaceId.v1",
+  "synchropage.uiPreferences.v1",
+  "synchropage.quizWeakPoints.v1",
+  "synchropage.generationWindow.v1",
+  "synchropage.annotationColor.v1",
+];
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * The Vite proxy forwards /api and /auth to whatever listens on 127.0.0.1:8765.
+ * A developer's running backend (desktop app, manual server) must never leak
+ * its real provider config or OAuth state into the tests, so the two requests
+ * the app makes on load are answered with an empty object before the first
+ * navigation. Test-specific api route handlers registered later take
+ * precedence for everything else.
+ */
+async function isolateBackendOnLoad(page: Page) {
+  await page.route("**/api/model-config", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
+  );
+  await page.route("**/auth/openai/status", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
+  );
+}
+
 /** Drop IndexedDB and clear localStorage before each test. */
 export async function resetStorage(page: Page) {
+  await isolateBackendOnLoad(page);
   await page.goto("/");
   await page.evaluate(
     ({ dbName, lsKeys }) => {

@@ -13,8 +13,8 @@ from .openai_oauth import (
 __all__ = [
     "DeviceAuthorization",
     "OpenAIAccount",
-    "OpenAIOAuthApi",
     "OpenAIAuthStatus",
+    "OpenAIOAuthApi",
     "OpenAIOAuthConfig",
     "OpenAIOAuthError",
     "OpenAIOAuthManager",

@@ -7,7 +7,6 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATHS = {
     "synchropage.lecture.v1": ROOT / "contracts/schemas/synchropage_lecture/v1.schema.json",

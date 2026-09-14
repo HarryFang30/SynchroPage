@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import re
@@ -657,10 +658,9 @@ def atomic_write_secret(path: Path, content: str) -> None:
         if os.name == "posix":
             os.chmod(path, 0o600)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             tmp_path.unlink(missing_ok=True)
-        finally:
-            raise
+        raise
 
 
 def redact_secret_text(text: str, *, max_chars: int | None = None) -> str:

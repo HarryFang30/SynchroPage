@@ -1,3 +1,47 @@
+export type HttpRequestErrorInit = {
+  status: number;
+  code?: string;
+  retryAfterSeconds?: number;
+  body?: string;
+};
+
+/**
+ * Transport/protocol error carrying everything a retry classifier needs:
+ * the HTTP status, the backend error code ({"error": <code>, "message": <text>})
+ * and the parsed Retry-After header. Never classify by message text.
+ */
+export class HttpRequestError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly retryAfterSeconds?: number;
+  readonly body?: string;
+
+  constructor(message: string, init: HttpRequestErrorInit) {
+    super(message);
+    this.name = "HttpRequestError";
+    this.status = init.status;
+    this.code = init.code;
+    this.retryAfterSeconds = init.retryAfterSeconds;
+    this.body = init.body;
+  }
+}
+
+export function parseRetryAfterSeconds(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const trimmed = String(value).trim();
+  if (!trimmed) return undefined;
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds);
+  const timestamp = Date.parse(trimmed);
+  if (Number.isFinite(timestamp)) return Math.max(0, Math.round((timestamp - Date.now()) / 1000));
+  return undefined;
+}
+
+function readStringField(source: Record<string, unknown> | null, key: string) {
+  const value = source?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 export async function requestJson<T>(
   path: string,
   options: RequestInit = {},
@@ -11,17 +55,27 @@ export async function requestJson<T>(
     },
   });
   if (!response.ok) {
-    const detail = await response.text();
-    let parsed: { error?: string; message?: string } | null = null;
+    const detail = await response.text().catch(() => "");
+    let parsed: Record<string, unknown> | null = null;
     try {
-      parsed = JSON.parse(detail) as { error?: string; message?: string };
+      const candidate = JSON.parse(detail) as unknown;
+      parsed = candidate && typeof candidate === "object" && !Array.isArray(candidate)
+        ? (candidate as Record<string, unknown>)
+        : null;
     } catch {
       parsed = null;
     }
-    if (parsed?.error === "account_not_found") {
-      throw new Error(accountNotFoundMessage);
-    }
-    throw new Error(parsed?.message || parsed?.error || detail || `HTTP ${response.status}`);
+    const code = readStringField(parsed, "error");
+    const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get("Retry-After"));
+    const message = code === "account_not_found"
+      ? accountNotFoundMessage
+      : readStringField(parsed, "message") || code || detail || `HTTP ${response.status}`;
+    throw new HttpRequestError(message, {
+      status: response.status,
+      code,
+      retryAfterSeconds,
+      body: detail || undefined,
+    });
   }
   return (await response.json()) as T;
 }

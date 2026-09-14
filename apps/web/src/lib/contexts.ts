@@ -50,6 +50,7 @@ export type AssistantUiRuntime = {
   useThreadRuntime: () => AssistantThreadRuntime;
   useAuiState: <T>(selector: (state: {
     message: {
+      id?: string;
       role: string;
       status?: { type?: string; reason?: string };
       content: unknown[];

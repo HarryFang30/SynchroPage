@@ -193,6 +193,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  /* Children are nowrap and unshrinkable, so a long status caption next to a
+     button ("Standard storage" + "Enable persistence" in English) overflowed
+     the 238px control column to the left and could reach the row label.
+     Wrapping keeps the pair inside the column at every width. */
+  flex-wrap: wrap;
+  row-gap: 6px;
   gap: 10px;
   max-width: 100%;
   white-space: nowrap;

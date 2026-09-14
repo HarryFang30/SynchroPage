@@ -10,7 +10,11 @@ from pdf_agent.auth import OpenAIOAuthManager
 from pdf_agent.gateway import (
     build_chatgpt_codex_auth,
 )
-from pdf_agent.server.constants import AGENT_RETRY_DELAYS_SECONDS, DEFAULT_AGENT_MODEL
+from pdf_agent.server.constants import (
+    AGENT_RETRY_DELAYS_SECONDS,
+    AGENT_UPSTREAM_TIMEOUT_SECONDS,
+    DEFAULT_AGENT_MODEL,
+)
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.gateway_transport import post_json_responses
 from pdf_agent.server.model_config import ModelConfigStore
@@ -21,7 +25,10 @@ from pdf_agent.server.model_gateway import (
 )
 from pdf_agent.server.payload_builders import _build_responses_payload
 from pdf_agent.server.pdf_file_cache import PdfFileCache
-from pdf_agent.server.prompt_cache import _should_retry_transient_upstream_error, _transient_retry_delay_seconds
+from pdf_agent.server.prompt_cache import (
+    _should_retry_transient_upstream_error,
+    _transient_retry_delay_seconds,
+)
 
 
 class AgentChatGateway:
@@ -32,7 +39,7 @@ class AgentChatGateway:
         manager: OpenAIOAuthManager,
         *,
         model: str = DEFAULT_AGENT_MODEL,
-        timeout_seconds: float = 120.0,
+        timeout_seconds: float = float(AGENT_UPSTREAM_TIMEOUT_SECONDS),
         config_store: ModelConfigStore | None = None,
         pdf_file_cache: PdfFileCache | None = None,
     ) -> None:

@@ -5,6 +5,7 @@ import {
   teachingRequestPage,
   teachingDocumentContextForPlan,
   type GeneratedTeachingPageResponse,
+  type GenerationFailureKind,
   type PageData,
   type PagePack,
   type TeachingGenerationQualityPlan,
@@ -35,13 +36,25 @@ export function buildRunningPageData(
 
 // ── Failed page builder ───────────────────────────────────────
 
+export type GenerationFailureDetail = {
+  kind: GenerationFailureKind;
+  attempts: number;
+};
+
+/**
+ * A transport failure (timeout / 429 / network / bad JSON) is NOT a quality
+ * signal: it records teaching.generation_error and leaves needs_review alone so
+ * the next run does not escalate the page to the heavy quality plan (F04).
+ */
 export function buildFailedPageData(
   runningPage: PageData,
   message: string,
   outputLanguage: TeachingOutputLanguage,
   copy: AppCopy,
+  failure?: GenerationFailureDetail,
 ): PageData {
   const pageNo = runningPage.page_no;
+  const transportFailure = Boolean(failure) && failure?.kind !== "quality";
   return {
     ...runningPage,
     status: "failed",
@@ -51,7 +64,10 @@ export function buildFailedPageData(
       slide_title: runningPage.teaching.slide_title || `PDF p.${pageNo}`,
       speaker_notes_md: generationFailureMarkdown(message, outputLanguage),
       confidence: 0,
-      needs_review: true,
+      needs_review: transportFailure ? Boolean(runningPage.teaching.needs_review) : true,
+      generation_error: failure
+        ? { kind: failure.kind, attempts: Math.max(1, Math.floor(failure.attempts)), at: Date.now() }
+        : runningPage.teaching.generation_error,
     },
   };
 }

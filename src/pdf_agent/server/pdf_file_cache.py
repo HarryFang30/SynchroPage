@@ -16,7 +16,8 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from pdf_agent.server.value_utils import int_value as _int_value, string_value as _string_value
+from pdf_agent.server.value_utils import int_value as _int_value
+from pdf_agent.server.value_utils import string_value as _string_value
 
 # ---------------------------------------------------------------------------
 # Constants

@@ -1,6 +1,61 @@
 import { test, expect } from "@playwright/test";
 import { resetStorage, mockApi, uploadPdfFromRail } from "./helpers";
 
+type TeachingRequestBody = {
+  reasoningEffort?: string;
+  qualityPlan?: { attachPdf?: boolean; reasoningEffort?: string };
+  page?: { page_no?: number };
+  pages?: Array<{ page_no?: number }>;
+};
+
+/** Plain-text page pack that routes one-click generation through the batch endpoint. */
+function buildTextPack(id: string, title: string, pageCount = 3) {
+  return {
+    document: { id, title, source_pdf_url: "", page_count: pageCount },
+    pages: Array.from({ length: pageCount }, (_, index) => {
+      const pageNo = index + 1;
+      return {
+        page_no: pageNo,
+        source: {
+          pdf_page_ref: `#page=${pageNo}`,
+          text_md: `Batch text source page ${pageNo}. This page has enough plain text to use the fast text generation path. It avoids diagrams, tables, code, and formulas so the batch endpoint is selected during one-click generation.`,
+          ocr_used: false,
+          parser: "test",
+        },
+        teaching: {
+          output_language: "zh-CN",
+          slide_title: "",
+          speaker_notes_md: "",
+          concepts: [],
+          visual_explanations: [],
+          prerequisites: [],
+          contextual_bridge: "",
+          formula_explanations: [],
+          evidence: [],
+          needs_review: false,
+          needs_parser_fallback: false,
+          confidence: 0,
+        },
+        status: "draft",
+      };
+    }),
+  };
+}
+
+async function loadTextPack(page: import("@playwright/test").Page, pack: ReturnType<typeof buildTextPack>) {
+  await page.locator('input[type="file"][accept="application/json,.json"]').first().setInputFiles({
+    name: "text-fixture.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(pack)),
+  });
+  await expect(page.locator(".brand")).toContainText(pack.document.title, { timeout: 10_000 });
+}
+
+/** Long enough that generatedTeachingNeedsRetry() never fires on the mock. */
+function mockNotes(label: string, pageNo: number) {
+  return `${label} for page ${pageNo}. These mocked notes are deliberately long enough to stay above the weak-output retry threshold so the test exercises only the path it is about.`;
+}
+
 test.describe("Teaching Generation (mocked)", () => {
   test.beforeEach(async ({ page }) => {
     await resetStorage(page);
@@ -126,49 +181,11 @@ test.describe("Teaching Generation (mocked)", () => {
     await expect.poll(() => Math.max(...pageCalls.values())).toBeGreaterThan(1);
   });
 
-  test("stalled batch request falls back to single-page generation", async ({ page }) => {
-    test.setTimeout(15_000);
-    const textPack = {
-      document: {
-        id: "batch-text-doc",
-        title: "Batch Text Fixture",
-        source_pdf_url: "",
-        page_count: 3,
-      },
-      pages: Array.from({ length: 3 }, (_, index) => {
-        const pageNo = index + 1;
-        return {
-          page_no: pageNo,
-          source: {
-            pdf_page_ref: `#page=${pageNo}`,
-            text_md: `Batch text source page ${pageNo}. This page has enough plain text to use the fast text generation path. It avoids diagrams, tables, code, and formulas so the batch endpoint is selected during one-click generation.`,
-            ocr_used: false,
-            parser: "test",
-          },
-          teaching: {
-            output_language: "zh-CN",
-            slide_title: "",
-            speaker_notes_md: "",
-            concepts: [],
-            visual_explanations: [],
-            prerequisites: [],
-            contextual_bridge: "",
-            formula_explanations: [],
-            evidence: [],
-            needs_review: false,
-            needs_parser_fallback: false,
-            confidence: 0,
-          },
-          status: "draft",
-        };
-      }),
-    };
-    await page.locator('input[type="file"][accept="application/json,.json"]').first().setInputFiles({
-      name: "batch-text-fixture.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(textPack)),
-    });
-    await expect(page.locator(".brand")).toContainText("Batch Text Fixture", { timeout: 10_000 });
+  test("batch response without any page falls back to single-page generation", async ({ page }) => {
+    test.setTimeout(20_000);
+    await loadTextPack(page, buildTextPack("batch-text-doc", "Batch Text Fixture"));
+    // Only shortens the informational "still generating" notice now; it no
+    // longer aborts the request.
     await page.evaluate(() => {
       (window as Window & { __SYNCHROPAGE_GENERATION_BATCH_STALL_TIMEOUT_MS?: number }).__SYNCHROPAGE_GENERATION_BATCH_STALL_TIMEOUT_MS = 250;
     });
@@ -327,9 +344,231 @@ test.describe("Teaching Generation (mocked)", () => {
     await expect.poll(() => pageCalls.get(1) || 0).toBeGreaterThan(1);
   });
 
+  test("rate-limited page request is retried after the Retry-After cooldown", async ({ page }) => {
+    test.setTimeout(60_000);
+    await loadTextPack(page, buildTextPack("rate-limit-doc", "Rate Limit Fixture", 2));
+    await page.unroute("**/api/**");
+
+    const pageCalls = new Map<number, number>();
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/generate/pages")) {
+        await route.fulfill({
+          status: 502,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "network_error", message: "upstream reset" }),
+        });
+        return;
+      }
+      if (url.includes("/api/generate/page")) {
+        const body = JSON.parse(route.request().postData() || "{}") as TeachingRequestBody;
+        const pageNo = Number(body.page?.page_no || 1);
+        const calls = (pageCalls.get(pageNo) || 0) + 1;
+        pageCalls.set(pageNo, calls);
+        if (calls === 1) {
+          // Typed 429: no "rate limit" words anywhere in the payload, so this can
+          // only be retried by classifying on status + code.
+          await route.fulfill({
+            status: 429,
+            contentType: "application/json",
+            headers: { "Retry-After": "1" },
+            body: JSON.stringify({ error: "rate_limited", message: "slow down" }),
+          });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            page: {
+              page_no: pageNo,
+              teaching: {
+                slide_title: `Cooled Page ${pageNo}`,
+                speaker_notes_md: mockNotes("Recovered after rate limit", pageNo),
+                confidence: 0.9,
+                concepts: [`cooled-${pageNo}`],
+                output_language: "zh-CN",
+              },
+              status: "completed",
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await page.locator(".generate-main-button").click();
+
+    await expect(page.locator(".notes-content")).toContainText(/Recovered after rate limit/i, { timeout: 45_000 });
+    await expect.poll(() => pageCalls.get(1) || 0).toBeGreaterThan(1);
+  });
+
+  test("partially parsed batch regenerates only the missing pages", async ({ page }) => {
+    test.setTimeout(30_000);
+    await loadTextPack(page, buildTextPack("partial-batch-doc", "Partial Batch Fixture"));
+    await page.unroute("**/api/**");
+
+    let batchCalls = 0;
+    const pageCalls = new Map<number, number>();
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/generate/pages")) {
+        batchCalls += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            pages: [
+              {
+                page_no: 1,
+                teaching: {
+                  slide_title: "Batch Page 1",
+                  speaker_notes_md: mockNotes("Batch committed notes", 1),
+                  confidence: 0.9,
+                  concepts: ["batch-1"],
+                  output_language: "zh-CN",
+                },
+                status: "completed",
+              },
+            ],
+            missing: [2, 3],
+          }),
+        });
+        return;
+      }
+      if (url.includes("/api/generate/page")) {
+        const body = JSON.parse(route.request().postData() || "{}") as TeachingRequestBody;
+        const pageNo = Number(body.page?.page_no || 1);
+        pageCalls.set(pageNo, (pageCalls.get(pageNo) || 0) + 1);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            page: {
+              page_no: pageNo,
+              teaching: {
+                slide_title: `Single Page ${pageNo}`,
+                speaker_notes_md: mockNotes("Regenerated missing notes", pageNo),
+                confidence: 0.9,
+                concepts: [`missing-${pageNo}`],
+                output_language: "zh-CN",
+              },
+              status: "completed",
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await page.locator(".generate-main-button").click();
+
+    await expect(page.locator(".notes-content")).toContainText(/Batch committed notes for page 1/i, { timeout: 15_000 });
+    await expect.poll(() => pageCalls.get(2) || 0, { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect.poll(() => pageCalls.get(3) || 0, { timeout: 15_000 }).toBeGreaterThan(0);
+    expect(batchCalls).toBe(1);
+    // The page the batch did return must never be re-requested singly.
+    expect(pageCalls.get(1) || 0).toBe(0);
+  });
+
+  test("transport failure retries with the same plan instead of escalating to a PDF request", async ({ page }) => {
+    test.setTimeout(30_000);
+    await loadTextPack(page, buildTextPack("no-escalation-doc", "No Escalation Fixture", 2));
+    await page.unroute("**/api/**");
+
+    const pageRequests: TeachingRequestBody[] = [];
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/generate/pages")) {
+        await route.fulfill({
+          status: 504,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "upstream_timeout", message: "gateway deadline" }),
+        });
+        return;
+      }
+      if (url.includes("/api/generate/page")) {
+        const body = JSON.parse(route.request().postData() || "{}") as TeachingRequestBody;
+        pageRequests.push(body);
+        const pageNo = Number(body.page?.page_no || 1);
+        const attempts = pageRequests.filter((item) => Number(item.page?.page_no || 1) === pageNo).length;
+        if (attempts === 1) {
+          await route.fulfill({
+            status: 504,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "upstream_timeout", message: "gateway deadline" }),
+          });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            page: {
+              page_no: pageNo,
+              teaching: {
+                slide_title: `Steady Page ${pageNo}`,
+                speaker_notes_md: mockNotes("Steady retry notes", pageNo),
+                confidence: 0.9,
+                concepts: [`steady-${pageNo}`],
+                output_language: "zh-CN",
+              },
+              status: "completed",
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await page.locator(".generate-main-button").click();
+
+    await expect(page.locator(".notes-content")).toContainText(/Steady retry notes/i, { timeout: 25_000 });
+    const pageOneRequests = pageRequests.filter((item) => Number(item.page?.page_no || 1) === 1);
+    expect(pageOneRequests.length).toBeGreaterThan(1);
+    const [first, second] = pageOneRequests;
+    expect(second.qualityPlan?.attachPdf).toBe(false);
+    expect(second.reasoningEffort).toBe(first.reasoningEffort);
+  });
+
+  test("stopping generation leaves in-flight pages as drafts, not failures", async ({ page }) => {
+    test.setTimeout(30_000);
+    await loadTextPack(page, buildTextPack("stop-doc", "Stop Fixture"));
+    await page.unroute("**/api/**");
+
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/generate/")) {
+        // Never answers: the run is still in flight when the user presses Stop.
+        await new Promise((resolve) => setTimeout(resolve, 25_000));
+        await route.fulfill({ status: 200, contentType: "application/json", body: "{}" }).catch(() => undefined);
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    const generateButton = page.locator(".generate-main-button");
+    await generateButton.click();
+    await expect(generateButton).toContainText(/停止|Stop/i, { timeout: 10_000 });
+    await page.locator(".generation-progress-trigger").click();
+    await expect(page.locator(".generation-details-popover")).toContainText(/生成中|Running/i, { timeout: 10_000 });
+
+    await generateButton.click();
+    await expect(generateButton).not.toContainText(/停止|Stop/i, { timeout: 10_000 });
+
+    const popover = page.locator(".generation-details-popover");
+    await expect(popover).toContainText(/待生成|Pending/i);
+    await expect(popover).not.toContainText(/失败|Failed/i);
+    await expect(page.locator(".notes-content")).not.toContainText(/本页讲解生成失败|Page notes generation failed/i);
+  });
+
   test("structure panel tab exists", async ({ page }) => {
     await expect(page.locator(".tab-group")).toBeVisible();
-    await expect(page.locator(".tab-button")).toHaveCount(3);
+    // 讲解 / 笔记 / 结构 / JSON
+    await expect(page.locator(".tab-button")).toHaveCount(4);
   });
 
   test("generation details popover opens from the progress control", async ({ page }) => {

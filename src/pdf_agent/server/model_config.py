@@ -3,22 +3,63 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from pdf_agent.auth.openai_oauth import atomic_write_secret, default_data_dir
-from pdf_agent.server.constants import MODEL_GPT_54, MODEL_GPT_54_MINI, MODEL_GPT_55
+from pdf_agent.server.constants import (
+    MODEL_GPT_6_ASTRA,
+    MODEL_GPT_54,
+    MODEL_GPT_54_MINI,
+    MODEL_GPT_55,
+)
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.json_utils import json_dumps_utf8_safe
-from pdf_agent.server.provider_catalog import catalog_provider_defaults, catalog_versions
+from pdf_agent.server.provider_catalog import (
+    catalog_provider_defaults,
+    catalog_versions,
+)
 from pdf_agent.server.value_utils import string_value
-
 
 MODEL_CONFIG_VERSION = 1
 DEFAULT_CODEX_PROVIDER_ID = "codex_oauth"
-DEFAULT_MODEL_CONFIG_PATH = default_data_dir() / "model_providers.json"
+# Self-hosted coproxy gateway (GitHub Copilot models behind an OpenAI Responses
+# compatible endpoint).  The base URL is public knowledge; the access token is
+# never stored in the repository -- it lives in the user's model_providers.json
+# (mode 0600) or in one of ``COPROXY_API_KEY_ENV_VARS``.
+COPROXY_PROVIDER_ID = "coproxy"
+COPROXY_DEFAULT_BASE_URL = os.environ.get("PDF_AGENT_COPROXY_BASE_URL", "https://us.taohuang.info/v1").strip() or "https://us.taohuang.info/v1"
+COPROXY_API_KEY_ENV_VARS: tuple[str, ...] = ("PDF_AGENT_COPROXY_API_KEY", "COPROXY_API_KEY", "COPROXY_TOKEN")
+COPROXY_DEFAULT_MODELS: tuple[str, ...] = (
+    MODEL_GPT_6_ASTRA,
+    "gpt-5.6-sol",
+    MODEL_GPT_55,
+    MODEL_GPT_54,
+    MODEL_GPT_54_MINI,
+    "gemini-3.8-flash",
+    "grok-4.6",
+)
+MODEL_CONFIG_PATH_ENV_VAR = "PDF_AGENT_MODEL_CONFIG_PATH"
+MODEL_CONFIG_FILENAME = "model_providers.json"
+
+
+def default_model_config_path() -> Path:
+    """Resolve the provider config path at call time.
+
+    Resolving lazily (instead of at import) lets ``PDF_AGENT_HOME`` or
+    ``PDF_AGENT_MODEL_CONFIG_PATH`` set by tests or launchers take effect.
+    """
+    override = os.environ.get(MODEL_CONFIG_PATH_ENV_VAR, "").strip()
+    if override:
+        return Path(override).expanduser()
+    return default_data_dir() / MODEL_CONFIG_FILENAME
+
+
+# Backwards-compatible alias for callers that imported the old constant.
+DEFAULT_MODEL_CONFIG_PATH = default_model_config_path()
 MODEL_REF_KEYS = frozenset({"assistant", "teachingFast", "teachingBalanced", "teachingQuality"})
 LEGACY_PROVIDER_ID_ALIASES = {
     "openai_api": "openai",
@@ -63,6 +104,7 @@ def default_model_config() -> dict[str, Any]:
                 "official": "https://chatgpt.com/",
             },
         },
+        coproxy_provider_defaults(),
         *catalog_provider_defaults(),
     ]
     return {
@@ -79,9 +121,67 @@ def default_model_config() -> dict[str, Any]:
     }
 
 
+def coproxy_provider_defaults() -> dict[str, Any]:
+    """Built-in preset for the coproxy gateway.
+
+    Only the OpenAI Responses endpoint is advertised: ``gpt-6-astra`` and the
+    other GPT-5.x/6 models are not served on ``/chat/completions`` by the
+    gateway.  The provider starts enabled only when an API key is available
+    from the environment, so a fresh checkout never routes requests to a
+    gateway it cannot authenticate against.
+    """
+    api_key = env_provider_api_key(COPROXY_PROVIDER_ID)
+    return {
+        "id": COPROXY_PROVIDER_ID,
+        "presetProviderId": COPROXY_PROVIDER_ID,
+        "name": "coproxy (GPT-6 gateway)",
+        "description": "Self-hosted coproxy gateway exposing GitHub Copilot models (gpt-6-astra, gpt-5.x, Gemini, Grok) through the OpenAI Responses API.",
+        "type": "openai-responses",
+        "defaultChatEndpoint": "openai-responses",
+        "endpointConfigs": {
+            "openai-responses": {"baseUrl": COPROXY_DEFAULT_BASE_URL, "adapterFamily": "openai"},
+        },
+        "apiHost": COPROXY_DEFAULT_BASE_URL,
+        "apiKeyRequired": True,
+        "enabled": bool(api_key),
+        "models": list(COPROXY_DEFAULT_MODELS),
+        "websites": {
+            "official": COPROXY_DEFAULT_BASE_URL.removesuffix("/v1"),
+        },
+        "apiFeatures": {
+            "responsesOnlyModels": ["gpt-6", "gpt-5."],
+            "pdfInputFile": True,
+            "reasoningEffortMax": [MODEL_GPT_6_ASTRA, "gpt-5.6"],
+            # Verified against the live gateway: prompt_cache_key /
+            # prompt_cache_retention are accepted on /v1/responses, which keeps
+            # the 750k-char document prefix out of every per-page request.
+            "promptCache": True,
+        },
+    }
+
+
+def env_provider_api_key(provider_id: str) -> str:
+    """Return an API key for *provider_id* from the environment, if any."""
+    if _canonical_provider_id(provider_id) != COPROXY_PROVIDER_ID:
+        return ""
+    for name in COPROXY_API_KEY_ENV_VARS:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def provider_api_key(provider: Mapping[str, Any]) -> str:
+    """Resolve the effective API key: stored value first, then environment."""
+    stored = string_value(provider.get("apiKey"), "")
+    if stored:
+        return stored
+    return env_provider_api_key(string_value(provider.get("id"), ""))
+
+
 class ModelConfigStore:
     def __init__(self, path: Path | str | None = None) -> None:
-        self.path = Path(path) if path is not None else DEFAULT_MODEL_CONFIG_PATH
+        self.path = Path(path) if path is not None else default_model_config_path()
 
     def load_private(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -108,7 +208,7 @@ def public_model_config(config: Mapping[str, Any]) -> dict[str, Any]:
     providers: list[dict[str, Any]] = []
     for provider in normalized["providers"]:
         public_provider = {key: value for key, value in provider.items() if key != "apiKey"}
-        public_provider["hasApiKey"] = bool(provider.get("apiKey"))
+        public_provider["hasApiKey"] = bool(provider_api_key(provider))
         providers.append(public_provider)
     return {
         "version": normalized["version"],
@@ -266,7 +366,17 @@ def _merge_provider_with_catalog_defaults(raw: Mapping[str, Any], fallback: Mapp
             **(dict(raw_endpoints) if isinstance(raw_endpoints, Mapping) else {}),
         }
     merged["models"] = _merge_model_lists(raw.get("models"), fallback.get("models"))
-    for key in ("websites", "apiFeatures", "catalog", "description", "presetProviderId"):
+    # Capability flags added to a built-in preset after the user's config file
+    # was written (e.g. ``promptCache``) must still reach the stored provider,
+    # so apiFeatures is merged key by key with the stored value winning.
+    fallback_features = fallback.get("apiFeatures")
+    raw_features = raw.get("apiFeatures")
+    if isinstance(fallback_features, Mapping) or isinstance(raw_features, Mapping):
+        merged["apiFeatures"] = {
+            **(dict(fallback_features) if isinstance(fallback_features, Mapping) else {}),
+            **(dict(raw_features) if isinstance(raw_features, Mapping) else {}),
+        }
+    for key in ("websites", "catalog", "description", "presetProviderId"):
         if not raw.get(key) and fallback.get(key):
             merged[key] = fallback[key]
     return merged
@@ -403,9 +513,7 @@ def _endpoint_base_url(endpoint_configs: Mapping[str, Mapping[str, Any]], endpoi
 def _default_api_key_required(provider_id: str, provider_type: str) -> bool:
     if provider_type == "codex-oauth":
         return False
-    if provider_type == "ollama-chat" or provider_id in {"ollama", "lmstudio", "ovms"}:
-        return False
-    return True
+    return not (provider_type == "ollama-chat" or provider_id in {"ollama", "lmstudio", "ovms"})
 
 
 def _clean_provider_id(value: Any) -> str:
