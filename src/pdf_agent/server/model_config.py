@@ -10,12 +10,19 @@ from pathlib import Path
 from typing import Any
 
 from pdf_agent.auth.openai_oauth import atomic_write_secret, default_data_dir
-from pdf_agent.server.constants import MODEL_GPT_54, MODEL_GPT_54_MINI, MODEL_GPT_55, MODEL_GPT_6_ASTRA
+from pdf_agent.server.constants import (
+    MODEL_GPT_6_ASTRA,
+    MODEL_GPT_54,
+    MODEL_GPT_54_MINI,
+    MODEL_GPT_55,
+)
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.json_utils import json_dumps_utf8_safe
-from pdf_agent.server.provider_catalog import catalog_provider_defaults, catalog_versions
+from pdf_agent.server.provider_catalog import (
+    catalog_provider_defaults,
+    catalog_versions,
+)
 from pdf_agent.server.value_utils import string_value
-
 
 MODEL_CONFIG_VERSION = 1
 DEFAULT_CODEX_PROVIDER_ID = "codex_oauth"
@@ -506,9 +513,7 @@ def _endpoint_base_url(endpoint_configs: Mapping[str, Mapping[str, Any]], endpoi
 def _default_api_key_required(provider_id: str, provider_type: str) -> bool:
     if provider_type == "codex-oauth":
         return False
-    if provider_type == "ollama-chat" or provider_id in {"ollama", "lmstudio", "ovms"}:
-        return False
-    return True
+    return not (provider_type == "ollama-chat" or provider_id in {"ollama", "lmstudio", "ovms"})
 
 
 def _clean_provider_id(value: Any) -> str:

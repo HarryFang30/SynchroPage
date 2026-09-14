@@ -9,7 +9,6 @@ from typing import Any
 
 from pdf_agent.server.value_utils import string_value
 
-
 CATALOG_PACKAGE = "pdf_agent.provider_registry"
 PROVIDERS_RESOURCE = "providers.json"
 MODELS_RESOURCE = "models.json"
@@ -305,9 +304,7 @@ def _endpoint_base_url(endpoint_configs: dict[str, dict[str, Any]], endpoint_typ
 
 
 def _provider_requires_api_key(provider_id: str, endpoint_type: str) -> bool:
-    if provider_id in {"ollama", "lmstudio", "ovms"} or endpoint_type == "ollama-chat":
-        return False
-    return True
+    return not (provider_id in {"ollama", "lmstudio", "ovms"} or endpoint_type == "ollama-chat")
 
 
 def _merged_capabilities(base_value: Any, override_value: Any) -> list[str]:
@@ -346,7 +343,7 @@ def _fallback_model_family(model_id: str) -> str:
         return "claude"
     if "gemini" in lowered:
         return "gemini"
-    if lowered.startswith("gpt") or lowered.startswith("o"):
+    if lowered.startswith(("gpt", "o")):
         return "openai"
     if "llama" in lowered:
         return "llama"

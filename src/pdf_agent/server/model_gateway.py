@@ -17,7 +17,10 @@ from pdf_agent.gateway import (
     build_codex_responses_payload,
     codex_responses_url,
 )
-from pdf_agent.server.constants import MODEL_REASONING_EFFORT_RANGES, REASONING_EFFORT_ORDER
+from pdf_agent.server.constants import (
+    MODEL_REASONING_EFFORT_RANGES,
+    REASONING_EFFORT_ORDER,
+)
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.gateway_fallback import post_payload_with_cache_fallback
 from pdf_agent.server.generation_policy import max_output_tokens_for
@@ -29,10 +32,12 @@ from pdf_agent.server.model_config import (
     provider_by_id,
     resolve_model_ref,
 )
-from pdf_agent.server.prompt_cache import _prompt_cache_metadata, provider_supports_prompt_cache
+from pdf_agent.server.prompt_cache import (
+    _prompt_cache_metadata,
+    provider_supports_prompt_cache,
+)
 from pdf_agent.server.response_parsing import _extract_gateway_text
 from pdf_agent.server.value_utils import string_value
-
 
 PostWithRetries = Callable[[str, dict[str, Any], dict[str, str]], Awaitable[tuple[str, str]]]
 CodexAuthBuilder = Callable[..., Awaitable[Any]]
@@ -755,7 +760,7 @@ def _deepseek_chat_options(payload: Mapping[str, Any], model: str) -> dict[str, 
 def _deepseek_reasoning_effort(value: str) -> str:
     if value == "xhigh":
         return "max"
-    return "high" if value in {"", "low", "medium", "high"} else "high"
+    return "high"
 
 
 def _max_output_tokens(payload: Mapping[str, Any], *, default: int) -> int:

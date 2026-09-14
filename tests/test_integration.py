@@ -18,7 +18,7 @@ import unittest
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 from unittest import mock
 
 from pdf_agent.server.errors import HttpError
@@ -27,7 +27,6 @@ from pdf_agent.server.web_app import (
     PdfAgentHttpServer,
     create_server,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -180,8 +179,8 @@ class AsyncRunnerTimeoutTest(unittest.TestCase):
         self.assertEqual(result, "recovered")
 
     def test_run_timeout_records_log(self) -> None:
-        import logging
         import io as std_io
+        import logging
 
         stream = std_io.StringIO()
         handler = logging.StreamHandler(stream)
@@ -484,7 +483,7 @@ class _FakeHttpResponse:
             return chunk
         return self.read1(size)
 
-    def __enter__(self) -> "_FakeHttpResponse":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:

@@ -9,7 +9,11 @@ from typing import Any
 from pdf_agent.harness.agent_loop import CoursePdfHarness
 from pdf_agent.harness.policy import DeterministicPolicyGate, PolicyError
 from pdf_agent.harness.ports import HarnessPorts
-from pdf_agent.harness.session_store import InMemoryProgressBus, InMemoryRunStore, JsonlJournalStore
+from pdf_agent.harness.session_store import (
+    InMemoryProgressBus,
+    InMemoryRunStore,
+    JsonlJournalStore,
+)
 from pdf_agent.harness.types import (
     AgentRunParams,
     AgentRunResult,

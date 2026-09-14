@@ -11,10 +11,10 @@ see the ``*_fn`` or ``*_context`` keyword parameters.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import math
 import random
-import datetime
 from collections.abc import Callable, Mapping, Sequence
 from email.utils import parsedate_to_datetime
 from typing import Any

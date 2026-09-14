@@ -6,7 +6,14 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .types import AgentRunResult, AgentUsage, HarnessInput, JournalEntry, PageResult, RunStatus
+from .types import (
+    AgentRunResult,
+    AgentUsage,
+    HarnessInput,
+    JournalEntry,
+    PageResult,
+    RunStatus,
+)
 
 
 class JsonlJournalStore:

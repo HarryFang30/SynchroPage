@@ -60,19 +60,19 @@ class ReasoningEffortTest(unittest.TestCase):
 class TeachingOutputLanguageTest(unittest.TestCase):
 
     def test_chinese(self) -> None:
-        code, label = _teaching_output_language({"outputLanguage": "zh-CN"})
+        code, _label = _teaching_output_language({"outputLanguage": "zh-CN"})
         self.assertEqual(code, "zh-CN")
 
     def test_english(self) -> None:
-        code, label = _teaching_output_language({"outputLanguage": "en-US"})
+        code, _label = _teaching_output_language({"outputLanguage": "en-US"})
         self.assertEqual(code, "en-US")
 
     def test_fallback_to_ui_language(self) -> None:
-        code, label = _teaching_output_language({"uiLanguage": "en-US"})
+        code, _label = _teaching_output_language({"uiLanguage": "en-US"})
         self.assertEqual(code, "en-US")
 
     def test_default_chinese(self) -> None:
-        code, label = _teaching_output_language({})
+        code, _label = _teaching_output_language({})
         self.assertEqual(code, "zh-CN")
 
 

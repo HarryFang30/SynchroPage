@@ -10,24 +10,36 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from pdf_agent.server.document_context import _pdf_file_input
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.markdown_math import (
     json_loads_with_latex_repair as _json_loads_with_latex_repair,
+)
+from pdf_agent.server.markdown_math import (
     normalize_markdown_math as _normalize_markdown_math,
 )
-from pdf_agent.server.document_context import _pdf_file_input
-from pdf_agent.server.pdf_file_cache import PdfFileCache
 from pdf_agent.server.payload_builders import (
     _is_fast_teaching_generation,
     _teaching_generation_pages,
     _teaching_output_language,
 )
+from pdf_agent.server.pdf_file_cache import PdfFileCache
 from pdf_agent.server.value_utils import (
     evidence_list as _evidence_list,
+)
+from pdf_agent.server.value_utils import (
     float_value as _float_value,
+)
+from pdf_agent.server.value_utils import (
     int_value as _int_value,
+)
+from pdf_agent.server.value_utils import (
     page_type_value as _page_type_value,
+)
+from pdf_agent.server.value_utils import (
     string_list as _string_list,
+)
+from pdf_agent.server.value_utils import (
     string_value as _string_value,
 )
 

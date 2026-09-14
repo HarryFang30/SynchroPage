@@ -7,14 +7,23 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pdf_agent.server.document_context import _pdf_file_input
+from pdf_agent.gateway.openai_gateway import redacted_gateway_error
+from pdf_agent.server.document_context import _pdf_file_input, set_pdf_file_cache
 from pdf_agent.server.errors import HttpError
+from pdf_agent.server.gateway_transport import _redacted_upstream_detail
 from pdf_agent.server.generation_parsing import (
     _parse_generated_page,
     _parse_generated_pages,
     _parse_generated_pages_with_missing,
 )
 from pdf_agent.server.json_utils import json_bytes_utf8_safe as _json_bytes_utf8_safe
+from pdf_agent.server.payload_builders import (
+    _build_responses_payload,
+    _build_teaching_generation_payload,
+    _build_teaching_generation_prompt,
+    _teaching_generation_candidate_bodies,
+)
+from pdf_agent.server.pdf_file_cache import PdfFileCache
 from pdf_agent.server.prompt_cache import (
     _retry_after_seconds,
     _transient_retry_delay_seconds,
@@ -25,12 +34,6 @@ from pdf_agent.server.response_parsing import (
     _extract_gateway_text,
     _extract_prompt_cache_usage,
 )
-from pdf_agent.server.payload_builders import (
-    _build_responses_payload,
-    _build_teaching_generation_payload,
-    _build_teaching_generation_prompt,
-    _teaching_generation_candidate_bodies,
-)
 from pdf_agent.server.web_app import (
     PdfAgentHttpServer,
     PdfAgentRequestHandler,
@@ -40,10 +43,6 @@ from pdf_agent.server.web_app import (
     _static_file_etag,
     create_server,
 )
-from pdf_agent.gateway.openai_gateway import redacted_gateway_error
-from pdf_agent.server.document_context import set_pdf_file_cache
-from pdf_agent.server.pdf_file_cache import PdfFileCache
-from pdf_agent.server.gateway_transport import _redacted_upstream_detail
 
 
 def _handler_with_cache() -> PdfAgentRequestHandler:
@@ -1152,22 +1151,18 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(page["teaching"]["confidence"], 0.82)
 
     def test_extracts_streaming_response_text(self) -> None:
-        stream = "\n".join(
-            [
-                'data: {"type":"response.output_text.delta","delta":"hello "}',
-                'data: {"type":"response.output_text.delta","delta":"world"}',
-                "data: [DONE]",
-            ]
+        stream = (
+            'data: {"type":"response.output_text.delta","delta":"hello "}\n'
+            'data: {"type":"response.output_text.delta","delta":"world"}\n'
+            "data: [DONE]"
         )
         self.assertEqual(_extract_gateway_text(stream, "text/event-stream"), "hello world")
 
     def test_extracts_streaming_prompt_cache_usage(self) -> None:
-        stream = "\n".join(
-            [
-                'data: {"type":"response.output_text.delta","delta":"hello"}',
-                'data: {"type":"response.completed","response":{"usage":{"input_tokens":2048,"output_tokens":12,"total_tokens":2060,"input_tokens_details":{"cached_tokens":1536}}}}',
-                "data: [DONE]",
-            ]
+        stream = (
+            'data: {"type":"response.output_text.delta","delta":"hello"}\n'
+            'data: {"type":"response.completed","response":{"usage":{"input_tokens":2048,"output_tokens":12,"total_tokens":2060,"input_tokens_details":{"cached_tokens":1536}}}}\n'
+            "data: [DONE]"
         )
         self.assertEqual(
             _extract_prompt_cache_usage(stream, "text/event-stream"),

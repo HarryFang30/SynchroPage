@@ -19,7 +19,6 @@ from __future__ import annotations
 import http.client
 import inspect
 import json
-import socket
 import time
 import urllib.error
 import urllib.request
@@ -214,7 +213,7 @@ def post_json_responses(
             code="rate_limited" if exc.code == 429 else "upstream_error",
             retry_after_seconds=_retry_after_seconds(exc.headers.get("Retry-After")),
         ) from exc
-    except (TimeoutError, socket.timeout) as exc:
+    except TimeoutError as exc:
         if not handle_timeout:
             raise
         raise _timeout_error(
@@ -262,7 +261,7 @@ def get_json(
             code="rate_limited" if exc.code == 429 else "upstream_error",
             retry_after_seconds=_retry_after_seconds(exc.headers.get("Retry-After")),
         ) from exc
-    except (TimeoutError, socket.timeout) as exc:
+    except TimeoutError as exc:
         raise HttpError(
             504,
             f"Model provider request timed out after {timeout_seconds:.0f}s",

@@ -23,29 +23,38 @@ from pdf_agent.auth import OpenAIOAuthApi, OpenAIOAuthError, OpenAIOAuthManager
 from pdf_agent.gateway import (
     redacted_gateway_error,
 )
+from pdf_agent.server.agent_gateway import AgentChatGateway
 from pdf_agent.server.constants import (
     DEFAULT_AGENT_MODEL,
     MAX_PDF_FILE_DATA_CHARS,
 )
+from pdf_agent.server.errors import HttpError
 from pdf_agent.server.json_utils import (
     json_bytes_utf8_safe as _json_bytes_utf8_safe,
+)
+from pdf_agent.server.json_utils import (
     repair_unicode_surrogates as _repair_unicode_surrogates,
 )
-from pdf_agent.server.errors import HttpError
 from pdf_agent.server.model_config import ModelConfigStore
-from pdf_agent.server.model_gateway import check_provider_model, fetch_provider_models, provider_endpoint_preview
+from pdf_agent.server.model_gateway import (
+    check_provider_model,
+    fetch_provider_models,
+    provider_endpoint_preview,
+)
 from pdf_agent.server.pdf_file_cache import (
     PdfFileCache,
+)
+from pdf_agent.server.pdf_file_cache import (
     raw_pdf_file_data as _raw_pdf_file_data,
 )
+from pdf_agent.server.provider_catalog import catalog_summary, provider_model_details
+from pdf_agent.server.teaching_gateway import TeachingGenerationGateway
 from pdf_agent.server.value_utils import (
     env_positive_int as _env_positive_int,
+)
+from pdf_agent.server.value_utils import (
     string_value as _string_value,
 )
-from pdf_agent.server.provider_catalog import catalog_summary, provider_model_details
-from pdf_agent.server.agent_gateway import AgentChatGateway
-from pdf_agent.server.teaching_gateway import TeachingGenerationGateway
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_WEB_ROOT = PROJECT_ROOT / "apps" / "web"

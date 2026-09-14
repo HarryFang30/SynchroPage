@@ -50,13 +50,22 @@ from pdf_agent.server.prompt_cache import (
 )
 from pdf_agent.server.value_utils import (
     clean_model as _clean_model,
+)
+from pdf_agent.server.value_utils import (
     int_value as _int_value,
+)
+from pdf_agent.server.value_utils import (
     page_type_value as _page_type_value,
+)
+from pdf_agent.server.value_utils import (
     string_list as _string_list,
+)
+from pdf_agent.server.value_utils import (
     string_value as _string_value,
+)
+from pdf_agent.server.value_utils import (
     truncate as _truncate,
 )
-
 
 # ---------------------------------------------------------------------------
 # Wrapper that closes over document_context (avoids dependency on web_app.py)
@@ -579,40 +588,34 @@ def _build_teaching_batch_generation_prompt(body: Mapping[str, Any], target_page
 
 def _agent_answer_mode_prompt(mode: str) -> str:
     if mode == "detailed":
-        return "\n".join(
-            [
-                "Mode: detailed",
-                "Reasoning effort: xhigh",
-                "Response style:",
-                "- Give a complete, page-grounded explanation with clear sections.",
-                "- Start with a short direct answer, then explain prerequisites, symbols, formulas, code, tables, and edge cases when relevant.",
-                "- Use the attached PDF and cacheable document context for cross-page continuity; cite original PDF page numbers when available.",
-                "- Include examples or derivations when they help study the material.",
-                "- End with a compact takeaway.",
-            ]
+        return (
+            "Mode: detailed\n"
+            "Reasoning effort: xhigh\n"
+            "Response style:\n"
+            "- Give a complete, page-grounded explanation with clear sections.\n"
+            "- Start with a short direct answer, then explain prerequisites, symbols, formulas, code, tables, and edge cases when relevant.\n"
+            "- Use the attached PDF and cacheable document context for cross-page continuity; cite original PDF page numbers when available.\n"
+            "- Include examples or derivations when they help study the material.\n"
+            "- End with a compact takeaway."
         )
     if mode == "guided":
-        return "\n".join(
-            [
-                "Mode: guided",
-                "Reasoning effort: high",
-                "Response style:",
-                "- Start with the answer, then teach the path to it step by step.",
-                "- Connect the selected material to the current PDF page and nearby document context.",
-                "- Surface common mistakes, key assumptions, or one check-your-understanding point when useful.",
-                "- Keep the structure clear and cite original PDF page numbers when available.",
-            ]
+        return (
+            "Mode: guided\n"
+            "Reasoning effort: high\n"
+            "Response style:\n"
+            "- Start with the answer, then teach the path to it step by step.\n"
+            "- Connect the selected material to the current PDF page and nearby document context.\n"
+            "- Surface common mistakes, key assumptions, or one check-your-understanding point when useful.\n"
+            "- Keep the structure clear and cite original PDF page numbers when available."
         )
-    return "\n".join(
-        [
-            "Mode: concise",
-            "Reasoning effort: medium",
-            "Response style:",
-            "- Answer directly in a compact form.",
-            "- Use only the necessary explanation, formulas, or code snippets.",
-            "- Prefer 3-6 bullets or short paragraphs unless the user explicitly asks for more detail.",
-            "- Cite original PDF page numbers when available.",
-        ]
+    return (
+        "Mode: concise\n"
+        "Reasoning effort: medium\n"
+        "Response style:\n"
+        "- Answer directly in a compact form.\n"
+        "- Use only the necessary explanation, formulas, or code snippets.\n"
+        "- Prefer 3-6 bullets or short paragraphs unless the user explicitly asks for more detail.\n"
+        "- Cite original PDF page numbers when available."
     )
 
 
@@ -622,7 +625,7 @@ def _build_user_request(input_text: str, selected_context: Any, pdf_context: Any
     if not selected_text:
         return cleaned_input
     normalized_input = cleaned_input.lstrip().lower()
-    if normalized_input.startswith("selected source:") or normalized_input.startswith("selected text:"):
+    if normalized_input.startswith(("selected source:", "selected text:")):
         return cleaned_input
     user_question = cleaned_input or "Please answer using the selected text."
     source_lines = _selected_source_lines(selected_context, pdf_context)
@@ -714,7 +717,10 @@ def _build_agent_interaction_prompt(
 
 
 def _agent_pdf_file_page_numbers(body: Mapping[str, Any]) -> list[int] | None:
-    from pdf_agent.server.constants import PDF_CONTEXT_EDGE_PAGE_COUNT, PDF_CONTEXT_FULL_PAGE_LIMIT
+    from pdf_agent.server.constants import (
+        PDF_CONTEXT_EDGE_PAGE_COUNT,
+        PDF_CONTEXT_FULL_PAGE_LIMIT,
+    )
     from pdf_agent.server.document_context import _pdf_included_page_numbers
 
     pdf_context = body.get("pdfContext")

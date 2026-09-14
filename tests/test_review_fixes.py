@@ -57,9 +57,11 @@ class RetryClassificationTest(unittest.TestCase):
             raise HttpError(503, "Generation queue is full", code="queue_timeout", retry_after_seconds=10.0)
 
         async def run() -> None:
-            with mock.patch.object(gateway, "_post_once", side_effect=fake_post_once):
-                with self.assertRaises(HttpError) as ctx:
-                    await gateway._post_with_retries("https://example.test/v1/responses", {}, {}, context=_RequestContext(60))
+            with (
+                mock.patch.object(gateway, "_post_once", side_effect=fake_post_once),
+                self.assertRaises(HttpError) as ctx,
+            ):
+                await gateway._post_with_retries("https://example.test/v1/responses", {}, {}, context=_RequestContext(60))
             self.assertEqual(ctx.exception.code, "queue_timeout")
 
         try:
