@@ -356,7 +356,7 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 
 1. 用上传按钮导入 PDF。
 2. 如果已有生成结果，用 JSON 按钮导入 `synchropage.lecture.v1` 文件。
-3. 通过左侧页列表或 PDF pane toolbar 切换页面。
+3. 通过左侧页列表或 PDF pane toolbar 切换页面。打开 / 关闭侧栏或缩放窗口时，PDF 视图会保持在同一页的同一位置。
 4. 中间区域查看原 PDF 页面；当前实现优先走 PDF.js canvas + transparent text layer，失败时回退原生 PDF 预览。
 5. 讲解区在「讲解 / 结构 / JSON」之间切换。
 6. 在 PDF 页面真实可见文字上拖选文本，浮动工具条可「添加到对话 / 解释选中内容 / 总结选中内容」。
@@ -371,13 +371,19 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 - **笔记**：「写笔记」= 高亮 + 立刻打开一张笔记卡；「添加本页笔记」用于不针对某段文字的整页笔记。笔记卡直接展开在对应页面的正下方，像在讲义页边写字一样：不折叠、随时可编辑、边写边保存（600 ms 防抖），`Esc` 或 `⌘/Ctrl+Enter` 结束编辑，删除需要点两次确认。
 - **导航**：点页面上的高亮会定位并聚焦对应笔记；讲解区的「笔记」标签页按页列出本文档全部高亮与笔记，点任一条跳回原页，右上角可导出为 Markdown。
 - **保存**：笔记存在 IndexedDB 的 `annotations` 表（schema v4），随文档删除而删除，随工作区一起导出 / 导入。
+- **喂给助手**：提问和出题时会自动附上你在这份 PDF 上写的笔记（当前页前后两页的优先，最多 12 条，长 PDF 截断时减半；只划线没写字的高亮只带当前页附近的）。助手被要求先对照原文指出笔记里写错、说反或漏条件的地方，再接着你的理解往下讲；出题时把写错的地方做成干扰项、把只划线的地方优先出题。每张笔记卡和「笔记」标签页的每一行都有「让 AI 检查」，会发送一条固定结构的检查请求（判定 → 对照 → 改写 → 一问）。设置 → 助手 里的「把我的笔记发给助手」可以关闭整个通道。出题时只参考当前页前后两页的笔记（远处的笔记不会把题目带偏）；「让 AI 检查」在助手还在作答时会排队等它答完再发，不会打断正在生成的回答。
 
 ### 讲解的结构
 
-逐页讲解由 `gpt-6-astra` 生成，目标是「补讲解」而不是复述幻灯片。每页讲解固定使用这些小节（按页面类型取舍）：
-`这页在讲什么` / `容易卡住的地方`（误区 → 化解）/ `公式怎么读` / `图表怎么看` / `解题入口` / `自测清单` / `考试怎么考`（题型 / 陷阱 / 评分点）/ `前后衔接`。
-封面、目录、空白页只写一两行。页面 JSON 里同时带有 `stuck_points` 和 `exam_angles` 两个数组，「结构」标签页会展示，测验出题会把它们作为干扰项素材。
+逐页讲解写给正在看这一页的你，用第二人称、先具体后抽象：先用大白话说这页在讲什么，再把页面用到却没讲清的符号解开，用页面自己的符号或图举一个例子，给出一句能背下来的结论。之后的小节只在有内容时才出现：真会犯的错（可以为零，不硬凑）、考试怎么考（只在这页有真正会考的内容时写，带一个用本页素材写的示例题干）、自测一问（答案默认折叠）、和前后页的关系（只在有前后页信息时写，关于这页在课程里的位置只允许写在这里）。篇幅按这页需要多少解释来定，不按字数配额。小节标题固定为：
+`一句话` / `符号与术语` / `举个例子` / `记住这一条` / `容易错的地方` / `公式怎么读`（公式页）/ `图怎么看`（图页、表页）/ `解题入口`（习题页）/ `自测清单`（总结页）/ `考试怎么考` / `自测一问` / `和前后页的关系`。
+封面、目录、空白页只写一两行。页面 JSON 里同时带有 `stuck_points` 和 `exam_angles` 两个数组（对应小节省略时为空），「结构」标签页会展示，测验出题会把它们作为干扰项素材。讲解语言跟随界面语言（设置里也可以单独指定）。
+前端按这些标题把讲解拆成小节渲染（`apps/web/src/lib/notes/noteSections.ts`）：标题降级为小标签，「一句话」是浅色卡片，「记住这一条」带高亮竖线，「自测一问」的答案折叠在「看答案」里。
 Prompt 定义在 `src/pdf_agent/server/constants.py` 与 `payload_builders.py`，中文版契约见 [config/prompts/course_agent.prompt.yaml](config/prompts/course_agent.prompt.yaml)。
+
+### 字体
+
+软件里所有英文（界面、讲解、助手回复、设置）都使用 Anthropic Sans，中文仍走 PingFang / Noto Sans SC；代码和路径保持等宽字体，公式由 KaTeX 自带字体排版。字体文件不在仓库里（它是 Anthropic 的专有字体，`apps/web/public/fonts/` 已加入 .gitignore）：装了 Claude 桌面版的机器上运行一次 `./scripts/install-local-fonts.sh`，脚本会把字体从 Claude.app 复制到该目录；没有这些文件时自动回退到系统字体，不影响使用。
 
 ### 长 PDF 一键生成的稳定性
 
@@ -512,6 +518,13 @@ npm --prefix apps/web run build
 ```bash
 npm --prefix apps/web run check
 npm --prefix apps/web run build
+```
+
+端到端测试（Playwright，会自动起 Vite；如果 5173 被别的检出占用，用 `PLAYWRIGHT_PORT` 指定端口）：
+
+```bash
+npm --prefix apps/web run test:e2e
+PLAYWRIGHT_PORT=5175 npm --prefix apps/web run test:e2e
 ```
 
 `npm --prefix apps/web run build` 可能出现 Vite chunk-size warning，因为 assistant-ui、pdf.js 和 markdown renderer 被打进主 bundle。这个 warning 不影响本地运行。

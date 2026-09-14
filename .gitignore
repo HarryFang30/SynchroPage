@@ -24,3 +24,6 @@ runs/
 
 # Playwright output when run from the repo root
 test-results/
+
+# Proprietary fonts copied in locally by scripts/install-local-fonts.sh; never committed
+apps/web/public/fonts/
