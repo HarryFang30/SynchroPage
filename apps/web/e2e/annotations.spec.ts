@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { mockApi, resetStorage, uploadPdfFromRail } from "./helpers";
+import { activateAgent, mockApi, resetStorage, uploadPdfFromRail } from "./helpers";
 
 /** Select the text-layer span containing `text` on the given PDF page. */
 async function selectPdfText(page: Page, text: string) {
@@ -116,5 +116,117 @@ test.describe("PDF highlights and notes", () => {
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     await expect(page.locator(".page-note-input:focus")).toHaveCount(1);
     await expect(page.locator(".page-note.active")).toHaveCount(1);
+  });
+});
+
+test.describe("Notes as assistant context", () => {
+  type CapturedPayload = {
+    input?: string;
+    context?: Array<{ type?: string; page_no?: number }>;
+    selectedContext?: { pdfPageNumber?: number } | null;
+  };
+
+  async function captureChat(page: Page) {
+    const captured: { last: CapturedPayload | null; all: CapturedPayload[] } = { last: null, all: [] };
+    await page.unroute("**/api/**");
+    await page.route("**/api/**", async (route) => {
+      if (route.request().url().includes("/api/agent/chat")) {
+        const payload = JSON.parse(route.request().postData() || "{}") as CapturedPayload;
+        captured.last = payload;
+        captured.all.push(payload);
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ content: "好的，我看到了你的笔记。" }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+    return captured;
+  }
+
+  async function writeNoteOnPageOne(page: Page, text: string) {
+    await selectPdfText(page, "Page One");
+    await page.locator(".selection-toolbar").getByRole("button", { name: /^写笔记$|^Add note$/ }).click();
+    const input = page.locator(".page-note-input:focus");
+    await expect(input).toHaveCount(1);
+    await input.fill(text);
+    await page.keyboard.press("Escape");
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await resetStorage(page);
+    await mockApi(page);
+    await uploadPdfFromRail(page);
+    await expect(page.locator(".pdf-page-shell").first().locator("canvas")).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("written notes travel with questions and quizzes, with a provenance item", async ({ page }) => {
+    await writeNoteOnPageOne(page, "电场是标量");
+    const captured = await captureChat(page);
+    const composer = await activateAgent(page);
+    await composer.fill("这一页在讲什么？");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => captured.last?.input || "").toContain("我的笔记");
+    expect(captured.last?.input).toContain("电场是标量");
+    expect(captured.last?.input).toContain("p.1｜");
+    expect(captured.last?.input).toContain("必须当场点出来");
+    const provenance = (captured.last?.context || []).find((item) => item.type === "learner_note");
+    expect(provenance?.page_no).toBe(1);
+
+    // The challenge panel announces the targeting and the coach prompt carries the note.
+    await expect(page.locator(".quiz-note-note")).toContainText(/1 条笔记|1 note/);
+    await page.locator(".challenge-start").click();
+    await expect.poll(() => captured.all.length).toBe(2);
+    expect(captured.last?.input).toContain("我自己写的笔记");
+    expect(captured.last?.input).toContain("电场是标量");
+    expect(captured.last?.input).toContain("做成一个干扰项");
+  });
+
+  test("the note-check action sends a verdict prompt with the page as selected source", async ({ page }) => {
+    await writeNoteOnPageOne(page, "电场是标量");
+    const captured = await captureChat(page);
+    await page.locator(".pdf-page-notes[data-page-number='1'] .page-note-ask").first().click();
+    await expect(page.locator(".user-message")).toContainText("请检查我对这条笔记的理解");
+    await expect.poll(() => captured.last?.selectedContext?.pdfPageNumber ?? null).toBe(1);
+    // The backend re-wraps inputs that do not open with the selected-source header.
+    expect(captured.last?.input?.startsWith("Selected source:")).toBe(true);
+    expect(captured.last?.input).toContain("电场是标量");
+    expect(captured.last?.input).toContain("Page One");
+  });
+
+  test("an empty page note cannot be checked until something is written", async ({ page }) => {
+    const pageOneNotes = page.locator(".pdf-page-notes[data-page-number='1']");
+    await pageOneNotes.locator(".pdf-page-add-note").click();
+    const ask = pageOneNotes.locator(".page-note-ask");
+    await expect(ask).toBeDisabled();
+    await page.locator(".page-note-input:focus").fill("先看定义再看例子");
+    await expect(ask).toBeEnabled();
+  });
+
+  test("with no notes the quiz prompt says so, and the opt-out removes the digest", async ({ page }) => {
+    const captured = await captureChat(page);
+    await activateAgent(page);
+    await expect(page.locator(".quiz-note-note")).toHaveCount(0);
+    await page.locator(".challenge-start").click();
+    await expect.poll(() => captured.last?.input || "").toContain("这份文档我还没写下任何笔记");
+
+    // Opt out through Settings → Assistant (the persisted settings record wins
+    // over a raw localStorage edit on restore, so this is the real user path).
+    await page.locator(".rail-settings-button").click();
+    await page.locator(".settings-nav-item").filter({ hasText: /^助手$|^Assistant$/ }).click();
+    const shareRow = page.locator(".settings-row").filter({ hasText: /把我的笔记发给助手|Share my notes with the assistant/ });
+    await expect(shareRow.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    await shareRow.getByRole("switch").click();
+    await expect(shareRow.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".settings-dialog")).toHaveCount(0);
+    await writeNoteOnPageOne(page, "电场是标量");
+    const optedOut = await captureChat(page);
+    const composer = await activateAgent(page);
+    await composer.fill("这一页在讲什么？");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => optedOut.all.length).toBe(1);
+    expect(optedOut.last?.input).toContain("这一页在讲什么");
+    expect(optedOut.last?.input).not.toContain("我的笔记");
+    expect((optedOut.last?.context || []).some((item) => item.type === "learner_note")).toBe(false);
+    await expect(page.locator(".pdf-page-notes[data-page-number='1'] .page-note-ask")).toHaveCount(1);
   });
 });

@@ -84,6 +84,8 @@ export type UiPreferences = {
   compactMode: boolean;
   showSourcePills: boolean;
   pageAwareSuggestions: boolean;
+  /** Attach the learner's own highlights and notes to assistant requests. */
+  shareNotesWithAssistant: boolean;
   pdfContextFullPageLimit: number;
   pdfContextEdgePageCount: number;
   scrollbarStyle: ScrollbarStyle;
@@ -106,6 +108,7 @@ export const defaultUiPreferences: UiPreferences = {
   compactMode: false,
   showSourcePills: true,
   pageAwareSuggestions: true,
+  shareNotesWithAssistant: true,
   pdfContextFullPageLimit: 50,
   pdfContextEdgePageCount: 10,
   scrollbarStyle: "thin",
@@ -213,6 +216,7 @@ export function loadUiPreferences() {
       modelReasoningEffort: normalizeModelReasoningEffort(merged.modelReasoningEffort),
       agentAnswerMode: normalizeAgentAnswerMode(merged.agentAnswerMode),
       pdfViewMode,
+      shareNotesWithAssistant: merged.shareNotesWithAssistant !== false,
       pdfContextFullPageLimit: clampNumber(merged.pdfContextFullPageLimit, defaultUiPreferences.pdfContextFullPageLimit, 1, 500),
       pdfContextEdgePageCount: clampNumber(merged.pdfContextEdgePageCount, defaultUiPreferences.pdfContextEdgePageCount, 1, 100),
     };

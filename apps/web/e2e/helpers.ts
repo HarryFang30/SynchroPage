@@ -101,7 +101,8 @@ export async function uploadPdfFromRail(page: Page, fileName = "two-page.pdf") {
   const pdfInput = page.locator('.rail-action-menu input[type="file"][accept="application/pdf"]');
   await expect(pdfInput).toHaveCount(1);
   await pdfInput.setInputFiles(fixturePath(fileName));
-  await expect(page.locator(".document-item").filter({ hasText: "two-page" })).toBeVisible({ timeout: 10_000 });
+  const documentTitle = fileName.replace(/\.pdf$/i, "");
+  await expect(page.locator(".document-item").filter({ hasText: documentTitle })).toBeVisible({ timeout: 10_000 });
   await expect(page.locator(".pdf-pane")).toContainText(/PDF|Source|来源/i, { timeout: 10_000 });
 }
 

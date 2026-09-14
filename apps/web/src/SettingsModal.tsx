@@ -270,6 +270,12 @@ export function SettingsModal(props: SettingsModalProps) {
                       onCheckedChange={(checked) => props.onPreferenceChange("pageAwareSuggestions", checked)}
                     />
                   </SettingsRow>
+                  <SettingsRow label={copy.settings.agent.shareNotesLabel} description={copy.settings.agent.shareNotesDescription}>
+                    <SettingsSwitch
+                      checked={props.preferences.shareNotesWithAssistant}
+                      onCheckedChange={(checked) => props.onPreferenceChange("shareNotesWithAssistant", checked)}
+                    />
+                  </SettingsRow>
                   <SettingsRow label={copy.settings.agent.explanationLanguageLabel} description={copy.settings.agent.explanationLanguageDescription}>
                     <SettingsSelect
                       value={props.preferences.explanationLanguage}

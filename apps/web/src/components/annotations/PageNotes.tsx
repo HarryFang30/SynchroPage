@@ -1,4 +1,4 @@
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Sparkles, Trash2 } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -18,6 +18,8 @@ export type PageNotesHandlers = {
   onDelete: (id: string) => void;
   onAddPageNote: (pageNo: number) => void;
   onFocusHandled: (id: string) => void;
+  /** "让 AI 检查": send this note to the assistant for a verdict. */
+  onCheckNote: (annotation: AnnotationRecord) => void;
 };
 
 /**
@@ -176,6 +178,23 @@ function NoteCard({
         <time className="page-note-time" dateTime={new Date(annotation.updatedAt).toISOString()}>
           {formatAnnotationTime(annotation.updatedAt, language)}
         </time>
+        <button
+          type="button"
+          className="page-note-ask"
+          disabled={!annotation.note.trim() && !annotation.quote.trim()}
+          onClick={() => handlers.onCheckNote(annotation)}
+          aria-label={copy.annotations.checkUnderstanding}
+          title={
+                  annotation.note.trim()
+                    ? copy.annotations.checkUnderstandingHint
+                    : annotation.quote.trim()
+                      ? copy.annotations.checkHighlightHint
+                      : copy.annotations.checkUnderstandingEmpty
+                }
+        >
+          <Sparkles aria-hidden="true" />
+          <span>{copy.annotations.checkUnderstanding}</span>
+        </button>
         <button
           type="button"
           className={`page-note-delete ${confirmingDelete ? "confirming" : ""}`}

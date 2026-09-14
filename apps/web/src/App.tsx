@@ -68,6 +68,7 @@ import {
 } from "./hooks/usePageSelection";
 import { useDocumentAnnotations } from "./hooks/useDocumentAnnotations";
 import { annotationHitTest, normalizeSelectionRects } from "./lib/annotations/annotationModel";
+import { buildNoteCheckPrompt, selectLearnerNotes } from "./lib/annotations/annotationContext";
 import type { AnnotationRecord } from "./lib/persistence";
 import { getAppCopy, type AppCopy } from "./i18n";
 import {
@@ -429,6 +430,12 @@ export default function App() {
   const [persistedMessages, setPersistedMessages] = useState<ThreadMessageLike[]>([]);
   const [agentRuntimeKey, setAgentRuntimeKey] = useState("thread:initial");
   const lastSelectionRef = useRef<SelectedContext | null>(null);
+  // getSnapshot() runs once per assistant request, so it reads the latest
+  // notes and page from refs: the hook that owns them runs later in this
+  // component, and routing the page number through deps would recreate the
+  // chat adapter on every scroll tick.
+  const annotationsRef = useRef<AnnotationRecord[]>([]);
+  const currentPageNoRef = useRef(1);
   const currentPdfObjectUrlRef = useRef("");
   const generationAbortControllerRef = useRef<AbortController | null>(null);
   const appShellRef = useRef<HTMLDivElement>(null);
@@ -446,6 +453,9 @@ export default function App() {
 
   const pdfNavigationPageCount = Math.max(pdfUrl ? pdfPageCount || pack.document.page_count || pack.pages.length : pack.pages.length, 1);
   const currentPdfPageNo = Math.min(Math.max(currentPageNo, 1), pdfNavigationPageCount);
+  useEffect(() => {
+    currentPageNoRef.current = currentPdfPageNo;
+  }, [currentPdfPageNo]);
   const teachingOutputLanguage = resolveTeachingOutputLanguage(uiPreferences);
   const stopNotesGeneration = useCallback(() => {
     const message = copy.errors.generationStopped;
@@ -719,6 +729,13 @@ export default function App() {
       attachments,
       selectedContext,
       pdfContext: pdfUrl ? pdfTextContext : buildPdfContextFromPack(pack, uiPreferences),
+      learnerNotes: uiPreferences.shareNotesWithAssistant
+        ? selectLearnerNotes(annotationsRef.current, {
+            documentId: pack.document.id,
+            currentPage: currentPageNoRef.current,
+            compact: Boolean(pdfUrl && pdfTextContext?.truncated),
+          })
+        : null,
       answerMode: uiPreferences.agentAnswerMode,
       reasoningEffort: agentAnswerModeReasoningEffort(uiPreferences.agentAnswerMode),
       assistantModel: modelApiConfig.defaults.assistant,
@@ -1847,6 +1864,51 @@ export default function App() {
     persist: persistOperation,
     onError: reportAnnotationError,
   });
+  useEffect(() => {
+    annotationsRef.current = annotations;
+  }, [annotations]);
+  const learnerNoteCount = uiPreferences.shareNotesWithAssistant
+    ? (annotationsByPage.get(currentPdfPageNo) || []).filter((annotation) => annotation.note.trim()).length
+    : 0;
+
+  // A quick prompt that never reached the thread (the panel was closed before
+  // the assistant runtime mounted) must not fire later when the panel is
+  // reopened for something else.
+  useEffect(() => {
+    if (!panels.agent) setPendingSelectionPrompt(null);
+  }, [panels.agent]);
+
+  const askAboutAnnotation = useCallback((annotation: AnnotationRecord) => {
+    const pdfPage = pdfTextContext?.pages.find((item) => item.page_no === annotation.pageNumber) || null;
+    const context: SelectedContext = {
+      id: createId("note_check"),
+      text: annotation.quote.trim() || annotation.note.trim(),
+      sourceType: "pdf-page",
+      documentTitle: pack.document.title,
+      pageNumber: annotation.pageNumber,
+      pdfPageNumber: annotation.pageNumber,
+      sectionTitle: copy.annotations.noteContextLabel(annotation.pageNumber),
+      pdfSource: pdfPage
+        ? { pageNumber: pdfPage.page_no, title: pdfPage.title, text: pdfPage.text_md }
+        : undefined,
+      learnerNote: !annotation.quote.trim(),
+      createdAt: Date.now(),
+    };
+    setSelectedContext(context);
+    setPanels((current) => ({ ...current, agent: true }));
+    setPendingSelectionPrompt({
+      id: createId("quick_prompt"),
+      prompt: buildNoteCheckPrompt({
+        pageNumber: annotation.pageNumber,
+        quote: annotation.quote,
+        note: annotation.note,
+        language: uiPreferences.language,
+      }),
+      context,
+    });
+    setActiveAnnotationId(annotation.id);
+    setJobStatus(copy.status.checkingNote(annotation.pageNumber));
+  }, [copy, pack.document.title, pdfTextContext, setActiveAnnotationId, uiPreferences.language]);
 
   const createAnnotationFromSelection = useCallback(async (context: SelectedContext, withNote: boolean) => {
     if (!documentId) {
@@ -1885,8 +1947,10 @@ export default function App() {
       });
     },
     onFocusHandled: consumeAnnotationFocusRequest,
+    onCheckNote: askAboutAnnotation,
   }), [
     addAnnotation,
+    askAboutAnnotation,
     consumeAnnotationFocusRequest,
     copy.annotations,
     removeAnnotation,
@@ -2684,6 +2748,7 @@ export default function App() {
                     copy={copy}
                     language={uiPreferences.language}
                     onJump={jumpToAnnotation}
+                    onCheckNote={askAboutAnnotation}
                     onExported={(count) => setJobStatus(copy.annotations.exported(count))}
                   />
                 )}
@@ -2712,6 +2777,7 @@ export default function App() {
                 }}
                 composerInputRef={composerInputRef}
                 getSnapshot={getSnapshot}
+                learnerNoteCount={learnerNoteCount}
                 getDocumentFile={getDocumentFile}
                 getPack={getPack}
                 getPage={getPage}

@@ -69,6 +69,8 @@ export type AppCopy = {
     agent: {
       sourcePillsLabel: string;
       sourcePillsDescription: string;
+      shareNotesLabel: string;
+      shareNotesDescription: string;
       pageSuggestionsLabel: string;
       pageSuggestionsDescription: string;
       explanationLanguageLabel: string;
@@ -240,6 +242,7 @@ export type AppCopy = {
     generationInvalidPageRange: (total: number) => string;
     pdfTextExtracting: (ready: number, total: number) => string;
     pdfTextExtractionFallback: string;
+    checkingNote: (pageNo: number) => string;
   };
   errors: {
     accountNotFound: string;
@@ -373,6 +376,7 @@ export type AppCopy = {
   };
   notes: {
     title: string;
+    showAnswer: string;
     tabNotes: string;
     tabStructure: string;
     tabJson: string;
@@ -409,6 +413,14 @@ export type AppCopy = {
     markdownTitle: (title: string) => string;
     emptyNote: string;
     highlightLayerAria: (pageNo: number) => string;
+    checkUnderstanding: string;
+    checkUnderstandingHint: string;
+    checkHighlightHint: string;
+    checkUnderstandingEmpty: string;
+    noteContextLabel: (pageNo: number) => string;
+    contextTitle: (count: number) => string;
+    contextSource: string;
+    contextInventory: (count: number, pages: string) => string;
   };
   agent: {
     addImage: string;
@@ -503,6 +515,8 @@ export type AppCopy = {
     quizDiagnoseMessage: (log: string) => string;
     quizAnswerLogLine: (index: number, stem: string, chosen: string, correct: string) => string;
     quizWeakPointNote: (count: number) => string;
+    quizNoteNote: (count: number) => string;
+    contextLearnerNote: (pageNo: number) => string;
     quickExplainPrompt: (label: string) => string;
     quickSummarizePrompt: (label: string) => string;
     continuePrompt: string;
@@ -633,6 +647,8 @@ const zhCN: AppCopy = {
     agent: {
       sourcePillsLabel: "显示来源 pill",
       sourcePillsDescription: "在对话上方显示紧凑来源上下文。",
+      shareNotesLabel: "把我的笔记发给助手",
+      shareNotesDescription: "提问和出题时附上你在这份 PDF 上写的高亮和批注，助手会顺带指出其中写错的地方。关闭后笔记只留在本地。",
       pageSuggestionsLabel: "页面感知建议",
       pageSuggestionsDescription: "根据当前页标题和概念生成空状态提示。",
       explanationLanguageLabel: "讲解输出语言",
@@ -804,6 +820,7 @@ const zhCN: AppCopy = {
     generationInvalidPageRange: (total) => `页码范围无效，请输入 1-${total} 之间的页码，例如 1-3, 8`,
     pdfTextExtracting: (ready, total) => `正在读取 PDF 文本层，已就绪 ${ready}/${total} 页`,
     pdfTextExtractionFallback: "PDF 文本层读取较慢，先使用已就绪内容继续生成",
+    checkingNote: (pageNo) => `正在检查你在 p.${pageNo} 的笔记`,
   },
   errors: {
     accountNotFound: "请先连接 OpenAI OAuth 后再发送。",
@@ -937,6 +954,7 @@ const zhCN: AppCopy = {
   },
   notes: {
     title: "讲解",
+    showAnswer: "看答案",
     tabNotes: "讲解",
     tabStructure: "结构",
     tabJson: "JSON",
@@ -973,6 +991,14 @@ const zhCN: AppCopy = {
     markdownTitle: (title) => `${title} · 笔记`,
     emptyNote: "（尚未写内容）",
     highlightLayerAria: (pageNo) => `p.${pageNo} 的高亮`,
+    checkUnderstanding: "让 AI 检查",
+    checkUnderstandingHint: "让助手对照原文检查这条笔记",
+    checkHighlightHint: "让助手说说这一句为什么值得划、会怎么考",
+    checkUnderstandingEmpty: "先写下你的理解，再让 AI 检查",
+    noteContextLabel: (pageNo) => `我在 p.${pageNo} 的笔记`,
+    contextTitle: (count) => `我的笔记 · ${count} 条`,
+    contextSource: "学习者笔记",
+    contextInventory: (count, pages) => `已随本次提问附上我在 ${pages} 写的 ${count} 条笔记。`,
   },
   agent: {
     addImage: "加入图片",
@@ -1073,6 +1099,8 @@ const zhCN: AppCopy = {
     quizDiagnoseMessage: (log) => `这是我刚做完的一轮测验记录，请用 2-3 句指出我反复出错的模式，再说明考试里我会在哪一步丢分，最后给我 2 个具体的下一步：\n\n${log}`,
     quizAnswerLogLine: (index, stem, chosen, correct) => `${index}. ${stem}｜我选了 ${chosen}，正确答案是 ${correct}`,
     quizWeakPointNote: (count) => `有 ${count} 个待复测薄弱点`,
+    quizNoteNote: (count) => `会针对你在这一页写的 ${count} 条笔记出题`,
+    contextLearnerNote: (pageNo) => `我的笔记 · p.${pageNo}`,
     quickExplainPrompt: (label) => `请解释这段选中内容，优先基于该来源回答：${label}`,
     quickSummarizePrompt: (label) => `请总结这段选中内容，提炼关键概念和可能的公式关系：${label}`,
     continuePrompt: "请根据上下文继续。",
@@ -1203,6 +1231,8 @@ const enUS: AppCopy = {
     agent: {
       sourcePillsLabel: "Show source pills",
       sourcePillsDescription: "Show compact source context above the conversation.",
+      shareNotesLabel: "Share my notes with the assistant",
+      shareNotesDescription: "Attach the highlights and notes you wrote on this PDF to questions and quizzes, so the assistant can point out mistakes in them. When off, notes stay on this device only.",
       pageSuggestionsLabel: "Page-aware suggestions",
       pageSuggestionsDescription: "Generate empty-state prompts from the current page title and concepts.",
       explanationLanguageLabel: "Notes output language",
@@ -1374,6 +1404,7 @@ const enUS: AppCopy = {
     generationInvalidPageRange: (total) => `Invalid page range. Enter pages from 1-${total}, for example 1-3, 8`,
     pdfTextExtracting: (ready, total) => `Reading PDF text layer: ${ready}/${total} pages ready`,
     pdfTextExtractionFallback: "PDF text extraction is slow, continuing with the text that is ready",
+    checkingNote: (pageNo) => `Checking your note on p.${pageNo}`,
   },
   errors: {
     accountNotFound: "Connect OpenAI OAuth before sending.",
@@ -1507,6 +1538,7 @@ const enUS: AppCopy = {
   },
   notes: {
     title: "Notes",
+    showAnswer: "Show answer",
     tabNotes: "Notes",
     tabStructure: "Structure",
     tabJson: "JSON",
@@ -1543,6 +1575,14 @@ const enUS: AppCopy = {
     markdownTitle: (title) => `${title} · Notes`,
     emptyNote: "(nothing written yet)",
     highlightLayerAria: (pageNo) => `Highlights on p.${pageNo}`,
+    checkUnderstanding: "Check with AI",
+    checkUnderstandingHint: "Ask the assistant to check this note against the page",
+    checkHighlightHint: "Ask the assistant why this line matters and how it is tested",
+    checkUnderstandingEmpty: "Write your understanding first, then ask AI to check it",
+    noteContextLabel: (pageNo) => `My note on p.${pageNo}`,
+    contextTitle: (count) => `My notes · ${count}`,
+    contextSource: "Learner notes",
+    contextInventory: (count, pages) => `Sent ${count} of my own notes (${pages}) with this question.`,
   },
   agent: {
     addImage: "Add image",
@@ -1643,6 +1683,8 @@ const enUS: AppCopy = {
     quizDiagnoseMessage: (log) => `Here is my answer log from the quiz I just finished. In 2-3 sentences name the pattern behind my repeated mistakes, then say where I would lose marks in an exam, then give me 2 concrete next steps:\n\n${log}`,
     quizAnswerLogLine: (index, stem, chosen, correct) => `${index}. ${stem} | I chose ${chosen}, the answer was ${correct}`,
     quizWeakPointNote: (count) => `${count} weak point${count === 1 ? "" : "s"} due for retesting`,
+    quizNoteNote: (count) => `Questions will target the ${count} note${count === 1 ? "" : "s"} you wrote on this page`,
+    contextLearnerNote: (pageNo) => `My note · p.${pageNo}`,
     quickExplainPrompt: (label) => `Please explain this selected content. Prioritize answering from this source: ${label}`,
     quickSummarizePrompt: (label) => `Please summarize this selected content, extracting key concepts and possible formula relationships: ${label}`,
     continuePrompt: "Please continue based on the context.",

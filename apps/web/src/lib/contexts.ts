@@ -25,6 +25,8 @@ export type AssistantPrimitiveGroup = Record<string, ComponentType<any>>;
 
 export type AssistantThreadRuntime = {
   append: (message: unknown) => void;
+  getState?: () => { isRunning?: boolean };
+  subscribe?: (callback: () => void) => () => void;
   composer: {
     reset: () => void | Promise<void>;
     setQuote: (quote?: { text: string; messageId: string }) => void;
