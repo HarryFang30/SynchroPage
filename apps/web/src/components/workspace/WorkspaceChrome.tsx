@@ -2,10 +2,13 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import {
   lazy,
   Suspense,
+  useMemo,
   type ChangeEvent,
   type ReactNode,
 } from "react";
 import type { AppCopy } from "../../i18n";
+import { useAppCopy } from "../../lib/contexts";
+import { splitNoteSections } from "../../lib/notes/noteSections";
 import type { PageData } from "../../lib/generation/teachingGeneration";
 import type { GenerationPageStatus } from "../../lib/generation/generationRuntime";
 import {
@@ -137,9 +140,25 @@ export function GenerationDetailsPopover({
 }
 
 export function MarkdownBlock({ markdown, concepts }: { markdown: string; concepts: string[] }) {
+  const copy = useAppCopy();
+  const sections = useMemo(() => splitNoteSections(markdown), [markdown]);
   return (
     <article className="note-markdown">
-      <ReaderMarkdown className="note-markdown-content markdown-body" text={markdown} />
+      {sections.map((section, index) => (
+        <section
+          key={`${index}-${section.heading}`}
+          className={`note-section${section.key ? ` note-section-${section.key}` : ""}`}
+        >
+          {section.heading && <h2 className="note-section-title">{section.heading}</h2>}
+          {section.body && <ReaderMarkdown className="note-markdown-content markdown-body" text={section.body} />}
+          {section.answer !== undefined && (
+            <details className="note-answer">
+              <summary>{copy.notes.showAnswer}</summary>
+              <ReaderMarkdown className="note-markdown-content markdown-body" text={section.answer} />
+            </details>
+          )}
+        </section>
+      ))}
       <div className="chips">{concepts.map((item) => <ReaderMarkdown className="chip" inline key={item} text={item} />)}</div>
     </article>
   );

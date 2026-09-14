@@ -352,40 +352,42 @@ def _teaching_prompt_rules(body: Mapping[str, Any], *, batch: bool) -> list[str]
         ]
     output_language_code, _output_language_label = _teaching_output_language(body)
     headings = _teaching_section_headings(output_language_code)
-    locate, stuck, exam, bridge = (
-        headings["locate"].removeprefix("## "),
-        headings["stuck"].removeprefix("## "),
-        headings["exam"].removeprefix("## "),
-        headings["bridge"].removeprefix("## "),
+    lead, symbols, keep, stuck, exam, check, bridge = (
+        headings[key].removeprefix("## ")
+        for key in ("lead", "symbols", "keep", "stuck", "exam", "check", "bridge")
     )
     exam_labels = (
-        "题型 / 陷阱 / 评分点"
+        "题型 / 示例题干 / 失分点"
         if output_language_code == "zh-CN"
-        else "Question forms / Traps / What the grader looks for"
+        else "Question form / Sample stem / Where marks go"
     )
+    answer_prefix = "答案：" if output_language_code == "zh-CN" else "Answer:"
     return [
         "Rules:",
         "- Return JSON only, no Markdown fences or prose outside JSON.",
         r"- Escape LaTeX backslashes in JSON strings: write \\frac, \\to, and \\cdots, not \frac, \to, or \cdots.",
         page_rule,
         "- Always return source.page_type: echo the page_type given for the page, or your own classification when it was unknown. Do not copy source text; omit every other source field except source.pdf_page_ref.",
-        "- Do not paraphrase, summarize, or translate the page. The student reads the page next to your notes, so every sentence must add something the page does not state.",
-        "- Use exactly the section headings of the skeleton above, in that order, omitting the sections that do not apply to this page type; do not invent other top-level headings.",
-        f"- {locate}: one line naming the claim, skill, or definition this page establishes and why it appears here in the course arc.",
-        f"- {stuck}: 1-3 bullets, each shaped as **misconception or breakpoint** followed by an arrow and the fix. Resolve with exactly one device: an intuition reconnected to the formal statement, a concrete instance using this page's own symbols or numbers, or a contrast with the nearest confusable concept.",
-        f"- {exam}: one bullet per question form, and label the three parts with exactly the labels used in the skeleton ({exam_labels}), each specific to this page (which step, which symbol, which figure element). Derive them from the content type of the page and never claim knowledge of a specific real exam or past paper.",
-        f"- {bridge}: write it only when neighbour page titles or document context are given; cite pages as p.N and never invent content for pages you were not shown.",
+        "- Write to the reader in the second person. Explain the page in plainer words than the page uses, decode its notation, and give a concrete instance; do not copy the page's own sentences and never write about students in the third person or about what the page establishes.",
+        f"- {lead}: 1-2 plain sentences that someone who has not yet understood the page can follow; always present on content pages.",
+        f"- {symbols}: a table of at most 8 rows covering the symbols and terms the page uses without explaining, including what it assumes the reader already knows; omit the section when the page has none.",
+        f"- {keep}: one sentence the reader can repeat from memory.",
+        f"- {stuck}: 0-3 bullets shaped as **you might think X, but actually Y** followed by the fix; only mistakes a real first-time reader would make on this page; omit the section rather than invent one.",
+        f"- {exam}: write it only when the page carries something an exam plausibly asks about (a definition, formula, method, result, or distinction); omit it on transitional, motivational, or purely illustrative pages. When present, 1-2 bullets labelled exactly {exam_labels}, the stem written from this page's material with no answer. Never claim knowledge of a specific real exam or past paper.",
+        f"- {check}: one question answerable without the notes, then the answer on the next line starting with {answer_prefix}",
+        f"- {bridge}: write it only when neighbour page titles or document context are given; cite pages as p.N and never invent content for pages you were not shown; this is the only place for remarks about the page's role in the course.",
+        "- Use exactly the section headings of the skeleton above, in that order, omitting the sections that do not apply; do not invent other top-level headings.",
         "- Follow the page-type guidance for each target page. Title, agenda, and blank pages get 1-2 plain lines, no headings, and empty stuck_points and exam_angles.",
         "- Exercise pages: give the solution entry point and the usual way to lose marks; do not give final answers unless the page itself shows them.",
         "- Ground every claim in the target page text, the attached PDF page, or the document context; cite other pages by number when you use them and never invent numbers, definitions, or figure conclusions.",
-        "- Mirror the sections into the arrays: teaching.stuck_points holds 1-3 one-line items and teaching.exam_angles holds 1-4 one-line items, adding nothing the notes do not contain; both stay empty for title, agenda, and blank pages.",
-        "- Also fill concepts with 2-5 short terms named on this page (chips of at most 12 characters, not sentences), contextual_bridge with a one-sentence version of the bridge section whenever you wrote that section, visual_explanations on figure and table pages, formula_explanations on formula pages, prerequisites with what the page silently assumes, and evidence with 1-4 short fragments actually visible on this page. Leave an array empty only when the page type does not call for it; never pad it.",
-        "- Use headings, short paragraphs, bullets, bold for the misconception label, Markdown tables when a table is what resolves a stuck point, and LaTeX math.",
+        f"- Mirror the sections into the arrays: teaching.stuck_points holds the {stuck} items as one-liners (0-3, empty when the section is omitted) and teaching.exam_angles holds the {exam} items as one-liners (0-3, empty when the section is omitted), adding nothing the notes do not contain; both stay empty for title, agenda, and blank pages.",
+        "- Also fill concepts with 2-5 short terms named on this page (chips of at most 12 characters, not sentences), contextual_bridge with a one-sentence version of the neighbouring-pages section whenever you wrote that section, visual_explanations on figure and table pages, formula_explanations on formula pages, prerequisites with what the page silently assumes, and evidence with 1-4 short fragments actually visible on this page. Leave an array empty only when the page type does not call for it; never pad it.",
+        "- Use headings, short paragraphs, bullets, bold for the wrong-idea label, a Markdown table for the symbol section and otherwise only when a table is what explains something, and LaTeX math.",
         "- Put display math delimiters $$ on their own lines; keep prose outside math delimiters when possible.",
         "- Never escape digits or binary strings in LaTeX; use 2^n, 000, and 111.",
-        "- Keep it dense: roughly 150-350 Chinese characters (80-180 English words) per section and at most about 1200 Chinese characters in total; delete any sentence that only restates the page.",
+        "- Length follows how much explaining the page needs, not a quota: an easy page gets a few lines, a dense page more; usually 300-600 Chinese characters (200-400 English words) in total and never above about 1000 Chinese characters. Delete any sentence that only repeats the page in its own words or pads a section.",
         "- Set confidence by grounding quality, not by length: 0.85-0.95 when the page text is clear and complete, 0.6-0.8 when figure content had to be inferred or the extraction looks partial; set needs_review=true whenever confidence is below 0.78.",
-        "- Treat any existing notes as a draft to surpass rather than to copy: keep what is correct, replace restatement with stuck points and exam angles, and fix grounding or formula errors.",
+        "- Treat any existing notes as a draft to surpass rather than to copy: keep what is correct, replace commentary about the page's role with plain explanation of its content, and fix grounding or formula errors.",
         empty_source_rule,
     ]
 

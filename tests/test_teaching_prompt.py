@@ -45,8 +45,11 @@ def _single_page_body(**overrides):
 class TeachingInstructionsTest(unittest.TestCase):
 
     def test_states_the_no_restatement_purpose(self) -> None:
-        self.assertIn("Never paraphrase, summarize, or translate the page", TEACHING_GENERATOR_INSTRUCTIONS)
-        self.assertIn("where students typically get stuck", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("Make the page understood; do not comment on it.", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("restating in plain language is required", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("Never write about students in the third person", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("omit the section rather than invent a trap", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("write this section only when the page carries something an exam plausibly asks about", TEACHING_GENERATOR_INSTRUCTIONS)
 
     def test_carries_the_exam_calibration_table(self) -> None:
         for content_type in ("definition, theorem, or property", "formula or derivation", "table", "exercise"):
@@ -85,8 +88,10 @@ class TeachingStructureConstantsTest(unittest.TestCase):
             set(TEACHING_SECTION_HEADINGS["zh-CN"]),
             set(TEACHING_SECTION_HEADINGS["en-US"]),
         )
-        self.assertEqual(TEACHING_SECTION_HEADINGS["zh-CN"]["stuck"], "## 容易卡住的地方")
+        self.assertEqual(TEACHING_SECTION_HEADINGS["zh-CN"]["lead"], "## 一句话")
+        self.assertEqual(TEACHING_SECTION_HEADINGS["zh-CN"]["stuck"], "## 容易错的地方")
         self.assertEqual(TEACHING_SECTION_HEADINGS["zh-CN"]["exam"], "## 考试怎么考")
+        self.assertEqual(TEACHING_SECTION_HEADINGS["en-US"]["check"], "## Check yourself")
 
     def test_skeleton_uses_the_declared_headings(self) -> None:
         for code, skeleton in TEACHING_NOTES_SKELETON.items():
@@ -127,14 +132,16 @@ class TeachingPromptRulesTest(unittest.TestCase):
 
     def test_chinese_rules_reference_the_chinese_headings(self) -> None:
         rules = "\n".join(_teaching_prompt_rules({"outputLanguage": "zh-CN"}, batch=False))
-        self.assertIn("- 容易卡住的地方:", rules)
-        self.assertIn("题型 / 陷阱 / 评分点", rules)
-        self.assertIn("misconception or breakpoint", rules)
+        self.assertIn("- 容易错的地方:", rules)
+        self.assertIn("题型 / 示例题干 / 失分点", rules)
+        self.assertIn("you might think X, but actually Y", rules)
+        self.assertIn("starting with 答案：", rules)
 
     def test_english_rules_reference_the_english_headings(self) -> None:
         rules = "\n".join(_teaching_prompt_rules({"outputLanguage": "en-US"}, batch=False))
-        self.assertIn("- Where students get stuck:", rules)
-        self.assertIn("Question forms / Traps / What the grader looks for", rules)
+        self.assertIn("- Easy to get wrong:", rules)
+        self.assertIn("Question form / Sample stem / Where marks go", rules)
+        self.assertIn("starting with Answer:", rules)
 
     def test_rules_allow_returning_source_page_type(self) -> None:
         rules = "\n".join(_teaching_prompt_rules({}, batch=False))
@@ -142,14 +149,15 @@ class TeachingPromptRulesTest(unittest.TestCase):
 
     def test_rules_bound_the_two_arrays(self) -> None:
         rules = "\n".join(_teaching_prompt_rules({}, batch=False))
-        self.assertIn("teaching.stuck_points holds 1-3 one-line items", rules)
-        self.assertIn("teaching.exam_angles holds 1-4 one-line items", rules)
+        self.assertIn("teaching.stuck_points holds the 容易错的地方 items as one-liners (0-3, empty when the section is omitted)", rules)
+        self.assertIn("teaching.exam_angles holds the 考试怎么考 items as one-liners (0-3, empty when the section is omitted)", rules)
+        self.assertIn("omit it on transitional, motivational, or purely illustrative pages", rules)
 
     def test_fast_rules_are_untouched(self) -> None:
         body = {"qualityPlan": {"model": "gpt-5.4-mini", "reasoningEffort": "low", "attachPdf": False}}
         rules = "\n".join(_teaching_prompt_rules(body, batch=False))
         self.assertIn("4-7 focused bullets", rules)
-        self.assertNotIn("容易卡住的地方", rules)
+        self.assertNotIn("容易错的地方", rules)
 
 
 class TeachingPageTypeHelpersTest(unittest.TestCase):
@@ -180,8 +188,10 @@ class TeachingSinglePagePromptTest(unittest.TestCase):
 
     def test_prompt_carries_skeleton_page_type_and_guidance(self) -> None:
         prompt = _build_teaching_generation_prompt(_single_page_body())
-        self.assertIn("## 这页在讲什么", prompt)
+        self.assertIn("## 一句话", prompt)
+        self.assertIn("## 符号与术语", prompt)
         self.assertIn("## 考试怎么考", prompt)
+        self.assertIn("## 自测一问", prompt)
         self.assertIn("page_type: formula", prompt)
         self.assertIn("formula: formula or derivation page.", prompt)
         # a known page type must not drag the whole guidance table into the prompt
@@ -197,8 +207,9 @@ class TeachingSinglePagePromptTest(unittest.TestCase):
 
     def test_english_prompt_uses_english_headings(self) -> None:
         prompt = _build_teaching_generation_prompt(_single_page_body(outputLanguage="en-US"))
-        self.assertIn("## Where students get stuck", prompt)
-        self.assertNotIn("## 容易卡住的地方", prompt)
+        self.assertIn("## Easy to get wrong", prompt)
+        self.assertIn("## In one sentence", prompt)
+        self.assertNotIn("## 容易错的地方", prompt)
 
     def test_neighbor_titles_fall_back_to_document_context(self) -> None:
         body = _single_page_body(
@@ -226,7 +237,7 @@ class TeachingBatchPromptTest(unittest.TestCase):
 
     def test_skeleton_is_emitted_once_for_the_whole_batch(self) -> None:
         prompt = self._batch_prompt()
-        self.assertEqual(prompt.count("## 这页在讲什么"), 1)
+        self.assertEqual(prompt.count("## 一句话"), 1)
         self.assertEqual(prompt.count("## 考试怎么考"), 1)
 
     def test_each_target_page_declares_its_page_type(self) -> None:
@@ -267,7 +278,7 @@ class TeachingFastPathUnchangedTest(unittest.TestCase):
             }
         )
         self.assertIn("Pages JSONL:", prompt)
-        self.assertNotIn("## 容易卡住的地方", prompt)
+        self.assertNotIn("## 容易错的地方", prompt)
         self.assertNotIn("Page-type guidance", prompt)
         self.assertNotIn("Document:", prompt)
 

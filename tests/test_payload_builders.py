@@ -188,14 +188,14 @@ class TeachingStructureLinesTest(unittest.TestCase):
         lines = _teaching_structure_lines("zh-CN", ["formula"])
         block = "\n".join(lines)
         self.assertIn("Section skeleton for speaker_notes_md", block)
-        self.assertIn("## 容易卡住的地方", block)
+        self.assertIn("## 容易错的地方", block)
         self.assertIn("Page-type guidance", block)
         self.assertIn("formula:", block)
         self.assertNotIn("classification as source.page_type", block)
 
     def test_unknown_page_type_adds_the_self_classification_line(self) -> None:
         block = "\n".join(_teaching_structure_lines("en-US", ["unknown"]))
-        self.assertIn("## Where students get stuck", block)
+        self.assertIn("## Easy to get wrong", block)
         self.assertIn("classify it yourself from its content", block)
 
     def test_neighbor_lines_use_adjacent_page_numbers_only(self) -> None:
