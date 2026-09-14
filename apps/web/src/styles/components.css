@@ -9,7 +9,12 @@
   z-index: 70;
   top: calc(100% + 8px);
   right: 0;
-  width: 218px;
+  /* Was a flat 218px, which wrapped "Import SynchroPage JSON" onto two lines in
+     English. Size to the longest item instead: 218px stays the floor (Chinese
+     never grows past it) and the cap keeps the popover inside the viewport. */
+  width: max-content;
+  min-width: 218px;
+  max-width: min(292px, calc(100vw - 32px));
   display: grid;
   gap: 2px;
   padding: 6px;

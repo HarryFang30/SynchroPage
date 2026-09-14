@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 
+from pdf_agent.harness.types import PageTeaching
 from pdf_agent.server.payload_builders import (
     _agent_answer_mode,
     _agent_answer_mode_effort,
@@ -14,8 +15,10 @@ from pdf_agent.server.payload_builders import (
     _teaching_generation_candidate_bodies,
     _teaching_generation_page_numbers,
     _teaching_generation_pages,
+    _teaching_neighbor_lines,
     _teaching_output_language,
     _teaching_source_text_limit,
+    _teaching_structure_lines,
 )
 
 
@@ -177,6 +180,55 @@ class BuildResponsesPayloadTest(unittest.TestCase):
         text_parts = [p["text"] for p in payload["input"][0]["content"] if p.get("type") == "input_text"]
         self.assertGreater(len(text_parts), 0)
         self.assertIn("page_no", text_parts[-1])
+
+
+class TeachingStructureLinesTest(unittest.TestCase):
+
+    def test_structure_block_carries_skeleton_and_guidance(self) -> None:
+        lines = _teaching_structure_lines("zh-CN", ["formula"])
+        block = "\n".join(lines)
+        self.assertIn("Section skeleton for speaker_notes_md", block)
+        self.assertIn("## 容易卡住的地方", block)
+        self.assertIn("Page-type guidance", block)
+        self.assertIn("formula:", block)
+        self.assertNotIn("classification as source.page_type", block)
+
+    def test_unknown_page_type_adds_the_self_classification_line(self) -> None:
+        block = "\n".join(_teaching_structure_lines("en-US", ["unknown"]))
+        self.assertIn("## Where students get stuck", block)
+        self.assertIn("classify it yourself from its content", block)
+
+    def test_neighbor_lines_use_adjacent_page_numbers_only(self) -> None:
+        titles = {4: "Routh", 6: "Rules", 9: "Far away"}
+        self.assertEqual(
+            _teaching_neighbor_lines(5, titles),
+            ["previous_page_title: Routh", "next_page_title: Rules"],
+        )
+        self.assertEqual(_teaching_neighbor_lines(1, titles), [])
+
+
+class TeachingPayloadPromptTest(unittest.TestCase):
+
+    def test_teaching_prompt_includes_structure_for_quality_path(self) -> None:
+        payload = _build_teaching_generation_payload(
+            {
+                "outputLanguage": "zh-CN",
+                "page": {"page_no": 1, "source": {"text_md": "notes", "page_type": "summary"}},
+            },
+            default_model="gpt-6-astra",
+        )
+        prompt = payload["input"][0]["content"][-1]["text"]
+        self.assertIn("## 自测清单", prompt)
+        self.assertIn("page_type: summary", prompt)
+        self.assertIn("summary: chapter summary or review page.", prompt)
+
+
+class HarnessTeachingFieldsTest(unittest.TestCase):
+
+    def test_page_teaching_mirrors_the_two_new_arrays(self) -> None:
+        fields = PageTeaching.__dataclass_fields__
+        self.assertIn("stuck_points", fields)
+        self.assertIn("exam_angles", fields)
 
 
 class CandidateBodiesTest(unittest.TestCase):

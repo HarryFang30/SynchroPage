@@ -3,6 +3,7 @@ import { synchroPageDb } from "./db";
 import {
   lastWorkspaceStorageKey,
   persistenceSchemaVersion,
+  type AnnotationRecord,
   type ChatMessageRole,
   type ChatMessageRecord,
   type ChatMessageStatus,
@@ -678,6 +679,7 @@ async function deleteDocumentCascade(documentIds: string[]) {
     synchroPageDb.chatThreads.where("documentId").anyOf(documentIds).delete(),
     threadIds.length ? synchroPageDb.chatMessages.where("threadId").anyOf(threadIds).delete() : Promise.resolve(),
     synchroPageDb.selectedContexts.where("documentId").anyOf(documentIds).delete(),
+    synchroPageDb.annotations.where("documentId").anyOf(documentIds).delete(),
   ]);
 }
 
@@ -725,6 +727,7 @@ export async function deleteWorkspaceDocument(workspaceId: string, documentId: s
       synchroPageDb.chatThreads,
       synchroPageDb.chatMessages,
       synchroPageDb.selectedContexts,
+      synchroPageDb.annotations,
     ],
     async () => {
       await deleteDocumentCascade([documentId]);
@@ -782,6 +785,7 @@ export async function deleteCourseProject(workspaceId: string, projectId: string
       synchroPageDb.chatThreads,
       synchroPageDb.chatMessages,
       synchroPageDb.selectedContexts,
+      synchroPageDb.annotations,
     ],
     async () => {
       await deleteDocumentCascade(documentIds);
@@ -1041,6 +1045,20 @@ export async function clearSelectedContext(workspaceId: string, documentId?: str
   await synchroPageDb.selectedContexts.where("workspaceId").equals(workspaceId).delete();
 }
 
+export async function loadDocumentAnnotations(documentId: string): Promise<AnnotationRecord[]> {
+  return synchroPageDb.annotations.where("documentId").equals(documentId).sortBy("createdAt");
+}
+
+export async function saveAnnotation(record: AnnotationRecord) {
+  await synchroPageDb.annotations.put(record);
+  await synchroPageDb.documents.update(record.documentId, { updatedAt: Date.now() });
+  return record;
+}
+
+export async function deleteAnnotation(id: string) {
+  await synchroPageDb.annotations.delete(id);
+}
+
 export async function saveSettings(settings: UiPreferences, workspaceId = "global") {
   const record: SettingsRecord = {
     ...settings,
@@ -1089,10 +1107,11 @@ export async function repairWorkspaceStorage(workspaceId?: string | null): Promi
     orphanChatThreads: 0,
     orphanChatMessages: 0,
     orphanSelectedContexts: 0,
+    orphanAnnotations: 0,
     workspacesRepaired: 0,
     documentsMarkedMissing: 0,
   };
-  const [workspaces, documents, fileBlobs, generatedPages, chatThreads, chatMessages, selectedContexts] = await Promise.all([
+  const [workspaces, documents, fileBlobs, generatedPages, chatThreads, chatMessages, selectedContexts, annotations] = await Promise.all([
     workspaceId ? synchroPageDb.workspaces.where("id").equals(workspaceId).toArray() : synchroPageDb.workspaces.toArray(),
     workspaceId ? synchroPageDb.documents.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.documents.toArray(),
     workspaceId ? synchroPageDb.fileBlobs.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.fileBlobs.toArray(),
@@ -1100,6 +1119,7 @@ export async function repairWorkspaceStorage(workspaceId?: string | null): Promi
     workspaceId ? synchroPageDb.chatThreads.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.chatThreads.toArray(),
     workspaceId ? synchroPageDb.chatMessages.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.chatMessages.toArray(),
     workspaceId ? synchroPageDb.selectedContexts.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.selectedContexts.toArray(),
+    workspaceId ? synchroPageDb.annotations.where("workspaceId").equals(workspaceId).toArray() : synchroPageDb.annotations.toArray(),
   ]);
 
   const workspaceIds = new Set(workspaces.map((record) => record.id));
@@ -1122,6 +1142,9 @@ export async function repairWorkspaceStorage(workspaceId?: string | null): Promi
   const orphanContextIds = selectedContexts
     .filter((record) => !workspaceIds.has(record.workspaceId) || (record.documentId ? !documentIds.has(record.documentId) : false))
     .map((record) => record.id);
+  const orphanAnnotationIds = annotations
+    .filter((record) => !workspaceIds.has(record.workspaceId) || !documentIds.has(record.documentId))
+    .map((record) => record.id);
   const missingBlobDocuments = documents
     .filter((record) => record.pdfBlobId && !blobIds.has(record.pdfBlobId))
     .map((record) => record.id);
@@ -1137,8 +1160,10 @@ export async function repairWorkspaceStorage(workspaceId?: string | null): Promi
       synchroPageDb.chatThreads,
       synchroPageDb.chatMessages,
       synchroPageDb.selectedContexts,
+      synchroPageDb.annotations,
     ],
     async () => {
+      if (orphanAnnotationIds.length) await synchroPageDb.annotations.bulkDelete(orphanAnnotationIds);
       if (orphanFileBlobIds.length) await synchroPageDb.fileBlobs.bulkDelete(orphanFileBlobIds);
       if (orphanGeneratedPageIds.length) await synchroPageDb.generatedPages.bulkDelete(orphanGeneratedPageIds);
       if (orphanThreadIds.length) await synchroPageDb.chatThreads.bulkDelete(orphanThreadIds);
@@ -1165,6 +1190,7 @@ export async function repairWorkspaceStorage(workspaceId?: string | null): Promi
   result.orphanChatThreads = orphanThreadIds.length;
   result.orphanChatMessages = orphanMessageIds.length;
   result.orphanSelectedContexts = orphanContextIds.length;
+  result.orphanAnnotations = orphanAnnotationIds.length;
   result.documentsMarkedMissing = missingBlobDocuments.length;
   return result;
 }
@@ -1182,9 +1208,11 @@ export async function clearWorkspace(workspaceId: string) {
       synchroPageDb.chatMessages,
       synchroPageDb.selectedContexts,
       synchroPageDb.settings,
+      synchroPageDb.annotations,
     ],
     async () => {
       await Promise.all([
+        synchroPageDb.annotations.where("workspaceId").equals(workspaceId).delete(),
         synchroPageDb.documents.where("workspaceId").equals(workspaceId).delete(),
         synchroPageDb.courseProjects.where("workspaceId").equals(workspaceId).delete(),
         synchroPageDb.fileBlobs.where("workspaceId").equals(workspaceId).delete(),
@@ -1203,7 +1231,7 @@ export async function clearWorkspace(workspaceId: string) {
 export async function exportWorkspace(workspaceId: string): Promise<ExportedWorkspace> {
   const workspace = await synchroPageDb.workspaces.get(workspaceId);
   if (!workspace) throw new PersistenceError("not_found", "Workspace not found");
-  const [courseProjects, documents, fileBlobRecords, generatedPages, chatThreads, chatMessages, selectedContexts, settings] = await Promise.all([
+  const [courseProjects, documents, fileBlobRecords, generatedPages, chatThreads, chatMessages, selectedContexts, annotations, settings] = await Promise.all([
     synchroPageDb.courseProjects.where("workspaceId").equals(workspaceId).toArray(),
     synchroPageDb.documents.where("workspaceId").equals(workspaceId).toArray(),
     synchroPageDb.fileBlobs.where("workspaceId").equals(workspaceId).toArray(),
@@ -1211,6 +1239,7 @@ export async function exportWorkspace(workspaceId: string): Promise<ExportedWork
     synchroPageDb.chatThreads.where("workspaceId").equals(workspaceId).toArray(),
     synchroPageDb.chatMessages.where("workspaceId").equals(workspaceId).toArray(),
     synchroPageDb.selectedContexts.where("workspaceId").equals(workspaceId).toArray(),
+    synchroPageDb.annotations.where("workspaceId").equals(workspaceId).toArray(),
     loadSettings(workspaceId),
   ]);
 
@@ -1265,6 +1294,7 @@ export async function exportWorkspace(workspaceId: string): Promise<ExportedWork
       chatMessages: chatMessages.length,
       selectedContexts: selectedContexts.length,
       settings: settings ? 1 : 0,
+      annotations: annotations.length,
     },
     integrity: {
       fileBlobHashes,
@@ -1277,6 +1307,7 @@ export async function exportWorkspace(workspaceId: string): Promise<ExportedWork
     chatThreads,
     chatMessages,
     selectedContexts,
+    annotations,
     settings: settings || null,
   };
 }
@@ -1314,6 +1345,7 @@ export async function importWorkspace(payload: ExportedWorkspace) {
       synchroPageDb.chatMessages,
       synchroPageDb.selectedContexts,
       synchroPageDb.settings,
+      synchroPageDb.annotations,
     ],
     async () => {
       await synchroPageDb.workspaces.put({
@@ -1329,6 +1361,7 @@ export async function importWorkspace(payload: ExportedWorkspace) {
       if (payload.chatThreads.length) await synchroPageDb.chatThreads.bulkPut(payload.chatThreads);
       if (payload.chatMessages.length) await synchroPageDb.chatMessages.bulkPut(payload.chatMessages);
       if (payload.selectedContexts.length) await synchroPageDb.selectedContexts.bulkPut(payload.selectedContexts);
+      if (payload.annotations?.length) await synchroPageDb.annotations.bulkPut(payload.annotations);
       if (payload.settings) await synchroPageDb.settings.put(payload.settings);
     },
   );
@@ -1347,6 +1380,7 @@ function validateWorkspaceExportPayload(payload: ExportedWorkspace) {
   assertExport(Array.isArray(payload.chatThreads), "validation", "Workspace export chatThreads must be an array");
   assertExport(Array.isArray(payload.chatMessages), "validation", "Workspace export chatMessages must be an array");
   assertExport(Array.isArray(payload.selectedContexts), "validation", "Workspace export selectedContexts must be an array");
+  if (!Array.isArray(payload.annotations)) payload.annotations = [];
 
   assertUniqueIds("courseProjects", payload.courseProjects);
   assertUniqueIds("documents", payload.documents);
@@ -1355,6 +1389,7 @@ function validateWorkspaceExportPayload(payload: ExportedWorkspace) {
   assertUniqueIds("chatThreads", payload.chatThreads);
   assertUniqueIds("chatMessages", payload.chatMessages);
   assertUniqueIds("selectedContexts", payload.selectedContexts);
+  assertUniqueIds("annotations", payload.annotations);
 
   for (const fileBlob of payload.fileBlobs) {
     assertExport(
@@ -1375,6 +1410,9 @@ function validateWorkspaceExportPayload(payload: ExportedWorkspace) {
     assertExport(payload.counts.chatThreads === payload.chatThreads.length, "validation", "Chat thread count mismatch");
     assertExport(payload.counts.chatMessages === payload.chatMessages.length, "validation", "Chat message count mismatch");
     assertExport(payload.counts.selectedContexts === payload.selectedContexts.length, "validation", "Selected context count mismatch");
+    if (typeof payload.counts.annotations === "number") {
+      assertExport(payload.counts.annotations === payload.annotations.length, "validation", "Annotation count mismatch");
+    }
   }
 
   validateWorkspaceExportRelations(payload);
@@ -1438,6 +1476,10 @@ function validateWorkspaceExportRelations(payload: ExportedWorkspace) {
     if (context.documentId) {
       assertExport(documentIds.has(context.documentId), "validation", `Selected context ${context.id} references a missing document`);
     }
+  }
+  for (const annotation of payload.annotations || []) {
+    assertExport(annotation.workspaceId === workspaceId, "validation", `Annotation ${annotation.id} points to a different workspace`);
+    assertExport(documentIds.has(annotation.documentId), "validation", `Annotation ${annotation.id} references a missing document`);
   }
   if (payload.settings) {
     assertExport(payload.settings.id === workspaceId || payload.settings.id === "global", "validation", "Settings record scope does not match workspace");

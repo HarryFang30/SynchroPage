@@ -302,6 +302,7 @@ export function SettingsModal(props: SettingsModalProps) {
                         ["medium", copy.settings.agent.reasoningEffortMedium],
                         ["high", copy.settings.agent.reasoningEffortHigh],
                         ["xhigh", copy.settings.agent.reasoningEffortXHigh],
+                        ["max", copy.settings.agent.reasoningEffortMax],
                       ]}
                     />
                   </SettingsRow>

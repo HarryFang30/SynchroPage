@@ -992,32 +992,131 @@ body {
   color: var(--pp-on-accent);
 }
 
+/* The notes pane is its own container query context and in the three-pane
+   workbench it is only ~230-260px wide. `min-width: max-content` used to push
+   the tab row past the scroll box, and because the scrollbar is hidden the
+   overflowing tabs simply vanished: with the English labels ("Notes /
+   My notes / Structure / JSON") two of the four tabs were unreachable, while
+   the shorter Chinese labels lost only the last one. Let the row shrink
+   instead - every tab keeps a slot and ellipsizes its own label. */
 @container (max-width: 560px) {
   .notes-toolbar-right {
     min-width: 0;
   }
 
   .tab-group {
+    min-width: 0;
     max-width: 100%;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .tab-group::-webkit-scrollbar {
-    display: none;
+    overflow: hidden;
   }
 
   .tab-button {
+    flex: 0 1 auto;
     width: auto;
-    min-width: max-content;
-    padding-inline: 10px;
+    min-width: 0;
+    max-width: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-inline: 8px;
+  }
+
+  /* `.tab-button span` already carries the ellipsis recipe, but an inline box
+     cannot clip: let it shrink inside the flex button. Only `min-width` is set
+     here - `display` stays on the label classes so they keep controlling which
+     of the two labels is visible. */
+  .tab-button > span {
+    min-width: 0;
   }
 
   .tab-label-full {
-    display: inline;
+    display: block;
   }
 
   .tab-label-short {
     display: none;
+  }
+}
+
+/* Tightest tier: four alphabetic labels cannot sit next to the progress pill,
+   so fall back to the short labels the markup already carries and trim the
+   toolbar gutter to buy the row back. The `.notes-pane` prefix keeps this
+   ahead of the plain `.pane-toolbar` padding set later in calm-surface.css. */
+@container (max-width: 380px) {
+  .notes-pane .pane-toolbar {
+    padding-inline: 10px;
+  }
+
+  .tab-group {
+    gap: 2px;
+  }
+
+  .tab-button {
+    padding-inline: 5px;
+    font-size: 11px;
+  }
+
+  .tab-label-full {
+    display: none;
+  }
+
+  .tab-label-short {
+    display: block;
+  }
+}
+
+/* Below 320px notes.css has already dropped the toolbar title, leaving a lone
+   status dot that costs the tab row ~14px it cannot spare. */
+@container (max-width: 320px) {
+  .notes-pane .pane-toolbar .toolbar-title {
+    display: none;
+  }
+}
+
+/* Under ~240px (the three-pane workbench at 1280px and below) the four English
+   short labels still cannot share the row with the generation pill, and
+   squeezing them produced "Not… Mi… Struct… JS…". Tabs are primary navigation,
+   the pill is a secondary read-only status that is already a label-less 18px
+   sliver at this size, so the pill yields; it comes back as soon as the pane is
+   widened. Scoped to `:lang(en)` (the app sets `lang` on <html> and .app-shell)
+   because the two-character Chinese labels fit alongside the pill unchanged. */
+@container (max-width: 240px) {
+  :lang(en) .notes-toolbar-right .generation-details-control {
+    display: none;
+  }
+}
+
+/* ── English label density (notes pane) ───────────────────────────────────────
+   The base metrics in notes.css were sized against two-character Chinese
+   labels; the English strings are 2-4x wider. These overrides only relax the
+   fixed track widths, so the Chinese rendering is unchanged. */
+
+/* `54px 48px minmax(0, 1fr)` clipped "Generated" (55px) by a pixel and left it
+   bleeding into the gap. The value column only ever holds "3/3", "0" or "p.12",
+   so move the slack from the value column to the label column. */
+.generation-detail-row {
+  grid-template-columns: minmax(0, 66px) minmax(0, 40px) minmax(0, 1fr);
+}
+
+.generation-detail-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "Alignment confidence" wrapped onto two lines in the 116px label column,
+   making that one row taller than every other. Latin labels need ~132px; the
+   Chinese labels are all under 70px so the wider track costs them nothing. */
+:lang(en) .structure-row {
+  grid-template-columns: 132px minmax(0, 1fr);
+}
+
+/* Under ~430px the structure rows stack anyway, so drop the fixed label track
+   rather than spending a third of a narrow pane on it. */
+@container (max-width: 430px) {
+  :lang(en) .structure-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
   }
 }

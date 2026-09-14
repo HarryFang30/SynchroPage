@@ -88,6 +88,7 @@ export type AppCopy = {
       reasoningEffortMedium: string;
       reasoningEffortHigh: string;
       reasoningEffortXHigh: string;
+      reasoningEffortMax: string;
       pdfContextFullPageLimitLabel: string;
       pdfContextFullPageLimitDescription: string;
       pdfContextEdgePageCountLabel: string;
@@ -217,6 +218,17 @@ export type AppCopy = {
     generationStarted: (total: number) => string;
     generationPage: (current: number, total: number, pageNo: number) => string;
     generationPageRetrying: (pageNo: number, attempt: number, total: number) => string;
+    generationPageRetryingReason: (pageNo: number, attempt: number, total: number, reason: string) => string;
+    generationPageSlow: (pageNo: number, seconds: number) => string;
+    generationBatchSlow: (pageCount: number, seconds: number) => string;
+    generationRateLimited: (seconds: number) => string;
+    generationConcurrencyReduced: (limit: number) => string;
+    generationRetryReasonTimeout: string;
+    generationRetryReasonRateLimit: string;
+    generationRetryReasonNetwork: string;
+    generationRetryReasonInvalidJson: string;
+    generationRetryReasonWeakOutput: string;
+    generationRetryReasonServer: string;
     generationPageFailed: (pageNo: number, message: string) => string;
     generationDone: (completed: number, total: number, skipped?: number) => string;
     generationBatchStarted: (documents: number, pages: number) => string;
@@ -367,6 +379,36 @@ export type AppCopy = {
     tabNotesShort: string;
     tabStructureShort: string;
     tabJsonShort: string;
+    tabAnnotations: string;
+    tabAnnotationsShort: string;
+  };
+  annotations: {
+    highlight: string;
+    addNote: string;
+    pageNoteTitle: string;
+    addPageNote: string;
+    notePlaceholder: string;
+    noteAria: string;
+    colorLabel: string;
+    colors: Record<"yellow" | "green" | "blue" | "pink", string>;
+    delete: string;
+    confirmDelete: string;
+    highlightAdded: (pageNo: number) => string;
+    noteAdded: (pageNo: number) => string;
+    deleted: string;
+    saveFailed: (message: string) => string;
+    requiresDocument: string;
+    panelTitle: string;
+    panelCount: (count: number) => string;
+    panelEmpty: string;
+    panelEmptyHint: string;
+    exportMarkdown: string;
+    exported: (count: number) => string;
+    jumpToPage: (pageNo: number) => string;
+    pageHeading: (pageNo: number) => string;
+    markdownTitle: (title: string) => string;
+    emptyNote: string;
+    highlightLayerAria: (pageNo: number) => string;
   };
   agent: {
     addImage: string;
@@ -411,6 +453,56 @@ export type AppCopy = {
     challengeProblemTrapLabel: string;
     challengeProblemRubricLabel: string;
     challengeProblemAgain: string;
+    quizOpen: string;
+    quizReopen: string;
+    quizViewSummary: string;
+    quizGenerating: string;
+    quizDialogAria: string;
+    quizClose: string;
+    quizProgress: (current: number, total: number) => string;
+    quizQuestionCount: (count: number) => string;
+    quizSetGoalFallback: string;
+    quizHint: string;
+    quizViewSource: (pageNo: number) => string;
+    quizDiagnosisLabel: string;
+    quizRetryPrompt: string;
+    quizWhyCorrect: string;
+    quizCoreIdea: string;
+    quizExamSection: string;
+    quizExamTrap: string;
+    quizExamWeight: (weight: string) => string;
+    quizFollowUp: string;
+    quizBridge: string;
+    quizAskAi: string;
+    quizNext: string;
+    quizSeeSummary: string;
+    quizAnswerLabel: (optionId: string) => string;
+    quizSummaryTitle: string;
+    quizScore: (correct: number, total: number) => string;
+    quizHintsUsed: (count: number) => string;
+    quizSkillHeading: string;
+    quizSkillWeak: string;
+    quizSkillOk: string;
+    quizSkillStrong: string;
+    quizSkillScore: (correct: number, total: number) => string;
+    quizMissedHeading: string;
+    quizMissedEmpty: string;
+    quizRetryMissed: (count: number) => string;
+    quizRetryHeading: string;
+    quizRetryRemaining: (count: number) => string;
+    quizRetryCleared: string;
+    quizBackToSummary: string;
+    quizCorrectOnRetry: string;
+    quizFirstPickLabel: (optionId: string) => string;
+    quizEventuallyCorrect: (correct: number, total: number) => string;
+    quizNewSetSameSkills: string;
+    quizGenerateProblem: string;
+    quizDiagnose: string;
+    quizEnd: string;
+    quizNewSetMessage: (count: number, skills: string, misconceptions: string) => string;
+    quizDiagnoseMessage: (log: string) => string;
+    quizAnswerLogLine: (index: number, stem: string, chosen: string, correct: string) => string;
+    quizWeakPointNote: (count: number) => string;
     quickExplainPrompt: (label: string) => string;
     quickSummarizePrompt: (label: string) => string;
     continuePrompt: string;
@@ -464,6 +556,8 @@ export type AppCopy = {
     confidence: string;
     prerequisites: string;
     visualNotes: string;
+    stuckPoints: string;
+    examAngles: string;
     sourceText: string;
     ocrEnabled: string;
     ocrDisabled: string;
@@ -558,6 +652,7 @@ const zhCN: AppCopy = {
       reasoningEffortMedium: "medium · 推荐",
       reasoningEffortHigh: "high · 深度",
       reasoningEffortXHigh: "xhigh · 最强",
+      reasoningEffortMax: "max · 极限（仅 gpt-6 / gpt-5.6 支持）",
       pdfContextFullPageLimitLabel: "全文上下文页数阈值",
       pdfContextFullPageLimitDescription: "控制 PDF 直传之外的可缓存页级文本索引：页数不超过时保留全文文本索引，原始 PDF 会优先直传。",
       pdfContextEdgePageCountLabel: "长 PDF 前后截取页数",
@@ -687,6 +782,17 @@ const zhCN: AppCopy = {
     generationStarted: (total) => `开始生成 ${total} 页讲解`,
     generationPage: (current, total, pageNo) => `正在生成第 ${pageNo} 页讲解（${current}/${total}）`,
     generationPageRetrying: (pageNo, attempt, total) => `第 ${pageNo} 页无响应，正在第 ${attempt}/${total} 次重试`,
+    generationPageRetryingReason: (pageNo, attempt, total, reason) => `第 ${pageNo} 页${reason}，正在第 ${attempt}/${total} 次重试`,
+    generationPageSlow: (pageNo, seconds) => `第 ${pageNo} 页仍在生成（已等待 ${seconds} 秒，深度推理页会更慢，不会中断）`,
+    generationBatchSlow: (pageCount, seconds) => `${pageCount} 页批量讲解仍在生成（已等待 ${seconds} 秒，不会中断）`,
+    generationRateLimited: (seconds) => `模型网关限流，暂停 ${seconds} 秒后继续`,
+    generationConcurrencyReduced: (limit) => `已把并发降到 ${limit} 路以避开限流`,
+    generationRetryReasonTimeout: "超时",
+    generationRetryReasonRateLimit: "被限流",
+    generationRetryReasonNetwork: "网络中断",
+    generationRetryReasonInvalidJson: "返回格式无效",
+    generationRetryReasonWeakOutput: "内容过弱",
+    generationRetryReasonServer: "上游出错",
     generationPageFailed: (pageNo, message) => `第 ${pageNo} 页讲解生成失败：${message}`,
     generationDone: (completed, total, skipped = 0) => `讲解生成完成：新生成 ${completed} 页，已跳过 ${skipped} 页，当前 ${total} 页已检查`,
     generationBatchStarted: (documents, pages) => `开始批量生成 ${documents} 个文件，共 ${pages} 页待检查`,
@@ -837,6 +943,36 @@ const zhCN: AppCopy = {
     tabNotesShort: "讲解",
     tabStructureShort: "结构",
     tabJsonShort: "JSON",
+    tabAnnotations: "笔记",
+    tabAnnotationsShort: "笔记",
+  },
+  annotations: {
+    highlight: "高亮",
+    addNote: "写笔记",
+    pageNoteTitle: "本页笔记",
+    addPageNote: "添加本页笔记",
+    notePlaceholder: "写下你的理解、疑问或记忆点…",
+    noteAria: "笔记内容",
+    colorLabel: "高亮颜色",
+    colors: { yellow: "黄色", green: "绿色", blue: "蓝色", pink: "粉色" },
+    delete: "删除",
+    confirmDelete: "确认删除",
+    highlightAdded: (pageNo) => `已在 p.${pageNo} 添加高亮`,
+    noteAdded: (pageNo) => `已在 p.${pageNo} 新建笔记`,
+    deleted: "笔记已删除",
+    saveFailed: (message) => `笔记保存失败：${message}`,
+    requiresDocument: "请先打开一个已保存的 PDF，再添加高亮或笔记",
+    panelTitle: "我的笔记",
+    panelCount: (count) => `${count} 条`,
+    panelEmpty: "还没有笔记",
+    panelEmptyHint: "在 PDF 里选中文字，点「高亮」或「写笔记」；也可以在每一页下方直接添加本页笔记。笔记会随文档一起保存。",
+    exportMarkdown: "导出 Markdown",
+    exported: (count) => `已导出 ${count} 条笔记`,
+    jumpToPage: (pageNo) => `跳到 p.${pageNo}`,
+    pageHeading: (pageNo) => `p.${pageNo}`,
+    markdownTitle: (title) => `${title} · 笔记`,
+    emptyNote: "（尚未写内容）",
+    highlightLayerAria: (pageNo) => `p.${pageNo} 的高亮`,
   },
   agent: {
     addImage: "加入图片",
@@ -855,7 +991,7 @@ const zhCN: AppCopy = {
     imagePreview: (name) => `图片 · ${name}`,
     selectedFallbackSuggestions: ["解释当前页的核心内容", "总结本页关键知识点", "用例子讲清楚这一页", "根据本页内容出几道题"],
     pageSuggestions: () => ["解释当前页的核心内容", "总结本页关键知识点", "用例子讲清楚这一页", "根据本页内容出几道题"],
-    challengeTitle: "Challenge",
+    challengeTitle: "挑战",
     challengeModeDiagnostic: "漏洞诊断",
     challengeAction: "生成挑战",
     challengeAria: "当前页 Challenge",
@@ -883,6 +1019,60 @@ const zhCN: AppCopy = {
     challengeProblemTrapLabel: "常见误区",
     challengeProblemRubricLabel: "自查采分点",
     challengeProblemAgain: "再来一道大题",
+    quizOpen: "打开测验",
+    quizReopen: "继续测验",
+    quizViewSummary: "查看总结",
+    quizGenerating: "正在出题…",
+    quizDialogAria: "测验",
+    quizClose: "关闭测验",
+    quizProgress: (current, total) => `${current} / ${total}`,
+    quizQuestionCount: (count) => `${count} 题`,
+    quizSetGoalFallback: "用最少的题暴露最大的理解漏洞",
+    quizHint: "提示",
+    quizViewSource: (pageNo) => `看原文 p.${pageNo}`,
+    quizDiagnosisLabel: "诊断",
+    quizRetryPrompt: "再想一下，还有一次机会。",
+    quizWhyCorrect: "为什么是它",
+    quizCoreIdea: "可迁移原则",
+    quizExamSection: "考试怎么考",
+    quizExamTrap: "常见失分点",
+    quizExamWeight: (weight) => `考查权重：${weight}`,
+    quizFollowUp: "再往前一步",
+    quizBridge: "先补这一步",
+    quizAskAi: "追问 AI",
+    quizNext: "下一题",
+    quizSeeSummary: "看总结",
+    quizAnswerLabel: (optionId) => `正确选项：${optionId}`,
+    quizSummaryTitle: "本轮总结",
+    quizScore: (correct, total) => `${correct} / ${total} 首答正确`,
+    quizHintsUsed: (count) => `用了 ${count} 次提示`,
+    quizSkillHeading: "按考点",
+    quizSkillWeak: "薄弱",
+    quizSkillOk: "基本会",
+    quizSkillStrong: "扎实",
+    quizSkillScore: (correct, total) => `${correct}/${total}`,
+    quizMissedHeading: "错题与误区",
+    quizMissedEmpty: "本轮没有首答错题。",
+    quizRetryMissed: (count) => `重做错题 (${count})`,
+    quizRetryHeading: "错题重做",
+    quizRetryRemaining: (count) => `待清零 ${count} 题`,
+    quizRetryCleared: "本轮错题已清零",
+    quizBackToSummary: "回到总结",
+    quizCorrectOnRetry: "再想一下后答对",
+    quizFirstPickLabel: (optionId) => `第一次选了 ${optionId}`,
+    quizEventuallyCorrect: (correct, total) => `最终答对 ${correct} / ${total}`,
+    quizNewSetSameSkills: "同考点换一组新题",
+    quizGenerateProblem: "生成一道典型大题",
+    quizDiagnose: "让 AI 诊断",
+    quizEnd: "结束",
+    quizNewSetMessage: (count, skills, misconceptions) => [
+      `Challenge：请基于当前页生成 ${count} 道互动选择题，用于漏洞诊断`,
+      skills ? `；优先针对这些薄弱考点：${skills}` : "",
+      misconceptions ? `；至少一道题的干扰项要对应这些误解：${misconceptions}` : "",
+    ].join(""),
+    quizDiagnoseMessage: (log) => `这是我刚做完的一轮测验记录，请用 2-3 句指出我反复出错的模式，再说明考试里我会在哪一步丢分，最后给我 2 个具体的下一步：\n\n${log}`,
+    quizAnswerLogLine: (index, stem, chosen, correct) => `${index}. ${stem}｜我选了 ${chosen}，正确答案是 ${correct}`,
+    quizWeakPointNote: (count) => `有 ${count} 个待复测薄弱点`,
     quickExplainPrompt: (label) => `请解释这段选中内容，优先基于该来源回答：${label}`,
     quickSummarizePrompt: (label) => `请总结这段选中内容，提炼关键概念和可能的公式关系：${label}`,
     continuePrompt: "请根据上下文继续。",
@@ -936,6 +1126,8 @@ const zhCN: AppCopy = {
     confidence: "对齐置信度",
     prerequisites: "前置概念",
     visualNotes: "图表说明",
+    stuckPoints: "易卡点",
+    examAngles: "考试角度",
     sourceText: "解析文本",
     ocrEnabled: "已启用",
     ocrDisabled: "未启用",
@@ -1030,6 +1222,7 @@ const enUS: AppCopy = {
       reasoningEffortMedium: "medium · recommended",
       reasoningEffortHigh: "high · deep",
       reasoningEffortXHigh: "xhigh · strongest",
+      reasoningEffortMax: "max · maximum (gpt-6 / gpt-5.6 only)",
       pdfContextFullPageLimitLabel: "Full-context page limit",
       pdfContextFullPageLimitDescription: "Controls the cacheable page-text index in addition to direct PDF input. At or below this count, keep a full text index.",
       pdfContextEdgePageCountLabel: "Long-PDF edge pages",
@@ -1159,6 +1352,17 @@ const enUS: AppCopy = {
     generationStarted: (total) => `Generating notes for ${total} pages`,
     generationPage: (current, total, pageNo) => `Generating notes for page ${pageNo} (${current}/${total})`,
     generationPageRetrying: (pageNo, attempt, total) => `Page ${pageNo} did not respond, retrying ${attempt}/${total}`,
+    generationPageRetryingReason: (pageNo, attempt, total, reason) => `Page ${pageNo} ${reason}, retrying ${attempt}/${total}`,
+    generationPageSlow: (pageNo, seconds) => `Page ${pageNo} is still generating (${seconds}s so far; deep-reasoning pages take longer and will not be interrupted)`,
+    generationBatchSlow: (pageCount, seconds) => `A ${pageCount}-page batch is still generating (${seconds}s so far; it will not be interrupted)`,
+    generationRateLimited: (seconds) => `The model gateway is rate limiting; pausing ${seconds}s before continuing`,
+    generationConcurrencyReduced: (limit) => `Reduced concurrency to ${limit} to avoid rate limits`,
+    generationRetryReasonTimeout: "timed out",
+    generationRetryReasonRateLimit: "was rate limited",
+    generationRetryReasonNetwork: "hit a network error",
+    generationRetryReasonInvalidJson: "returned invalid JSON",
+    generationRetryReasonWeakOutput: "came back too thin",
+    generationRetryReasonServer: "hit an upstream error",
     generationPageFailed: (pageNo, message) => `Page ${pageNo} generation failed: ${message}`,
     generationDone: (completed, total, skipped = 0) => `Generation complete: ${completed} new, ${skipped} skipped, ${total} pages checked`,
     generationBatchStarted: (documents, pages) => `Batch generation started for ${documents} documents, ${pages} pages to check`,
@@ -1199,9 +1403,9 @@ const enUS: AppCopy = {
     failed: "Save failed, click to retry",
     quota: "Storage is full",
     localDraft: "Local draft",
-    restored: "Restored local workspace",
-    pdfMissing: "PDF file is missing; metadata restored",
-    restoreFailed: "Failed to restore workspace",
+    restored: "Workspace restored",
+    pdfMissing: "PDF missing, metadata restored",
+    restoreFailed: "Restore failed",
     retrySave: "Retry save",
     saveStatusLabel: "Save status",
     uploadSaved: "PDF saved locally",
@@ -1291,7 +1495,7 @@ const enUS: AppCopy = {
     courseDeleted: (courseName) => `Deleted course "${courseName}"`,
     documentCount: (count) => `${count} ${count === 1 ? "document" : "documents"}`,
     courseDocumentCount: (count) => `${count} ${count === 1 ? "document" : "documents"}`,
-    documentMeta: (pageCount, generatedCount) => `${pageCount} ${pageCount === 1 ? "page" : "pages"} · ${generatedCount} generated`,
+    documentMeta: (pageCount, generatedCount) => `${pageCount} ${pageCount === 1 ? "page" : "pages"} · ${generatedCount} done`,
   },
   pdf: {
     samplePdfPage: "Sample PDF page",
@@ -1307,8 +1511,38 @@ const enUS: AppCopy = {
     tabStructure: "Structure",
     tabJson: "JSON",
     tabNotesShort: "Notes",
-    tabStructureShort: "Structure",
+    tabStructureShort: "Struct",
     tabJsonShort: "JSON",
+    tabAnnotations: "My notes",
+    tabAnnotationsShort: "Mine",
+  },
+  annotations: {
+    highlight: "Highlight",
+    addNote: "Add note",
+    pageNoteTitle: "Page note",
+    addPageNote: "Add a note for this page",
+    notePlaceholder: "Write what you understood, a question, or a cue to remember…",
+    noteAria: "Note text",
+    colorLabel: "Highlight color",
+    colors: { yellow: "Yellow", green: "Green", blue: "Blue", pink: "Pink" },
+    delete: "Delete",
+    confirmDelete: "Confirm delete",
+    highlightAdded: (pageNo) => `Highlight added on p.${pageNo}`,
+    noteAdded: (pageNo) => `Note added on p.${pageNo}`,
+    deleted: "Note deleted",
+    saveFailed: (message) => `Could not save the note: ${message}`,
+    requiresDocument: "Open a saved PDF first to add highlights or notes",
+    panelTitle: "My notes",
+    panelCount: (count) => `${count} ${count === 1 ? "item" : "items"}`,
+    panelEmpty: "No notes yet",
+    panelEmptyHint: "Select text in the PDF and choose “Highlight” or “Add note”, or add a page note under any page. Notes are saved with the document.",
+    exportMarkdown: "Export Markdown",
+    exported: (count) => `Exported ${count} ${count === 1 ? "note" : "notes"}`,
+    jumpToPage: (pageNo) => `Jump to p.${pageNo}`,
+    pageHeading: (pageNo) => `p.${pageNo}`,
+    markdownTitle: (title) => `${title} · Notes`,
+    emptyNote: "(nothing written yet)",
+    highlightLayerAria: (pageNo) => `Highlights on p.${pageNo}`,
   },
   agent: {
     addImage: "Add image",
@@ -1355,6 +1589,60 @@ const enUS: AppCopy = {
     challengeProblemTrapLabel: "Common traps",
     challengeProblemRubricLabel: "Self-check points",
     challengeProblemAgain: "Another problem",
+    quizOpen: "Open quiz",
+    quizReopen: "Resume quiz",
+    quizViewSummary: "View summary",
+    quizGenerating: "Writing questions…",
+    quizDialogAria: "Quiz",
+    quizClose: "Close quiz",
+    quizProgress: (current, total) => `${current} / ${total}`,
+    quizQuestionCount: (count) => `${count} question${count === 1 ? "" : "s"}`,
+    quizSetGoalFallback: "Expose the biggest gap with the fewest questions",
+    quizHint: "Hint",
+    quizViewSource: (pageNo) => `Open p.${pageNo}`,
+    quizDiagnosisLabel: "Diagnosis",
+    quizRetryPrompt: "Try again — you have one more attempt.",
+    quizWhyCorrect: "Why this one",
+    quizCoreIdea: "Transferable idea",
+    quizExamSection: "How exams test it",
+    quizExamTrap: "Where marks are lost",
+    quizExamWeight: (weight) => `Exam weight: ${weight}`,
+    quizFollowUp: "One step further",
+    quizBridge: "Fill this in first",
+    quizAskAi: "Ask the AI",
+    quizNext: "Next",
+    quizSeeSummary: "See summary",
+    quizAnswerLabel: (optionId) => `Answer: ${optionId}`,
+    quizSummaryTitle: "Round summary",
+    quizScore: (correct, total) => `${correct} / ${total} correct first try`,
+    quizHintsUsed: (count) => `${count} hint${count === 1 ? "" : "s"} used`,
+    quizSkillHeading: "By skill",
+    quizSkillWeak: "Weak",
+    quizSkillOk: "OK",
+    quizSkillStrong: "Solid",
+    quizSkillScore: (correct, total) => `${correct}/${total}`,
+    quizMissedHeading: "Misses and misconceptions",
+    quizMissedEmpty: "Nothing missed on the first try.",
+    quizRetryMissed: (count) => `Redo missed (${count})`,
+    quizRetryHeading: "Redo missed",
+    quizRetryRemaining: (count) => `${count} left to clear`,
+    quizRetryCleared: "All missed questions cleared",
+    quizBackToSummary: "Back to summary",
+    quizCorrectOnRetry: "Correct on the second try",
+    quizFirstPickLabel: (optionId) => `Your first pick: ${optionId}`,
+    quizEventuallyCorrect: (correct, total) => `${correct} / ${total} correct eventually`,
+    quizNewSetSameSkills: "New set, same skills",
+    quizGenerateProblem: "Generate a major problem",
+    quizDiagnose: "Ask the AI to diagnose",
+    quizEnd: "Finish",
+    quizNewSetMessage: (count, skills, misconceptions) => [
+      `Challenge: generate ${count} interactive multiple-choice question${count === 1 ? "" : "s"} for current-page diagnosis`,
+      skills ? `; target these weak skills first: ${skills}` : "",
+      misconceptions ? `; at least one distractor must match these misconceptions: ${misconceptions}` : "",
+    ].join(""),
+    quizDiagnoseMessage: (log) => `Here is my answer log from the quiz I just finished. In 2-3 sentences name the pattern behind my repeated mistakes, then say where I would lose marks in an exam, then give me 2 concrete next steps:\n\n${log}`,
+    quizAnswerLogLine: (index, stem, chosen, correct) => `${index}. ${stem} | I chose ${chosen}, the answer was ${correct}`,
+    quizWeakPointNote: (count) => `${count} weak point${count === 1 ? "" : "s"} due for retesting`,
     quickExplainPrompt: (label) => `Please explain this selected content. Prioritize answering from this source: ${label}`,
     quickSummarizePrompt: (label) => `Please summarize this selected content, extracting key concepts and possible formula relationships: ${label}`,
     continuePrompt: "Please continue based on the context.",
@@ -1408,6 +1696,8 @@ const enUS: AppCopy = {
     confidence: "Alignment confidence",
     prerequisites: "Prerequisites",
     visualNotes: "Visual notes",
+    stuckPoints: "Stuck points",
+    examAngles: "Exam angles",
     sourceText: "Source text",
     ocrEnabled: "Enabled",
     ocrDisabled: "Disabled",

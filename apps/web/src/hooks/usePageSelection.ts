@@ -38,6 +38,11 @@ export type SelectedContext = {
     width: number;
     height: number;
   }>;
+  /** Rendered size of the PDF page layer the selection lives in (px). */
+  pageSize?: {
+    width: number;
+    height: number;
+  };
   viewportScale?: number;
   viewportRotation?: number;
   pdfSource?: SelectedPdfSource;
@@ -103,7 +108,8 @@ export function usePageSelection(args: {
     const isNotesSelection = source.sourceType === "generated-explanation";
     const sourcePdfPageNumber = isPdfSelection ? pdfPageNumber : args.page.page_no;
     const pageRect = pdfPageLayer?.getBoundingClientRect();
-    const selectionRects = Array.from(range.getClientRects())
+    const clientRects = pdfPageLayer ? pdfTextLayerSelectionRects(range, pdfPageLayer) : Array.from(range.getClientRects());
+    const selectionRects = clientRects
       .filter((item) => item.width > 0 && item.height > 0)
       .map((item) => ({
         x: pageRect ? item.left - pageRect.left : item.left,
@@ -127,6 +133,7 @@ export function usePageSelection(args: {
         height: rect.height,
       },
       selectionRects,
+      pageSize: pageRect && pageRect.width > 0 ? { width: pageRect.width, height: pageRect.height } : undefined,
       viewportScale: source.sourceType === "pdf-page" && Number.isFinite(viewportScale) ? viewportScale : undefined,
       viewportRotation: source.sourceType === "pdf-page" && Number.isFinite(viewportRotation) ? viewportRotation : undefined,
       pdfSource: isNotesSelection
@@ -184,6 +191,41 @@ export function usePageSelection(args: {
   }, [args]);
 
   return { toolbar, clearSelection };
+}
+
+/**
+ * Selection boxes that hug the PDF text-layer spans.
+ *
+ * `Range.getClientRects()` reports the inline boxes of the text nodes, whose
+ * height comes from the font's ascent + descent and can be ~40% taller than
+ * the span pdf.js positioned over the glyphs. Using each intersected span's
+ * box (trimmed horizontally to the selected part) gives marker-tight
+ * highlights that line up with the page.
+ */
+function pdfTextLayerSelectionRects(range: Range, pageLayer: HTMLElement): DOMRect[] {
+  const rects: DOMRect[] = [];
+  const spans = pageLayer.querySelectorAll<HTMLElement>(".pdf-text-layer span");
+  for (const span of spans) {
+    if (span.getAttribute("role") === "img" || !range.intersectsNode(span)) continue;
+    const spanRect = span.getBoundingClientRect();
+    if (!spanRect.width || !spanRect.height) continue;
+    const partial = document.createRange();
+    partial.selectNodeContents(span);
+    if (range.compareBoundaryPoints(Range.START_TO_START, partial) > 0) {
+      partial.setStart(range.startContainer, range.startOffset);
+    }
+    if (range.compareBoundaryPoints(Range.END_TO_END, partial) < 0) {
+      partial.setEnd(range.endContainer, range.endOffset);
+    }
+    const partialRects = Array.from(partial.getClientRects()).filter((item) => item.width > 0);
+    partial.detach();
+    if (!partialRects.length) continue;
+    const left = Math.max(spanRect.left, Math.min(...partialRects.map((item) => item.left)));
+    const right = Math.min(spanRect.right, Math.max(...partialRects.map((item) => item.right)));
+    if (right - left <= 0) continue;
+    rects.push(new DOMRect(left, spanRect.top, right - left, spanRect.height));
+  }
+  return rects.length ? rects : Array.from(range.getClientRects());
 }
 
 function shouldIgnoreSelection(element: Element) {

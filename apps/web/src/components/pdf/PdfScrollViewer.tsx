@@ -1,7 +1,10 @@
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import {
   forwardRef,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
@@ -49,6 +52,12 @@ export type PdfScrollViewerProps = {
   onPdfContextReady: (context: PdfContextPayload) => void;
   onPdfPagesTextReady: (pages: PdfContextPage[]) => void;
   onViewerScroll?: () => void;
+  /** Extra layer drawn between the canvas and the text layer (highlights). */
+  renderPageOverlay?: (pageNo: number) => ReactNode;
+  /** Content shown directly under a page (margin notes). */
+  renderPageFooter?: (pageNo: number) => ReactNode;
+  /** Plain click on the page, with the point as page fractions (0..1). */
+  onPageClick?: (pageNo: number, point: { x: number; y: number }) => void;
 };
 
 // ── Constants ────────────────────────────────────────────────
@@ -126,12 +135,16 @@ function PdfPageLayer({
   viewportWidth,
   geometry,
   onGeometryReady,
+  renderPageOverlay,
+  onPageClick,
 }: {
   pdfDocument: PDFDocumentProxy;
   pageNumber: number;
   viewportWidth: number;
   geometry?: PdfPageGeometry | null;
   onGeometryReady: (pageNo: number, geometry: PdfPageGeometry) => void;
+  renderPageOverlay?: (pageNo: number) => ReactNode;
+  onPageClick?: (pageNo: number, point: { x: number; y: number }) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -258,6 +271,18 @@ function PdfPageLayer({
     };
   }, [onGeometryReady, pageNumber, pdfDocument, viewportWidth]);
 
+  const handleLayerClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!onPageClick) return;
+    // A drag-selection also ends in a click; only plain clicks hit-test highlights.
+    if (window.getSelection()?.toString().trim()) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    onPageClick(viewportMeta.pageNumber, {
+      x: (event.clientX - rect.left) / rect.width,
+      y: (event.clientY - rect.top) / rect.height,
+    });
+  }, [onPageClick, viewportMeta.pageNumber]);
+
   return (
     <>
       <div
@@ -270,8 +295,10 @@ function PdfPageLayer({
           height: viewportMeta.height ? `${viewportMeta.height}px` : undefined,
           aspectRatio: `${Math.max(viewportMeta.width, 1)} / ${Math.max(viewportMeta.height, 1)}`,
         }}
+        onClick={handleLayerClick}
       >
         <canvas ref={canvasRef} className="pdf-visual-layer" />
+        {renderPageOverlay?.(viewportMeta.pageNumber)}
         <div ref={textLayerRef} className="textLayer pdf-text-layer" aria-label="PDF 可选文本层" />
       </div>
       {pageStatus === "loading" && <div className="pdf-layer-note">正在渲染 PDF 页面...</div>}
@@ -299,6 +326,9 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
   onPdfContextReady,
   onPdfPagesTextReady,
   onViewerScroll,
+  renderPageOverlay,
+  renderPageFooter,
+  onPageClick,
 }, ref) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pageElementsRef = useRef(new Map<number, HTMLDivElement>());
@@ -599,6 +629,7 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
         <div className="pdf-page-stack" role="list" aria-label={`${documentTitle} PDF 页面`}>
           {pageNumbers.map((pageNo) => {
             const shouldRenderPage = viewMode === "single-page" || Math.abs(pageNo - renderWindowCenter) <= 1;
+            const pageMetrics = pdfPageDisplayMetrics(viewportWidth, pageGeometries[pageNo] || pageGeometryFallback);
             return (
               <div
                 key={pageNo}
@@ -606,6 +637,7 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
                 className={`pdf-page-shell ${pageNo === safePageNumber ? "active" : ""}`}
                 data-page-container-number={pageNo}
                 role="listitem"
+                style={{ "--pdf-page-width": `${Math.round(pageMetrics.width)}px` } as CSSProperties}
               >
                 <div className="pdf-page-label">PDF · p.{pageNo}</div>
                 {shouldRenderPage ? (
@@ -615,10 +647,13 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
                     viewportWidth={viewportWidth}
                     geometry={pageGeometries[pageNo] || pageGeometryFallback}
                     onGeometryReady={rememberPageGeometry}
+                    renderPageOverlay={renderPageOverlay}
+                    onPageClick={onPageClick}
                   />
                 ) : (
                   <PdfPagePlaceholder viewportWidth={viewportWidth} geometry={pageGeometries[pageNo] || pageGeometryFallback} />
                 )}
+                {renderPageFooter?.(pageNo)}
               </div>
             );
           })}

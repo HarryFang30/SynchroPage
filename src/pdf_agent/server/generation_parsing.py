@@ -52,6 +52,32 @@ def _parse_generated_pages(
     *,
     pdf_file_cache: PdfFileCache | None = None,
 ) -> list[dict[str, Any]]:
+    """Parse a batch response, requiring every requested page to be present."""
+    pages, missing = _parse_generated_pages_with_missing(
+        content, body, pdf_file_cache=pdf_file_cache
+    )
+    if missing:
+        raise HttpError(
+            502,
+            f"Generation response did not contain page {missing[0]}",
+            code="invalid_generation_json",
+        )
+    return pages
+
+
+def _parse_generated_pages_with_missing(
+    content: str,
+    body: Mapping[str, Any],
+    *,
+    pdf_file_cache: PdfFileCache | None = None,
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """Parse a batch response into ``(pages, missing_page_numbers)``.
+
+    A batch where the model skipped one page is a partial success, not a
+    failure: the caller returns what parsed and lets the client re-ask only
+    for ``missing``.  ``invalid_generation_json`` is raised only when nothing
+    at all could be parsed.
+    """
     value = _json_from_model_text(content)
     page_inputs = _teaching_generation_pages(body)
     if not page_inputs:
@@ -60,22 +86,37 @@ def _parse_generated_pages(
     if not candidates:
         raise HttpError(502, "Generation response did not contain page JSON objects", code="invalid_generation_json")
 
+    requested = [_int_value(page_input.get("page_no"), index + 1) for index, page_input in enumerate(page_inputs)]
     candidates_by_page_no: dict[int, Mapping[str, Any]] = {}
     for candidate in candidates:
         page_no = _int_value(candidate.get("page_no"), 0)
-        if page_no > 0:
+        if page_no > 0 and page_no not in candidates_by_page_no:
             candidates_by_page_no[page_no] = candidate
+    # Labels that do not intersect the request (e.g. 1..N relative to the batch)
+    # are treated as positional when the counts line up.
+    positional = len(candidates) == len(page_inputs) and not (set(candidates_by_page_no) & set(requested))
 
+    consumed: set[int] = set()
     pages: list[dict[str, Any]] = []
+    missing: list[int] = []
     for index, page_input in enumerate(page_inputs):
-        page_no = _int_value(page_input.get("page_no"), index + 1)
-        candidate = candidates_by_page_no.get(page_no)
-        if candidate is None and index < len(candidates):
+        page_no = requested[index]
+        candidate: Mapping[str, Any] | None = None
+        if positional:
             candidate = candidates[index]
-        if candidate is None:
-            raise HttpError(502, f"Generation response did not contain page {page_no}", code="invalid_generation_json")
+        else:
+            candidate = candidates_by_page_no.get(page_no)
+            if candidate is None and index < len(candidates):
+                slot = candidates[index]
+                # An unlabelled candidate in this slot is taken positionally.
+                if _int_value(slot.get("page_no"), 0) <= 0 and id(slot) not in consumed:
+                    candidate = slot
+        if candidate is None or id(candidate) in consumed:
+            missing.append(page_no)
+            continue
+        consumed.add(id(candidate))
         pages.append(_normalize_generated_page_candidate(candidate, page_input, body, pdf_file_cache=pdf_file_cache))
-    return pages
+    return pages, missing
 
 
 def _first_generated_page_candidate(value: Any) -> Mapping[str, Any] | None:
@@ -152,7 +193,7 @@ def _normalize_generated_page_candidate(
             "text_md": source_text,
             "ocr_used": bool(source.get("ocr_used") or source_input.get("ocr_used") or False),
             "parser": _string_value(source.get("parser") or source_input.get("parser"), "pdfjs"),
-            "page_type": _page_type_value(source.get("page_type")),
+            "page_type": _page_type_value(source.get("page_type") or source_input.get("page_type")),
         },
         "teaching": {
             "output_language": output_language_code,
@@ -163,6 +204,8 @@ def _normalize_generated_page_candidate(
             "contextual_bridge": _string_value(teaching.get("contextual_bridge"), ""),
             "visual_explanations": _string_list(teaching.get("visual_explanations")),
             "formula_explanations": _string_list(teaching.get("formula_explanations")),
+            "stuck_points": _string_list(teaching.get("stuck_points")),
+            "exam_angles": _string_list(teaching.get("exam_angles")),
             "evidence": _evidence_list(evidence),
             "confidence": max(0.0, min(confidence, 1.0)),
             "needs_review": needs_review,

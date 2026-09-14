@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -144,6 +145,8 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.server.model_config_store.load_public())
             elif path == "/api/model-catalog":
                 self._send_json(catalog_summary())
+            elif path == "/api/generate/status":
+                self._send_json(self.server.teaching_gateway.status())
             elif path == "/api/model-catalog/models":
                 provider_id = _string_value((query.get("providerId") or [""])[0], "")
                 if not provider_id:
@@ -268,11 +271,19 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
             raise HttpError(400, "JSON body must be an object", code="invalid_json")
         return _repair_unicode_surrogates(value)
 
-    def _send_json(self, value: Any, *, status: int = 200) -> None:
+    def _send_json(
+        self,
+        value: Any,
+        *,
+        status: int = 200,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         data = _json_bytes_utf8_safe(value, ensure_ascii=False)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        for name, header_value in (headers or {}).items():
+            self.send_header(name, header_value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
@@ -307,7 +318,11 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
             status = 401 if exc.code in {"account_not_found", "refresh_token_invalid"} else 400
             self._send_json({"error": exc.code, "message": str(exc)}, status=status)
         elif isinstance(exc, HttpError):
-            self._send_json({"error": exc.code, "message": str(exc)}, status=exc.status)
+            self._send_json(
+                {"error": exc.code, "message": str(exc)},
+                status=exc.status,
+                headers=_retry_after_header(exc),
+            )
         else:
             self._send_json({"error": "internal_error", "message": redacted_gateway_error(str(exc))}, status=500)
 
@@ -337,6 +352,14 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
         }
         self.server.pdf_file_cache.store(record)
         return {key: record[key] for key in ("filename", "mimeType", "size", "sha256")}
+
+
+def _retry_after_header(exc: HttpError) -> dict[str, str]:
+    """``Retry-After`` (whole seconds) for errors that carry a wait hint."""
+    if exc.retry_after_seconds is None:
+        return {}
+    seconds = max(1, math.ceil(float(exc.retry_after_seconds)))
+    return {"Retry-After": str(seconds)}
 
 
 def create_server(
@@ -389,6 +412,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default=DEFAULT_AGENT_MODEL)
     args = parser.parse_args(argv)
 
+    # Generation diagnostics (retries, coalescing, rate-limit cooldowns, queue
+    # timeouts) are logged at INFO; without a handler they would be dropped.
+    logging.basicConfig(
+        level=os.environ.get("PDF_AGENT_LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
     server = create_server(args.host, args.port, web_root=args.web_root, model=args.model)
     url = f"http://{args.host}:{server.server_address[1]}/"
     print(f"SynchroPage web app: {url}")
@@ -398,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
         pass
     finally:
         server.runner.shutdown()
+        server.teaching_gateway.close()
         server.server_close()
     return 0
 

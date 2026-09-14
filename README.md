@@ -337,6 +337,13 @@ export PDF_AGENT_OPENAI_OAUTH_CLIENT_ID="app_xxx"
 
 OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oauth.yaml)。
 
+## coproxy 网关（gpt-6-astra）
+
+除 OAuth 外，后端预置了 `coproxy` provider（OpenAI Responses 协议，指向自建 coproxy 网关，主力模型 `gpt-6-astra`）。
+在「设置 → Providers」填入 token 并启用，或在启动后端前 `export COPROXY_API_KEY=...`。
+后端会按模型自动夹取 `reasoning.effort`（`gpt-6-astra` 不支持 `none`，`gpt-5.5` 不支持 `max`）。
+完整步骤、验证命令和排障见 [docs/workflows/coproxy-gateway-setup.md](docs/workflows/coproxy-gateway-setup.md)。
+
 安全约定：
 
 - 不要提交 `~/.pdf_agent/openai_oauth.json`。
@@ -355,6 +362,29 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 6. 在 PDF 页面真实可见文字上拖选文本，浮动工具条可「添加到对话 / 解释选中内容 / 总结选中内容」。
 7. 在 Agent 面板中加入当前页、PDF 选区、公式或图片。
 8. 在 composer 中提问，后端会带上当前 PDF context、选中文字、页码位置、上下文 chips、最近对话和图片附件。
+9. 在 Agent 面板底部的 Challenge 条里选择题型和题数，点「生成挑战」：选择题会以居中浮层（约 75% 视口、毛玻璃背景）打开，一次一题，答错先给诊断和提示、允许再答一次，锁定后展示为什么对、可迁移的原则和「考试怎么考」；做完给出首答正确率、按考点的强弱和错题重做队列，错题会记入本文档的薄弱点，下次出题优先针对。
+10. 在 PDF 上拖选文字后，浮动工具条最前面是「高亮」和「写笔记」；每一页下方还有「添加本页笔记」。详见下面的「PDF 高亮与笔记」。
+
+### PDF 高亮与笔记
+
+- **高亮**：选中 PDF 文字后点「高亮」，会以马克笔样式画在文字上（黄 / 绿 / 蓝 / 粉四色，记住上次用的颜色）。高亮位置按页面比例保存，缩放窗口也不会错位。
+- **笔记**：「写笔记」= 高亮 + 立刻打开一张笔记卡；「添加本页笔记」用于不针对某段文字的整页笔记。笔记卡直接展开在对应页面的正下方，像在讲义页边写字一样：不折叠、随时可编辑、边写边保存（600 ms 防抖），`Esc` 或 `⌘/Ctrl+Enter` 结束编辑，删除需要点两次确认。
+- **导航**：点页面上的高亮会定位并聚焦对应笔记；讲解区的「笔记」标签页按页列出本文档全部高亮与笔记，点任一条跳回原页，右上角可导出为 Markdown。
+- **保存**：笔记存在 IndexedDB 的 `annotations` 表（schema v4），随文档删除而删除，随工作区一起导出 / 导入。
+
+### 讲解的结构
+
+逐页讲解由 `gpt-6-astra` 生成，目标是「补讲解」而不是复述幻灯片。每页讲解固定使用这些小节（按页面类型取舍）：
+`这页在讲什么` / `容易卡住的地方`（误区 → 化解）/ `公式怎么读` / `图表怎么看` / `解题入口` / `自测清单` / `考试怎么考`（题型 / 陷阱 / 评分点）/ `前后衔接`。
+封面、目录、空白页只写一两行。页面 JSON 里同时带有 `stuck_points` 和 `exam_angles` 两个数组，「结构」标签页会展示，测验出题会把它们作为干扰项素材。
+Prompt 定义在 `src/pdf_agent/server/constants.py` 与 `payload_builders.py`，中文版契约见 [config/prompts/course_agent.prompt.yaml](config/prompts/course_agent.prompt.yaml)。
+
+### 长 PDF 一键生成的稳定性
+
+- 后端对 Responses 类 provider 走流式读取：空闲 120 秒才算超时，整体截止时间按 `reasoning.effort` 计算（low 180 s … xhigh/max 600 s），并按 effort 设置 `max_output_tokens`。
+- 相同页的并发请求会合并成一次上游调用；排队超过 30 秒返回 `queue_timeout`；429 的 `Retry-After` 会被全局遵守；返回的 JSON 不合法时按低一档 effort 修复重试一次；批量结果部分成功时返回 `missing` 页码。
+- 前端按失败原因决定重试计划：超时 / 网络错误不会升级成附 PDF 的重型请求，限流走共享冷却门，只有模型明确标记内容过弱才升级一次；并发窗口按 AIMD 自适应；「停止」会把进行中的页恢复为草稿而不是失败。
+- 数值策略集中在 `src/pdf_agent/server/generation_policy.py`，说明见 [docs/workflows/coproxy-gateway-setup.md](docs/workflows/coproxy-gateway-setup.md)。
 
 前端发送给 `/api/agent/chat` 的 payload 包含：
 
@@ -370,7 +400,7 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 
 ## 本地保存与恢复
 
-前端使用 Dexie + IndexedDB 作为 local-first persistence layer。不要把 PDF、聊天或生成内容存进 `localStorage`；`localStorage` 只保存很小的 fallback，例如 `lastWorkspaceId` 和 UI preference fallback。
+前端使用 Dexie + IndexedDB 作为 local-first persistence layer（schema v4 起包含 `annotations` 表，保存 PDF 高亮与笔记）。不要把 PDF、聊天或生成内容存进 `localStorage`；`localStorage` 只保存很小的 fallback，例如 `lastWorkspaceId` 和 UI preference fallback。
 
 SynchroPage 使用全新的本地存储命名空间。旧版本地工作区不会迁移，刷新或重新打开后会从新的 IndexedDB / localStorage key 开始保存。
 
@@ -440,6 +470,17 @@ Settings → 存储 提供：
 ```text
 GET    /api/health
 POST   /api/agent/chat
+POST   /api/generate/page
+POST   /api/generate/pages      部分成功时返回 pages + missing
+GET    /api/generate/status     活跃 / 排队 / 冷却 / 截止时间
+GET    /api/model-config
+POST   /api/model-config
+POST   /api/model-config/models
+POST   /api/model-config/preview
+POST   /api/model-config/check
+GET    /api/model-catalog
+GET    /api/model-catalog/models
+POST   /api/pdf/cache
 GET    /auth/openai/status
 POST   /auth/openai/start
 POST   /auth/openai/poll

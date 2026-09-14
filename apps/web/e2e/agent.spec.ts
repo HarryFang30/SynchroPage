@@ -68,7 +68,7 @@ test.describe("Agent Panel", () => {
     expect(overflow.right).toBeLessThanOrEqual(1);
   });
 
-  test("challenge panel sends the current-page challenge coach prompt", async ({ page }) => {
+  test("challenge panel sends the quiz v2 coach prompt and runs the overlay", async ({ page }) => {
     await page.unroute("**/api/**");
     let requestPayload: {
       input?: string;
@@ -78,45 +78,77 @@ test.describe("Agent Panel", () => {
       reasoningEffort?: string;
     } | null = null;
     const challengeContent = String.raw`{
-      "type": "synchropage.challenge_quiz.v1",
+      "type": "synchropage.challenge_quiz.v2",
       "title": "Attention Mechanism Quiz",
-      "question_count": 2,
+      "set_goal": "分清动态加权与硬选择",
+      "document_id": "doc-e2e",
+      "skills": [
+        {"id": "attention_core", "label": "注意力核心机制"},
+        {"id": "scaled_dot_product", "label": "缩放点积打分"}
+      ],
       "questions": [
         {
+          "id": "q1",
+          "skill_id": "attention_core",
           "knowledge_type": "concept",
-          "challenge_type": "概念边界题",
-          "question": "什么是注意力机制的核心思想？",
+          "bloom": "analyze",
+          "difficulty": 2,
+          "stem": "什么是注意力机制的核心思想？",
           "options": [
-            {"id": "A", "text": "将所有输入序列无差别地压缩成一个固定长度向量。"},
-            {"id": "B", "text": "随机丢弃一部分神经元以防止过拟合。"},
-            {"id": "C", "text": "根据当前任务动态分配不同输入位置的权重。"},
-            {"id": "D", "text": "通过固定窗口卷积提取局部空间特征。"}
+            {"id": "A", "text": "将所有输入序列无差别地压缩成一个固定长度向量。", "correct": false, "misconception": "把注意力当成一次性压缩。", "diagnosis": "选 A 通常是因为把编码器末状态当成了全部信息。", "fix": "注意力是逐位置加权，不是一次压缩。"},
+            {"id": "B", "text": "随机丢弃一部分神经元以防止过拟合。", "correct": false, "misconception": "把 dropout 误当成注意力。", "diagnosis": "选 B 通常是因为把正则化手段和信息选择混在一起。", "fix": "dropout 改的是训练噪声，不是权重分配。"},
+            {"id": "C", "text": "根据当前任务动态分配不同输入位置的权重。", "correct": true, "diagnosis": "对，关键线索是动态分配权重。"},
+            {"id": "D", "text": "通过固定窗口卷积提取局部空间特征。", "correct": false, "misconception": "把卷积的局部感受野当成注意力。", "diagnosis": "选 D 通常是因为忽略了权重要依赖查询。", "fix": "卷积核固定，注意力权重随输入变化。"}
           ],
           "correct_option_id": "C",
-          "feedback": {
-            "correct": "对，关键是动态加权。",
-            "incorrect": "这个选项没有抓住注意力的动态权重分配。"
+          "hint": "先看这一页里权重到底由什么决定。",
+          "explanation": {
+            "why_correct": "注意力根据查询和上下文决定关注哪些输入。",
+            "core_idea": "权重由相关性决定，而不是位置固定。"
           },
-          "explanation": "注意力机制允许模型根据查询和上下文决定关注哪些输入。",
-          "follow_up": "如果所有位置权重都相同，还算有效注意力吗？"
+          "exam_relevance": {
+            "how_tested": "考试常给一组权重，问模型此刻关注哪个 token。",
+            "typical_trap": "把 softmax 权重理解成只能选一个 token。",
+            "weight": "high"
+          },
+          "evidence": {"page": 2, "anchor": "图 1", "quote": "动态加权"},
+          "follow_up": "如果所有位置权重都相同，还算有效注意力吗？",
+          "bridge": "先说清 softmax 输出的是一组和为 1 的权重。"
         },
         {
+          "id": "q2",
+          "skill_id": "scaled_dot_product",
           "knowledge_type": "formula",
-          "challenge_type": "适用条件题",
-          "question": "在 \vec{q}\cdot\vec{k} 的打分里，哪句话最准确？",
+          "bloom": "apply",
+          "difficulty": 4,
+          "stem": "在 \vec{q}\cdot\vec{k} 的打分里，哪句话最准确？",
           "options": [
-            {"id": "A", "text": "分数越大，softmax 后该位置通常权重越高。"},
-            {"id": "B", "text": "\vec{q} 与 \vec{k} 必须完全相同才有注意力。"},
-            {"id": "C", "text": "所有 token 的权重必须相等。"},
-            {"id": "D", "text": "\frac{1}{\sqrt{d_k}} 会删除无关 token。"}
+            {"id": "A", "text": "分数越大，softmax 后该位置通常权重越高。", "correct": true, "diagnosis": "对，点积先打相关性分，再归一化成权重。"},
+            {"id": "B", "text": "\vec{q} 与 \vec{k} 必须完全相同才有注意力。", "correct": false, "misconception": "把相关性打分当成硬匹配。", "diagnosis": "选 B 通常是因为忽略了点积是连续值。", "fix": "点积衡量方向一致程度，不是相等判定。"},
+            {"id": "C", "text": "\frac{1}{\sqrt{d_k}} 会删除无关 token。", "correct": false, "misconception": "把缩放项当成筛选器。", "diagnosis": "选 C 通常是因为把量级控制误当成硬删除。", "fix": "缩放只压 logits 量级。"}
           ],
           "correct_option_id": "A",
-          "feedback": {
-            "correct": "对，点积先给相关性打分，再归一化成权重。",
-            "incorrect": "这里容易把相关性打分误解成硬匹配或硬删除。"
+          "hint": "先看打分之后还有哪一步。",
+          "explanation": {
+            "why_correct": "缩放点积注意力用 \frac{\vec{q}\cdot\vec{k}}{\sqrt{d_k}} 作为 logits，再经 softmax 得到权重。",
+            "core_idea": "打分、归一化、加权求和是三个分开的阶段。"
           },
-          "explanation": "缩放点积注意力用 \frac{\vec{q}\cdot\vec{k}}{\sqrt{d_k}} 作为 logits，再经 softmax 得到权重。",
-          "follow_up": "如果不除以 \sqrt{d_k}，大维度下 softmax 会有什么风险？"
+          "exam_relevance": {
+            "how_tested": "考试常让你比较两个 token 的未归一化打分。",
+            "typical_trap": "忽略缩放项的适用原因。",
+            "weight": "medium"
+          },
+          "evidence": {"page": 2, "anchor": "式 (3)", "quote": "缩放点积"},
+          "follow_up": "如果不除以 \sqrt{d_k}，大维度下 softmax 会有什么风险？",
+          "bridge": "先确认 softmax 是单调的。",
+          "retry_variant": {
+            "stem": "同一组打分里，把某个 logit 调大会发生什么？",
+            "options": [
+              {"id": "A", "text": "该位置的注意力权重上升。", "correct": true},
+              {"id": "B", "text": "所有位置的权重保持不变。", "correct": false}
+            ],
+            "correct_option_id": "A"
+          }
         }
       ]
     }`;
@@ -138,36 +170,134 @@ test.describe("Agent Panel", () => {
 
     await activateAgent(page);
     await expect(page.locator(".challenge-panel")).toBeVisible();
+    // The overlay must not exist before a quiz message does.
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await page.locator(".challenge-count-option").filter({ hasText: "5" }).click();
     await page.locator(".challenge-start").click();
 
     await expect(page.locator(".user-message")).toContainText(/Challenge/i);
-    const quiz = page.locator(".challenge-quiz-card");
-    await expect(quiz).toBeVisible({ timeout: 10_000 });
-    await expect(quiz).toContainText("Attention Mechanism Quiz");
-    await expect(quiz.locator(".challenge-quiz-count")).toHaveText("1/2");
-    await expect(quiz.locator(".challenge-option")).toHaveCount(4);
-    await quiz.locator(".challenge-option").filter({ hasText: "随机丢弃" }).click();
-    await expect(quiz.locator(".challenge-option.incorrect")).toContainText("B");
-    await expect(quiz.locator(".challenge-option.correct")).toContainText("C");
-    await expect(quiz.locator(".challenge-feedback")).toContainText("正确选项");
-    await expect(quiz.locator(".challenge-feedback")).toContainText("追问");
-    await expect(quiz.locator(".challenge-next")).toContainText("下一题");
-    await quiz.locator(".challenge-next").click();
-    await expect(quiz.locator(".challenge-quiz-count")).toHaveText("2/2");
-    await expect(quiz).toContainText("哪句话最准确");
-    await quiz.locator(".challenge-option").filter({ hasText: "softmax" }).click();
-    await expect(quiz.locator(".challenge-option.correct")).toContainText("A");
-    await expect(quiz.locator(".challenge-next")).toContainText("再来一组");
+
+    // The overlay opens itself once the quiz message completes.
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+    await expect(dialog).toContainText("分清动态加权与硬选择");
+    await expect(dialog.locator(".quiz-progress-count")).toHaveText("1 / 2");
+    await expect(dialog.locator(".quiz-option")).toHaveCount(4);
+    await expect(dialog).toContainText("注意力核心机制");
+
+    // A wrong first pick diagnoses the choice, reveals the hint and leaves a second attempt.
+    await dialog.locator(".quiz-option").filter({ hasText: "随机丢弃" }).click();
+    await expect(dialog.locator(".quiz-nudge")).toContainText("把正则化手段和信息选择混在一起");
+    await expect(dialog.locator(".quiz-hint-text")).toContainText("权重到底由什么决定");
+    await expect(dialog.locator(".quiz-feedback")).toHaveCount(0);
+    await expect(dialog.locator(".quiz-option").filter({ hasText: "动态分配" })).toBeEnabled();
+
+    // The second pick locks the question and shows the evidence-based explanation.
+    await dialog.locator(".quiz-option").filter({ hasText: "动态分配" }).click();
+    await expect(dialog.locator(".quiz-feedback")).toBeVisible();
+    await expect(dialog.locator(".quiz-option.correct")).toContainText("动态分配");
+    await expect(dialog.locator(".quiz-option.incorrect")).toContainText("随机丢弃");
+    await expect(dialog.locator(".quiz-feedback")).toContainText("正确选项：C");
+    await expect(dialog.locator(".quiz-feedback")).toContainText("权重由相关性决定");
+    await expect(dialog.locator(".quiz-feedback")).toContainText("追问 AI");
+
+    // "考试怎么考" stays collapsed until asked for.
+    await expect(dialog).not.toContainText("考试常给一组权重");
+    await dialog.locator(".quiz-exam-toggle").click();
+    await expect(dialog.locator(".quiz-exam-body")).toContainText("考试常给一组权重");
+
+    await dialog.locator(".quiz-next").click();
+    await expect(dialog.locator(".quiz-progress-count")).toHaveText("2 / 2");
+    await expect(dialog).toContainText("哪句话最准确");
+    await expect(dialog.locator(".quiz-option")).toHaveCount(3);
+
+    await dialog.locator(".quiz-option").filter({ hasText: "softmax 后该位置" }).click();
+    await expect(dialog.locator(".quiz-option.correct")).toContainText("softmax 后该位置");
+    await expect(dialog.locator(".quiz-next")).toContainText("看总结");
+    await dialog.locator(".quiz-next").click();
+
+    // Summary: local scoring, per-skill status, missed list and the retry queue.
+    await expect(dialog.locator(".quiz-summary-score")).toContainText("1 / 2 首答正确");
+    await expect(dialog.locator(".quiz-skill-list")).toContainText("注意力核心机制");
+    await expect(dialog.locator(".quiz-skill-status.weak")).toHaveCount(1);
+    await expect(dialog.locator(".quiz-skill-status.strong")).toHaveCount(1);
+    await expect(dialog.locator(".quiz-missed-list")).toContainText("把 dropout 误当成注意力");
+    await expect(dialog.locator(".quiz-retry-start")).toContainText("重做错题 (1)");
+
+    // Esc closes the overlay; the in-thread card reopens it on the summary.
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    const threadCard = page.locator(".quiz-thread-card");
+    await expect(threadCard).toBeVisible();
+    await expect(threadCard).toContainText("Attention Mechanism Quiz");
+    await expect(threadCard.locator(".quiz-thread-score")).toContainText("1 / 2 首答正确");
+    await threadCard.locator(".quiz-thread-open").click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("dialog").locator(".quiz-retry-start")).toContainText("重做错题 (1)");
+
+    // The retry queue clears once the missed question is answered correctly.
+    await dialog.locator(".quiz-retry-start").click();
+    await expect(dialog.locator(".quiz-retry-heading")).toContainText("错题重做");
+    await expect(dialog).toContainText("什么是注意力机制的核心思想");
+    await dialog.locator(".quiz-option").filter({ hasText: "动态分配" }).click();
+    await expect(dialog.locator(".quiz-feedback")).toContainText("判断正确");
+    await dialog.locator(".quiz-next").click();
+    await expect(dialog.locator(".quiz-retry-cleared")).toContainText("本轮错题已清零");
+
+    // The prompt carries the v2 contract and the challenge markers the coach relies on.
     await expect.poll(() => requestPayload?.input || "").toContain("你是我的理工科 PPT 挑战教练");
     await expect.poll(() => requestPayload?.input || "").toContain("当前挑战模式");
     await expect.poll(() => requestPayload?.input || "").toContain("当前挑战数量：5");
     await expect.poll(() => requestPayload?.input || "").toContain("questions 数组");
-    await expect.poll(() => requestPayload?.input || "").toContain("synchropage.challenge_quiz.v1");
+    await expect.poll(() => requestPayload?.input || "").toContain("synchropage.challenge_quiz.v2");
+    await expect.poll(() => requestPayload?.input || "").toContain("exam_relevance");
+    await expect.poll(() => requestPayload?.input || "").toContain("misconception");
+    await expect.poll(() => requestPayload?.input || "").toContain("retry_variant");
+    await expect.poll(() => requestPayload?.input || "").toContain("本页讲解已识别的易卡点");
+    await expect.poll(() => requestPayload?.input || "").toContain("我的历史薄弱点");
     await expect.poll(() => requestPayload?.modelProviderId || "").toBe("codex_oauth");
     await expect.poll(() => requestPayload?.model || "").toBe("gpt-5.5");
     await expect.poll(() => requestPayload?.reasoningEffort || "").toBe("xhigh");
     await expect.poll(() => requestPayload?.messages?.at(-1)?.content || "").toContain("Challenge");
+  });
+
+  test("quiz overlay still renders a legacy v1 quiz payload", async ({ page }) => {
+    await page.unroute("**/api/**");
+    const legacyContent = String.raw`{
+      "type": "synchropage.challenge_quiz.v1",
+      "title": "Legacy Quiz",
+      "question_count": 1,
+      "questions": [
+        {
+          "knowledge_type": "concept",
+          "challenge_type": "概念边界题",
+          "question": "旧格式题干还能渲染吗？",
+          "options": [
+            {"id": "A", "text": "可以，映射到新的 overlay。"},
+            {"id": "B", "text": "不行，会直接报错。"}
+          ],
+          "correct_option_id": "A",
+          "feedback": {
+            "correct": "对，v1 会被映射成 v2 的形状。",
+            "incorrect": "这个选项忽略了向后兼容。"
+          },
+          "explanation": "解析层保留了 v1 到 v2 的映射。",
+          "follow_up": "那 v1 的 feedback 去哪了？"
+        }
+      ]
+    }`;
+    await mockApi(page, { "/api/agent/chat": { content: legacyContent } });
+
+    await activateAgent(page);
+    await page.locator(".challenge-start").click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await expect(dialog).toContainText("旧格式题干还能渲染吗");
+    await dialog.locator(".quiz-option").filter({ hasText: "映射到新的 overlay" }).click();
+    await expect(dialog.locator(".quiz-feedback")).toContainText("v1 会被映射成 v2 的形状");
+    await expect(dialog.locator(".quiz-feedback")).toContainText("解析层保留了 v1 到 v2 的映射");
   });
 
   test("challenge problem mode renders a typical major problem card", async ({ page }) => {

@@ -10,7 +10,11 @@ from unittest import mock
 
 from pdf_agent.server.agent_gateway import AgentChatGateway
 from pdf_agent.server.errors import HttpError
-from pdf_agent.server.model_config import ModelConfigStore, default_model_config, normalize_model_config
+from pdf_agent.server.model_config import (
+    ModelConfigStore,
+    default_model_config,
+    normalize_model_config,
+)
 from pdf_agent.server.model_gateway import (
     check_provider_model,
     extract_provider_text,
@@ -411,3 +415,200 @@ class ModelProviderGatewayTest(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertNotIn("apiKey", provider)
             self.assertEqual(calls[0][2]["Authorization"], "Bearer sk-secret")
+
+
+class CoproxyProviderPresetTest(unittest.TestCase):
+    def test_default_config_includes_coproxy_responses_preset(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=False):
+            for name in ("PDF_AGENT_COPROXY_API_KEY", "COPROXY_API_KEY", "COPROXY_TOKEN"):
+                import os
+
+                os.environ.pop(name, None)
+            config = default_model_config()
+        coproxy = next(provider for provider in config["providers"] if provider["id"] == "coproxy")
+        self.assertEqual(coproxy["type"], "openai-responses")
+        self.assertEqual(coproxy["defaultChatEndpoint"], "openai-responses")
+        self.assertTrue(coproxy["apiHost"].endswith("/v1"))
+        self.assertIn("gpt-6-astra", coproxy["models"])
+        self.assertTrue(coproxy["apiKeyRequired"])
+        self.assertFalse(coproxy["enabled"], "must stay disabled without a key")
+        self.assertNotIn("apiKey", coproxy)
+        # Prompt caching is advertised as a provider capability so the
+        # document prefix is not re-uploaded with every per-page request.
+        self.assertTrue(coproxy["apiFeatures"]["promptCache"])
+
+    def test_environment_key_enables_coproxy_and_is_reported_as_present(self) -> None:
+        with mock.patch.dict("os.environ", {"COPROXY_API_KEY": "env-secret"}):
+            config = normalize_model_config(None)
+            coproxy = next(provider for provider in config["providers"] if provider["id"] == "coproxy")
+            self.assertTrue(coproxy["enabled"])
+            self.assertEqual(coproxy["apiKey"], "")
+            from pdf_agent.server.model_config import (
+                provider_api_key,
+                public_model_config,
+            )
+
+            self.assertEqual(provider_api_key(coproxy), "env-secret")
+            public = public_model_config(config)
+            public_coproxy = next(provider for provider in public["providers"] if provider["id"] == "coproxy")
+            self.assertTrue(public_coproxy["hasApiKey"])
+            self.assertNotIn("apiKey", public_coproxy)
+
+    def test_stored_provider_inherits_new_preset_capability_flags(self) -> None:
+        # A config written before a capability existed must still pick it up,
+        # while an explicit user override keeps winning.
+        config = normalize_model_config(
+            {
+                "selectedProviderId": "coproxy",
+                "providers": [
+                    {
+                        "id": "coproxy",
+                        "apiKey": "stored-secret",
+                        "enabled": True,
+                        "apiFeatures": {"pdfInputFile": False},
+                    }
+                ],
+            }
+        )
+        coproxy = next(provider for provider in config["providers"] if provider["id"] == "coproxy")
+        self.assertTrue(coproxy["apiFeatures"]["promptCache"])
+        self.assertFalse(coproxy["apiFeatures"]["pdfInputFile"])
+
+    def test_stored_key_survives_public_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ModelConfigStore(Path(tmp) / "models.json")
+            public = store.save(
+                {
+                    "selectedProviderId": "coproxy",
+                    "providers": [{"id": "coproxy", "apiKey": "stored-secret", "enabled": True}],
+                    "defaults": {"teachingQuality": {"providerId": "coproxy", "model": "gpt-6-astra"}},
+                }
+            )
+            self.assertEqual(public["selectedProviderId"], "coproxy")
+            self.assertEqual(public["defaults"]["teachingQuality"], {"providerId": "coproxy", "model": "gpt-6-astra"})
+            store.save({**public, "providers": [{**next(p for p in public["providers"] if p["id"] == "coproxy"), "models": ["gpt-6-astra"]}]})
+            private = store.load_private()
+            coproxy = next(provider for provider in private["providers"] if provider["id"] == "coproxy")
+            self.assertEqual(coproxy["apiKey"], "stored-secret")
+            self.assertEqual(coproxy["type"], "openai-responses")
+
+
+class ReasoningEffortClampTest(unittest.TestCase):
+    def test_supported_efforts_by_model_family(self) -> None:
+        from pdf_agent.server.model_gateway import supported_reasoning_efforts
+
+        self.assertEqual(supported_reasoning_efforts("gpt-6-astra"), ["low", "medium", "high", "xhigh", "max"])
+        self.assertEqual(supported_reasoning_efforts("gpt-5.5"), ["none", "low", "medium", "high", "xhigh"])
+        self.assertEqual(supported_reasoning_efforts("gemini-3.8-flash"), ["low", "medium", "high"])
+        self.assertEqual(supported_reasoning_efforts("some-unknown-model"), [])
+
+    def test_clamp_rewrites_unsupported_effort_to_nearest(self) -> None:
+        from pdf_agent.server.model_gateway import clamp_reasoning_effort_for_model
+
+        self.assertEqual(clamp_reasoning_effort_for_model({"model": "gpt-6-astra", "reasoning": {"effort": "none"}})["reasoning"]["effort"], "low")
+        self.assertEqual(clamp_reasoning_effort_for_model({"model": "gpt-5.5", "reasoning": {"effort": "max"}})["reasoning"]["effort"], "xhigh")
+        self.assertEqual(clamp_reasoning_effort_for_model({"model": "gemini-3.8-flash", "reasoning": {"effort": "xhigh"}})["reasoning"]["effort"], "high")
+        self.assertEqual(clamp_reasoning_effort_for_model({"model": "gpt-6-astra", "reasoning": {"effort": "high", "summary": "auto"}})["reasoning"], {"effort": "high", "summary": "auto"})
+        self.assertEqual(clamp_reasoning_effort_for_model({"model": "mystery", "reasoning": {"effort": "none"}})["reasoning"]["effort"], "none")
+        self.assertNotIn("reasoning", clamp_reasoning_effort_for_model({"model": "gpt-6-astra"}))
+
+    def test_gateway_retries_once_with_effort_from_upstream_error(self) -> None:
+        from pdf_agent.server.model_gateway import post_responses_payload_for_body
+
+        calls: list[dict[str, Any]] = []
+
+        async def fake_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, str]:
+            calls.append(payload)
+            if payload["reasoning"]["effort"] == "xhigh":
+                raise HttpError(
+                    400,
+                    "Unsupported value: 'xhigh' is not supported with the 'mystery-model' model. Supported values are: 'low', 'medium', and 'high'.",
+                    code="upstream_error",
+                )
+            return json.dumps({"output": [{"type": "message", "content": [{"type": "output_text", "text": "OK"}]}]}), "application/json"
+
+        with mock.patch.dict("os.environ", {"COPROXY_API_KEY": "env-secret"}):
+            result = _runner(
+                post_responses_payload_for_body(
+                    manager=mock.MagicMock(),
+                    config_store=None,
+                    body={"modelProviderId": "coproxy", "model": "mystery-model"},
+                    default_key="teachingQuality",
+                    legacy_model="gpt-5.5",
+                    responses_payload={"model": "mystery-model", "input": "hi", "reasoning": {"effort": "xhigh"}},
+                    post_with_retries=fake_post,
+                    codex_include_reasoning_encrypted_content=False,
+                )
+            )
+        self.assertEqual([call["reasoning"]["effort"] for call in calls], ["xhigh", "high"])
+        self.assertEqual(calls[0]["store"], False)
+        self.assertEqual(result.provider_id, "coproxy")
+        self.assertTrue(result.payload.get("_synchropage_reasoning_effort_fallback"))
+        self.assertEqual(extract_provider_text(result.text, result.content_type), "OK")
+
+    def test_gateway_sends_bearer_key_from_environment(self) -> None:
+        from pdf_agent.server.model_gateway import post_responses_payload_for_body
+
+        seen: dict[str, Any] = {}
+
+        async def fake_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, str]:
+            seen["url"] = url
+            seen["headers"] = headers
+            seen["payload"] = payload
+            return json.dumps({"output": [{"type": "message", "content": [{"type": "output_text", "text": "OK"}]}]}), "application/json"
+
+        with mock.patch.dict("os.environ", {"COPROXY_API_KEY": "env-secret"}):
+            _runner(
+                post_responses_payload_for_body(
+                    manager=mock.MagicMock(),
+                    config_store=None,
+                    body={"modelProviderId": "coproxy", "model": "gpt-6-astra", "reasoningEffort": "none"},
+                    default_key="teachingQuality",
+                    legacy_model="gpt-5.5",
+                    responses_payload={"model": "gpt-6-astra", "input": "hi", "reasoning": {"effort": "none"}, "prompt_cache_key": "k"},
+                    post_with_retries=fake_post,
+                    codex_include_reasoning_encrypted_content=False,
+                )
+            )
+        self.assertTrue(seen["url"].startswith("https://us.taohuang.info/v1/responses"))
+        self.assertEqual(seen["headers"], {"Authorization": "Bearer env-secret"})
+        self.assertEqual(seen["payload"]["reasoning"]["effort"], "low")
+        # coproxy advertises apiFeatures.promptCache, so the cache fields stay
+        # on the payload (the 400/422 strip-and-retry fallback still covers a
+        # gateway that changes its mind).
+        self.assertEqual(seen["payload"]["prompt_cache_key"], "k")
+        # Long-PDF stability: responses are streamed and output-bounded.
+        self.assertTrue(seen["payload"]["stream"])
+        self.assertEqual(seen["payload"]["max_output_tokens"], 16000)
+
+    def test_prompt_cache_fields_are_stripped_for_providers_without_the_capability(self) -> None:
+        from pdf_agent.server.model_gateway import _strip_nonportable_responses_fields
+
+        payload = {
+            "model": "gpt-6-astra",
+            "input": "hi",
+            "reasoning": {"effort": "high"},
+            "prompt_cache_key": "k",
+            "prompt_cache_retention": "24h",
+            "include": ["reasoning.encrypted_content"],
+        }
+        without_capability = _strip_nonportable_responses_fields(payload, provider={"id": "other"})
+        self.assertNotIn("prompt_cache_key", without_capability)
+        self.assertNotIn("prompt_cache_retention", without_capability)
+        self.assertNotIn("include", without_capability)
+        self.assertTrue(without_capability["stream"])
+        self.assertFalse(without_capability["store"])
+        self.assertEqual(without_capability["max_output_tokens"], 24000)
+
+        with_capability = _strip_nonportable_responses_fields(
+            payload, provider={"id": "coproxy", "apiFeatures": {"promptCache": True}}
+        )
+        self.assertEqual(with_capability["prompt_cache_key"], "k")
+        self.assertEqual(with_capability["prompt_cache_retention"], "24h")
+
+        # An explicit budget (e.g. a batch budget set by the teaching gateway)
+        # is never overwritten.
+        preset = _strip_nonportable_responses_fields(
+            {**payload, "max_output_tokens": 48000}, provider=None
+        )
+        self.assertEqual(preset["max_output_tokens"], 48000)

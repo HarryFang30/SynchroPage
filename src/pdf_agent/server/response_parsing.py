@@ -86,6 +86,51 @@ def _extract_prompt_cache_usage(text: str, content_type: str) -> dict[str, Any]:
     return metadata
 
 
+def response_incomplete_reason(text: str, content_type: str) -> str:
+    """Return the Responses ``incomplete_details.reason``, or ``""``.
+
+    The OpenAI Responses API reports a response that stopped early as
+    ``{"status": "incomplete", "incomplete_details": {"reason": ...}}`` —
+    most importantly ``max_output_tokens``, which silently truncates the
+    generated JSON.  Both the plain JSON body and the SSE
+    ``response.completed`` / ``response.incomplete`` payloads are checked.
+    """
+    if not text.strip():
+        return ""
+    if _is_event_stream(text, content_type):
+        for event in _iter_event_stream_payloads(text):
+            candidate = event.get("response") if isinstance(event.get("response"), Mapping) else event
+            reason = _incomplete_reason_from_response(candidate)
+            if reason:
+                return reason
+        return ""
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return ""
+    if isinstance(value, Mapping) and isinstance(value.get("response"), Mapping):
+        reason = _incomplete_reason_from_response(value["response"])
+        if reason:
+            return reason
+    return _incomplete_reason_from_response(value)
+
+
+def _incomplete_reason_from_response(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    if str(value.get("status") or "").lower() != "incomplete":
+        return ""
+    details = value.get("incomplete_details")
+    if isinstance(details, Mapping):
+        return str(details.get("reason") or "").strip()
+    return "incomplete"
+
+
+def _is_event_stream(text: str, content_type: str) -> bool:
+    stripped = text.lstrip()
+    return "text/event-stream" in content_type or stripped.startswith(("event:", "data:"))
+
+
 def _find_response_usage(value: Any) -> Mapping[str, Any] | None:
     """Recursively locate ``usage`` dict inside a response object."""
     if not isinstance(value, Mapping):

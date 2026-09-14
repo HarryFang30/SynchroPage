@@ -1,5 +1,6 @@
 import Dexie, { type Table } from "dexie";
 import {
+  type AnnotationRecord,
   type ChatMessageRecord,
   type ChatThreadRecord,
   type CourseProjectRecord,
@@ -10,7 +11,7 @@ import {
   type SettingsRecord,
   type WorkspaceRecord,
 } from "./schema";
-import { upgradeToV2, upgradeToV3 } from "./migrations";
+import { upgradeToV2, upgradeToV3, upgradeToV4 } from "./migrations";
 
 class SynchroPagePersistenceDb extends Dexie {
   workspaces!: Table<WorkspaceRecord, string>;
@@ -22,6 +23,7 @@ class SynchroPagePersistenceDb extends Dexie {
   chatMessages!: Table<ChatMessageRecord, string>;
   selectedContexts!: Table<SelectedContextRecord, string>;
   settings!: Table<SettingsRecord, string>;
+  annotations!: Table<AnnotationRecord, string>;
 
   constructor() {
     super("synchropage-reader", { chromeTransactionDurability: "strict" });
@@ -65,6 +67,21 @@ class SynchroPagePersistenceDb extends Dexie {
         settings: "id, updatedAt",
       })
       .upgrade(upgradeToV3);
+
+    this.version(4)
+      .stores({
+        workspaces: "id, updatedAt, lastOpenedAt, activeProjectId, activeDocumentId, activeThreadId",
+        courseProjects: "id, workspaceId, updatedAt, lastOpenedAt, activeDocumentId, [workspaceId+updatedAt]",
+        documents: "id, workspaceId, projectId, updatedAt, lastOpenedAt, pdfBlobId, [workspaceId+updatedAt], [projectId+updatedAt]",
+        fileBlobs: "id, workspaceId, documentId, createdAt",
+        generatedPages: "id, workspaceId, documentId, generatedPageIndex, sourcePdfPageNumber, [documentId+generatedPageIndex]",
+        chatThreads: "id, workspaceId, documentId, updatedAt, [workspaceId+updatedAt]",
+        chatMessages: "id, threadId, workspaceId, documentId, createdAt, updatedAt, [threadId+createdAt]",
+        selectedContexts: "id, workspaceId, documentId, createdAt",
+        settings: "id, updatedAt",
+        annotations: "id, workspaceId, documentId, pageNumber, updatedAt, [documentId+pageNumber]",
+      })
+      .upgrade(upgradeToV4);
   }
 }
 

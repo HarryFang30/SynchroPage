@@ -207,6 +207,20 @@
   text-overflow: ellipsis;
 }
 
+/* 154px truncated most English save messages ("Restored local workspace",
+   "Workspace exported", "Failed to restore workspace"); every Chinese message
+   fits, so only English gets the extra room and the zh topbar is unchanged.
+   Capped so the pill still yields before the topbar runs out of width. */
+:lang(en) .save-status-pill {
+  max-width: 188px;
+}
+
+@media (max-width: 1000px) {
+  :lang(en) .save-status-pill {
+    max-width: 154px;
+  }
+}
+
 .save-status-pill.saved {
   color: color-mix(in oklch, var(--muted) 78%, var(--brand));
 }

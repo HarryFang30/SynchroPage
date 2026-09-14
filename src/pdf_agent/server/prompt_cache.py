@@ -21,6 +21,12 @@ from typing import Any
 
 from pdf_agent.server.constants import MODEL_GPT_54, MODEL_GPT_55
 from pdf_agent.server.errors import HttpError
+from pdf_agent.server.generation_policy import (
+    RETRYABLE_UPSTREAM_STATUSES,
+    TEACHING_MAX_RETRY_DELAY_SECONDS,
+    TEACHING_RETRY_DELAYS_SECONDS,
+    received_bytes,
+)
 from pdf_agent.server.json_utils import (
     json_dumps_utf8_safe,
     repair_unicode_surrogates_text,
@@ -33,8 +39,15 @@ from pdf_agent.server.value_utils import string_value
 # ---------------------------------------------------------------------------
 
 PROMPT_CACHE_VERSION = "synchropage.prompt-cache.v1"
-TEACHING_RETRY_DELAYS_SECONDS: tuple[float, ...] = (0.5, 1.5, 3.0)
-TEACHING_MAX_RETRY_DELAY_SECONDS = 12.0
+#: Model families whose upstreams accept ``prompt_cache_key``.  The final say
+#: belongs to the provider capability (``apiFeatures.promptCache``) checked in
+#: ``model_gateway._strip_nonportable_responses_fields``; this list only keeps
+#: the fields off payloads for model families that reject them outright.
+PROMPT_CACHE_MODEL_PREFIXES: tuple[str, ...] = ("gpt-6", MODEL_GPT_55, MODEL_GPT_54)
+
+# Retry timings now live in generation_policy; they stay importable from here
+# because ``teaching_gateway`` / ``agent_gateway`` have always read them from
+# this module.
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +136,23 @@ def _apply_prompt_cache_fields(
 
 def _supports_prompt_cache(model: str) -> bool:
     """Return True when *model* is known to support prompt caching."""
-    return model.startswith((MODEL_GPT_55, MODEL_GPT_54))
+    return model.startswith(PROMPT_CACHE_MODEL_PREFIXES)
+
+
+def provider_supports_prompt_cache(provider: Mapping[str, Any] | None) -> bool:
+    """True when the provider advertises ``apiFeatures.promptCache``.
+
+    Prompt-cache fields are non-portable: an OpenAI-compatible gateway that
+    does not know them answers 400/422.  Providers opt in explicitly, and the
+    strip-and-retry fallback in ``gateway_fallback`` still covers a gateway
+    that changes its mind.
+    """
+    if not isinstance(provider, Mapping):
+        return False
+    features = provider.get("apiFeatures")
+    if not isinstance(features, Mapping):
+        return False
+    return features.get("promptCache") is True
 
 
 # ---------------------------------------------------------------------------
@@ -161,12 +190,22 @@ def _should_retry_without_file_input(
 
 
 def _should_retry_transient_upstream_error(exc: HttpError) -> bool:
-    """True when the error is likely transient and worth retrying."""
+    """True when the error is likely transient and worth retrying.
+
+    Retryable: 408/425/429/500/502/503/504, plus network errors and stream
+    timeouts *only when no bytes had arrived* — once the model has started
+    emitting, a retry would duplicate minutes of reasoning work.  Callers cap
+    the number of timeout retries separately (``MAX_TIMEOUT_RETRIES``).
+    """
     if exc.status == 429 and "usage limit" in str(exc).lower():
         return False
-    if exc.code == "upstream_timeout":
+    if exc.code == "output_truncated":
+        # The model ran out of output budget; resending the identical request
+        # can only fail the same way.  The client lowers the effort instead.
         return False
-    return exc.code == "network_error" or exc.status in {429, 500, 502, 503, 504}
+    if exc.code in {"upstream_timeout", "network_error"}:
+        return received_bytes(exc) <= 0
+    return exc.status in RETRYABLE_UPSTREAM_STATUSES
 
 
 def _retry_after_seconds(value: str | None) -> float | None:
@@ -184,10 +223,10 @@ def _retry_after_seconds(value: str | None) -> float | None:
         except (TypeError, ValueError, IndexError, OverflowError):
             return None
         if retry_at.tzinfo is None:
-            retry_at = retry_at.replace(tzinfo=datetime.timezone.utc)
+            retry_at = retry_at.replace(tzinfo=datetime.UTC)
         seconds = (
             retry_at.timestamp()
-            - datetime.datetime.now(datetime.timezone.utc).timestamp()
+            - datetime.datetime.now(datetime.UTC).timestamp()
         )
     if not math.isfinite(seconds) or seconds < 0:
         return None
@@ -201,20 +240,27 @@ def _transient_retry_delay_seconds(
     delays: Sequence[float] = TEACHING_RETRY_DELAYS_SECONDS,
     max_delay: float = TEACHING_MAX_RETRY_DELAY_SECONDS,
 ) -> float:
-    """Compute a jittered retry delay respecting ``Retry-After`` and caps."""
+    """Compute a retry delay: ``Retry-After`` when known, else full jitter.
+
+    ``Retry-After`` is honoured as given (capped at *max_delay*) because
+    sleeping less than the upstream asked for is what turns one 429 into a
+    burst.  Without it the delay is ``random.uniform(0, base)`` — full jitter
+    over the 2/6/15 s schedule — so concurrent pages spread out instead of
+    retrying in lockstep.
+    """
     retry_delays = tuple(delays) or TEACHING_RETRY_DELAYS_SECONDS
     base_delay = retry_delays[min(max(attempt, 0), len(retry_delays) - 1)]
     if exc.retry_after_seconds is not None:
-        base_delay = max(base_delay, exc.retry_after_seconds)
-    base_delay = min(base_delay, max_delay)
-    jitter = random.uniform(0, min(base_delay * 0.2, 0.75))
-    return min(base_delay + jitter, max_delay)
+        return min(max(float(exc.retry_after_seconds), 0.0), max_delay)
+    return min(random.uniform(0.0, base_delay), max_delay)
 
 
 def _should_try_next_teaching_generation_candidate(
     exc: HttpError, *, document_file_used: bool
 ) -> bool:
     """True when the caller should try the next model/payload candidate."""
+    if exc.code == "output_truncated":
+        return False
     if exc.status in {400, 404, 413, 415, 422}:
         return True
     return document_file_used and exc.status in {500, 502}

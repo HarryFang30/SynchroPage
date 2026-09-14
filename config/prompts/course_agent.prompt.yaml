@@ -1,5 +1,5 @@
 version: "course-agent.prompt.v1"
-default_model: "gpt-5.5"
+default_model: "gpt-6-astra"
 api_surface: "responses"
 primary_output_schema: "synchropage.lecture.v1"
 
@@ -109,7 +109,7 @@ document_planner_prompt: |
   }
 
 page_teaching_prompt: |
-  任务：为指定 PDF 页生成可直接用于讲课的中文讲解。
+  任务：为指定 PDF 页生成学生看着这页时真正需要的讲解，不是复述、摘要或翻译。
 
   输入将包含：
   - source_pdf：原 PDF 文件或页面引用；
@@ -118,16 +118,29 @@ page_teaching_prompt: |
   - optional_page_json：本地解析器生成的页面结构，可能为空；
   - neighbor_context：上一页摘要和下一页标题，可能为空。
 
+  每页按顺序完成（推理过程不输出，只输出结果）：
+  1. 定位：一句话说清这页真正建立的结论或能力，以及它为什么出现在课程的这个位置。
+  2. 诊断：找出 1-3 个学生最容易卡住的地方，优先写 以为 X、其实 Y 的误区或缺失的前置知识，而不是 这里很难。
+  3. 化解：每个卡点只用一种方式——直觉类比（说完接回正式说法）、用本页自己的符号或数字举一个具体实例、与最容易混淆的概念对比；先写错误想法，再写化解。
+  4. 追问：必要时补一句 为什么会这样，并用一句话回答。
+  5. 考试映射：按本页内容类型推断题型、常见陷阱、判卷看哪一步；不得声称了解某场真实考试、往年真题或教师原话。
+  6. 衔接：仅当提供了 neighbor_context 或 doc_plan 时，用一两句话连接前后页，页码写作 p.N。
+
+  speaker_notes_md 的小节标题固定为：
+  ## 这页在讲什么 ／ ## 容易卡住的地方 ／ ## 公式怎么读（公式页）／ ## 图表怎么看（图表页）／ ## 解题入口（习题页）／ ## 自测清单（总结页）／ ## 考试怎么考 ／ ## 前后衔接（有前后页信息时）。
+  不适用的小节直接省略，不要新增其他一级小节。
+
   生成要求：
-  1. 每个 target page 输出一个 page object。
-  2. speaker_notes_md 必须是可直接朗读的中文讲解，不是摘要大纲。
-  3. 讲解顺序：课程位置 -> 本页核心概念 -> 公式/图表/例子解释 -> 与前后页衔接。
-  4. 如果页面是目录、封面、空白页或习题页，采用对应讲解方式，不要硬编知识点。
-  5. 对图表页必须写 visual_explanations。
-  6. 对公式页必须写 formula_explanations，说明符号含义和直觉。
-  7. 对习题页只解释题目意图和解题方向，除非页面已经包含答案。
+  1. 每个 target page 输出一个 page object，page_no 必须与目标页一致。
+  2. 每节约 150-350 字，全页不超过约 1200 字；凡是读原页就能得到的句子一律删掉。
+  3. 封面、目录、空白页只写 1-2 行，不用小节标题，stuck_points 与 exam_angles 留空。
+  4. 总结页写自测清单；习题页只写解题入口与常见失分点，页面本身没有给出答案时不要写最终答案。
+  5. 图表页必须写 visual_explanations；公式页必须写 formula_explanations，说明符号含义、直觉，以及页面跳过的那一步。
+  6. stuck_points 写 1-3 条、exam_angles 写 1-4 条，每条一行，分别形如 误区 → 化解、题型 → 陷阱 → 评分点，与正文小节逐条对应，不新增正文没有的内容。
+  7. 只依据本页文本、附带的 PDF 页与 doc_plan；不编造定义、数字、公式或图表结论；引用其他页时写作 p.N。
   8. evidence 必须引用当前页可见信息，例如标题、关键词、公式、图注或表头。
-  9. confidence 低于 0.78 时必须设置 needs_review: true。
+  9. LaTeX、标识符、代码、信号名与单位原样保留；JSON 字符串中的 LaTeX 反斜杠写成两个反斜杠。
+  10. confidence 反映证据质量而不是篇幅；低于 0.78 时必须设置 needs_review: true；无可提取文本且无 PDF 页时设置 needs_parser_fallback: true。
 
   输出必须符合 synchropage.lecture.page_batch.v1 schema。
 

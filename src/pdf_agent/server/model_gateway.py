@@ -7,7 +7,7 @@ import ipaddress
 import json
 import re
 import urllib.parse
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,16 +17,19 @@ from pdf_agent.gateway import (
     build_codex_responses_payload,
     codex_responses_url,
 )
+from pdf_agent.server.constants import MODEL_REASONING_EFFORT_RANGES, REASONING_EFFORT_ORDER
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.gateway_fallback import post_payload_with_cache_fallback
+from pdf_agent.server.generation_policy import max_output_tokens_for
 from pdf_agent.server.model_config import (
     DEFAULT_CODEX_PROVIDER_ID,
     ModelConfigStore,
     normalize_model_config,
+    provider_api_key,
     provider_by_id,
     resolve_model_ref,
 )
-from pdf_agent.server.prompt_cache import _prompt_cache_metadata
+from pdf_agent.server.prompt_cache import _prompt_cache_metadata, provider_supports_prompt_cache
 from pdf_agent.server.response_parsing import _extract_gateway_text
 from pdf_agent.server.value_utils import string_value
 
@@ -84,6 +87,7 @@ async def post_responses_payload_for_body(
     provider_type = provider_chat_endpoint(provider)
     payload = dict(responses_payload)
     payload["model"] = ref["model"]
+    payload = clamp_reasoning_effort_for_model(payload)
 
     if provider_type == ENDPOINT_CODEX_OAUTH:
         auth = await codex_auth_builder(
@@ -115,7 +119,7 @@ async def post_responses_payload_for_body(
     headers = _api_key_headers(provider, endpoint_type=provider_type)
     if provider_type == ENDPOINT_OPENAI_RESPONSES:
         url = provider_api_url(provider, "responses", endpoint_type=provider_type)
-        api_payload = _strip_nonportable_responses_fields(payload)
+        api_payload = _strip_nonportable_responses_fields(payload, provider=provider)
     elif provider_type == ENDPOINT_ANTHROPIC_MESSAGES:
         url = provider_api_url(provider, "messages", endpoint_type=provider_type)
         api_payload = responses_payload_to_anthropic_messages(payload)
@@ -130,7 +134,7 @@ async def post_responses_payload_for_body(
         url = provider_api_url(provider, "chat/completions", endpoint_type=ENDPOINT_OPENAI_CHAT)
         api_payload = responses_payload_to_chat_completions(payload, provider=provider)
 
-    text, content_type, sent_payload = await post_payload_with_cache_fallback(
+    text, content_type, sent_payload = await _post_with_reasoning_effort_fallback(
         post_with_retries,
         url,
         api_payload,
@@ -145,6 +149,98 @@ async def post_responses_payload_for_body(
         provider_name=string_value(provider.get("name"), "API Provider"),
         model=string_value(sent_payload.get("model"), ref["model"]),
     )
+
+
+async def _post_with_reasoning_effort_fallback(
+    post_with_retries: PostWithRetries,
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> tuple[str, str, dict[str, Any]]:
+    """POST *payload*, retrying once with a supported ``reasoning.effort``.
+
+    The static clamp table cannot know every model the gateway serves; when
+    the upstream still rejects the effort it tells us the accepted values in
+    the error message, so we honour that and resend once.
+    """
+    try:
+        return await post_payload_with_cache_fallback(post_with_retries, url, payload, headers)
+    except HttpError as exc:
+        supported = _supported_efforts_from_error(exc)
+        current = _payload_reasoning_effort(payload)
+        if not supported or not current or current in supported:
+            raise
+        fallback_payload = dict(payload)
+        fallback_payload["reasoning"] = {**dict(payload.get("reasoning") or {}), "effort": _nearest_reasoning_effort(current, supported)}
+        text, content_type, sent_payload = await post_payload_with_cache_fallback(post_with_retries, url, fallback_payload, headers)
+        sent_payload["_synchropage_reasoning_effort_fallback"] = True
+        return text, content_type, sent_payload
+
+
+def clamp_reasoning_effort_for_model(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a copy of *payload* whose ``reasoning.effort`` the model accepts.
+
+    Unknown models are left untouched.  Known families are clamped into their
+    supported (lowest, highest) range so that e.g. ``none`` becomes ``low`` for
+    gpt-6-astra and ``max`` becomes ``xhigh`` for gpt-5.5 instead of a 400.
+    """
+    effort = _payload_reasoning_effort(payload)
+    if not effort:
+        return dict(payload)
+    supported = supported_reasoning_efforts(string_value(payload.get("model"), ""))
+    if not supported or effort in supported:
+        return dict(payload)
+    clamped = dict(payload)
+    clamped["reasoning"] = {**dict(payload.get("reasoning") or {}), "effort": _nearest_reasoning_effort(effort, supported)}
+    return clamped
+
+
+def supported_reasoning_efforts(model: str) -> list[str]:
+    """Return the ordered efforts *model* accepts, or ``[]`` when unknown."""
+    lowered = model.strip().lower()
+    if not lowered:
+        return []
+    for prefix, (lowest, highest) in MODEL_REASONING_EFFORT_RANGES:
+        if lowered.startswith(prefix):
+            start = REASONING_EFFORT_ORDER.index(lowest)
+            end = REASONING_EFFORT_ORDER.index(highest)
+            return list(REASONING_EFFORT_ORDER[start : end + 1])
+    return []
+
+
+def _payload_reasoning_effort(payload: Mapping[str, Any]) -> str:
+    reasoning = payload.get("reasoning")
+    if not isinstance(reasoning, Mapping):
+        return ""
+    return string_value(reasoning.get("effort"), "").lower()
+
+
+def _nearest_reasoning_effort(effort: str, supported: Sequence[str]) -> str:
+    """Pick the supported effort closest in rank to the requested one."""
+    ordered = [value for value in REASONING_EFFORT_ORDER if value in supported]
+    if not ordered:
+        return effort
+    if effort not in REASONING_EFFORT_ORDER:
+        return ordered[0]
+    rank = REASONING_EFFORT_ORDER.index(effort)
+    lower = [value for value in ordered if REASONING_EFFORT_ORDER.index(value) <= rank]
+    if lower:
+        return lower[-1]
+    return ordered[0]
+
+
+def _supported_efforts_from_error(exc: HttpError) -> list[str]:
+    """Parse ``Supported values are: 'low', 'medium', ...`` out of an error."""
+    if exc.status not in {400, 422}:
+        return []
+    message = str(exc)
+    if "reasoning" not in message.lower() and "effort" not in message.lower() and "supported value" not in message.lower():
+        return []
+    match = re.search(r"supported values are:?\s*([^.]+)", message, flags=re.IGNORECASE)
+    if not match:
+        return []
+    found = [value.lower() for value in re.findall(r"'([a-z]+)'", match.group(1))]
+    return [value for value in REASONING_EFFORT_ORDER if value in found]
 
 
 def provider_chat_endpoint(provider: Mapping[str, Any]) -> str:
@@ -454,13 +550,16 @@ async def check_provider_model(
         "model": model or _first_provider_model(provider),
         "instructions": "You are checking whether this model provider can answer a minimal health check.",
         "input": "Reply with OK.",
+        # Reasoning tokens count against this budget on gpt-6 class models.
+        "max_output_tokens": 4096,
     }
+    payload = clamp_reasoning_effort_for_model({**payload, "reasoning": {"effort": "low"}})
     if not payload["model"]:
         raise HttpError(400, "A model is required for provider connection checks", code="model_required")
     headers = _api_key_headers(provider, endpoint_type=endpoint_type)
     if endpoint_type == ENDPOINT_OPENAI_RESPONSES:
         url = provider_api_url(provider, "responses", endpoint_type=endpoint_type)
-        request_payload = _strip_nonportable_responses_fields(payload)
+        request_payload = _strip_nonportable_responses_fields(payload, provider=provider)
     elif endpoint_type == ENDPOINT_ANTHROPIC_MESSAGES:
         url = provider_api_url(provider, "messages", endpoint_type=endpoint_type)
         request_payload = responses_payload_to_anthropic_messages(payload)
@@ -487,7 +586,7 @@ async def check_provider_model(
 
 
 def _api_key_headers(provider: Mapping[str, Any], *, endpoint_type: str | None = None) -> dict[str, str]:
-    api_key = string_value(provider.get("apiKey"), "")
+    api_key = provider_api_key(provider)
     if bool(provider.get("apiKeyRequired")) and not api_key:
         raise HttpError(400, f"API key is required for {string_value(provider.get('name'), 'this provider')}", code="model_api_key_missing")
     endpoint = endpoint_type or provider_chat_endpoint(provider)
@@ -588,13 +687,40 @@ def _responses_content_text(value: Any) -> str:
     return ""
 
 
-def _strip_nonportable_responses_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _strip_nonportable_responses_fields(
+    payload: Mapping[str, Any],
+    *,
+    provider: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Adapt a Responses payload for a plain ``/v1/responses`` gateway.
+
+    Besides dropping fields a portable gateway may reject, this is where two
+    stability guarantees are applied for every openai-responses provider:
+
+    * ``stream: true`` — so a reasoning model that thinks for minutes keeps
+      the socket busy and the transport's socket timeout becomes an
+      inactivity timeout instead of a hard ceiling on total latency;
+    * ``max_output_tokens`` — reasoning tokens count against the output
+      budget, so an unset budget means either unbounded reasoning or a
+      silently truncated JSON answer.
+    """
     stripped = dict(payload)
     stripped["store"] = False
-    stripped.pop("prompt_cache_key", None)
-    stripped.pop("prompt_cache_retention", None)
+    stripped["stream"] = True
+    if not provider_supports_prompt_cache(provider):
+        stripped.pop("prompt_cache_key", None)
+        stripped.pop("prompt_cache_retention", None)
     stripped.pop("include", None)
+    if not _max_output_tokens_value(stripped):
+        stripped["max_output_tokens"] = max_output_tokens_for(
+            _payload_reasoning_effort(stripped)
+        )
     return stripped
+
+
+def _max_output_tokens_value(payload: Mapping[str, Any]) -> int:
+    value = payload.get("max_output_tokens")
+    return int(value) if isinstance(value, (int, float)) and value > 0 else 0
 
 
 def _is_deepseek_provider(provider: Mapping[str, Any], *, parsed: urllib.parse.ParseResult | None = None) -> bool:

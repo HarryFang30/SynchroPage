@@ -1,13 +1,11 @@
 import {
   ChevronLeft,
   ChevronRight,
-  CheckCircle2,
   Copy,
   RefreshCw,
   Send,
   Target,
   X,
-  XCircle,
 } from "lucide-react";
 import {
   lazy,
@@ -17,6 +15,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { ReaderMarkdown } from "../workspace/WorkspaceChrome";
@@ -29,6 +28,23 @@ import {
 import { type PageData } from "../../lib/generation/teachingGeneration";
 import { compactText } from "../../lib/workspace/synchroPageState";
 import { selectedContextSourceLabel } from "./agentLabels";
+import { QuizOverlay, QuizSkeletonOverlay, QuizThreadCard, useQuizRun } from "./QuizOverlay";
+import {
+  PROBLEM_TYPE_V1,
+  QUIZ_TYPE_V1,
+  QUIZ_TYPE_V2,
+  QUIZ_WEAK_POINTS_EVENT,
+  consumeLiveQuizAutoOpen,
+  containsChallengeMarker,
+  extractJsonObjectText,
+  getActiveQuizDocumentId,
+  looksLikeChallengeText,
+  looksLikeQuizText,
+  parseJsonLoose,
+  parseQuizSetValue,
+  readQuizWeakPoints,
+  type QuizSet,
+} from "./quizModel";
 
 const MarkdownRenderer = lazy(() => import("../MarkdownRenderer"));
 const CHALLENGE_COUNT_OPTIONS = [1, 3, 5, 10] as const;
@@ -139,6 +155,7 @@ function ChallengePanel({
   onStart: (kind: ChallengeKind, count: number) => void;
 }) {
   const copy = useAppCopy();
+  const weakPointCount = useWeakPointCount();
   return (
     <div className="challenge-panel" aria-label={copy.agent.challengeAria}>
       <div className="challenge-title">
@@ -146,6 +163,9 @@ function ChallengePanel({
         <span>{copy.agent.challengeTitle}</span>
         <span className="challenge-mode">{copy.agent.challengeModeDiagnostic}</span>
       </div>
+      {weakPointCount > 0 && (
+        <p className="quiz-weak-note">{copy.agent.quizWeakPointNote(weakPointCount)}</p>
+      )}
       <div className="challenge-controls">
         <div className="challenge-kind-control" role="group" aria-label={copy.agent.challengeKindLabel}>
           <span>{copy.agent.challengeKindLabel}</span>
@@ -192,6 +212,18 @@ function ChallengePanel({
       </div>
     </div>
   );
+}
+
+/** Number of stored weak points for the document the chat adapter is bound to. */
+function useWeakPointCount() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const refresh = () => setCount(readQuizWeakPoints(getActiveQuizDocumentId()).length);
+    refresh();
+    window.addEventListener(QUIZ_WEAK_POINTS_EVENT, refresh);
+    return () => window.removeEventListener(QUIZ_WEAK_POINTS_EVENT, refresh);
+  }, []);
+  return count;
 }
 
 // ── AssistantMessage gate ────────────────────────────────────
@@ -242,10 +274,15 @@ function AgentMessage() {
   } = assistantUi;
   const status = assistantUi.useAuiState((state) => state.message.status);
   const content = assistantUi.useAuiState((state) => state.message.content);
+  const messageId = assistantUi.useAuiState((state) => state.message.id || "");
   const assistantText = assistantContentText(content);
   const challengeContent = parseChallengeContent(assistantText);
-  const isThinking = status?.type === "running" && content.length === 0;
-  const isChallengeStreaming = status?.type === "running" && !challengeContent && looksLikeChallengeText(assistantText);
+  const isRunning = status?.type === "running";
+  const isThinking = isRunning && content.length === 0;
+  const isChallengeStreaming = isRunning && !challengeContent && looksLikeChallengeText(assistantText);
+  // A quiz that is still being written opens the overlay as a skeleton so the
+  // thread never shows raw JSON.
+  const isQuizStreaming = isChallengeStreaming && looksLikeQuizText(assistantText);
   const isChallengeParseFailed = status?.type !== "running" && !challengeContent && containsChallengeMarker(assistantText);
   const isStopped = status?.type === "incomplete" && status.reason === "cancelled";
   const failureText = status?.type === "incomplete" && status.reason === "error"
@@ -257,15 +294,16 @@ function AgentMessage() {
       <div className="assistant-label">{copy.common.assistant}</div>
       <div className="message-bubble assistant-bubble">
         {(isThinking || isChallengeStreaming) && <AssistantThinkingIndicator />}
+        {isQuizStreaming && <QuizSkeletonOverlay />}
         {isStopped && <MessageStatusNote>{copy.agent.generationStopped}</MessageStatusNote>}
         {failureText ? (
           <div className="message-error">
             <MarkdownRenderer className="message-error-detail" text={failureText} />
           </div>
-        ) : isChallengeParseFailed ? (
+        ) : isChallengeStreaming ? null : isChallengeParseFailed ? (
           <MessageStatusNote>{copy.agent.challengeParseFailed}</MessageStatusNote>
         ) : challengeContent?.kind === "quiz" ? (
-          <ChallengeQuizCard quiz={challengeContent.quiz} />
+          <ChallengeQuizCard quiz={challengeContent.quiz} isStreaming={isRunning} messageId={messageId} />
         ) : challengeContent?.kind === "problem" ? (
           <ChallengeProblemCard problem={challengeContent.problem} />
         ) : (
@@ -304,27 +342,8 @@ function AgentMessage() {
 }
 
 type ChallengeContent =
-  | { kind: "quiz"; quiz: ChallengeQuizSet }
+  | { kind: "quiz"; quiz: QuizSet }
   | { kind: "problem"; problem: ChallengeProblem };
-
-type ChallengeQuizSet = {
-  title: string;
-  questions: ChallengeQuizQuestion[];
-};
-
-type ChallengeQuizQuestion = {
-  knowledgeType: string;
-  challengeType: string;
-  question: string;
-  options: Array<{ id: string; text: string }>;
-  correctOptionId: string;
-  feedback: {
-    correct: string;
-    incorrect: string;
-  };
-  explanation: string;
-  followUp: string;
-};
 
 type ChallengeProblem = {
   title: string;
@@ -345,109 +364,40 @@ type ChallengeProblem = {
   selfCheck: string;
 };
 
-function ChallengeQuizCard({ quiz }: { quiz: ChallengeQuizSet }) {
-  const copy = useAppCopy();
-  const assistantUi = useAssistantUi();
-  const thread = assistantUi.useThreadRuntime();
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, string>>({});
-  const question = quiz.questions[currentIndex] || quiz.questions[0] || null;
-  const selectedOptionId = question ? answers[currentIndex] || null : null;
-  const selectedOption = question && selectedOptionId
-    ? question.options.find((option) => option.id === selectedOptionId) || null
-    : null;
-  const hasAnswered = Boolean(selectedOptionId);
-  const correct = question ? selectedOptionId === question.correctOptionId : false;
+/**
+ * Compact in-thread card. The run state lives here (not in the overlay) so the
+ * overlay can be closed and reopened without losing progress.
+ */
+function ChallengeQuizCard({ quiz, isStreaming, messageId }: { quiz: QuizSet; isStreaming: boolean; messageId: string }) {
+  // Bind the app-owned document id once, at construction: the model may echo
+  // document_id imperfectly and the active id can move if the user switches
+  // documents mid-quiz.
+  const storageDocumentIdRef = useRef(getActiveQuizDocumentId());
+  const run = useQuizRun(quiz, storageDocumentIdRef.current);
+  const autoOpenedRef = useRef(false);
+  // Seeded with the mount-time value: a message that mounts already complete
+  // (a restored thread, a remounted panel) never shows a streaming->finished
+  // transition and therefore never auto-opens.
+  const wasStreamingRef = useRef(isStreaming);
+  const { setOpen } = run;
 
   useEffect(() => {
-    if (currentIndex >= quiz.questions.length) setCurrentIndex(0);
-  }, [currentIndex, quiz.questions.length]);
-
-  if (!question) return null;
-  const isLastQuestion = currentIndex >= quiz.questions.length - 1;
-  const progressPercent = `${Math.max(1, ((currentIndex + 1) / quiz.questions.length) * 100)}%`;
+    if (isStreaming) {
+      wasStreamingRef.current = true;
+      return;
+    }
+    if (autoOpenedRef.current) return;
+    const liveRun = consumeLiveQuizAutoOpen(messageId) || wasStreamingRef.current;
+    if (!liveRun) return;
+    autoOpenedRef.current = true;
+    setOpen(true);
+  }, [isStreaming, messageId, setOpen]);
 
   return (
-    <section className="challenge-quiz-card" aria-label={quiz.title || copy.agent.challengeTitle}>
-      <header className="challenge-quiz-header">
-        <div>
-          <span className="challenge-quiz-kicker">{question.knowledgeType} · {question.challengeType}</span>
-          <h3>{quiz.title || copy.agent.challengeTitle}</h3>
-        </div>
-        <span className="challenge-quiz-count">{currentIndex + 1}/{quiz.questions.length}</span>
-      </header>
-      <div className="challenge-quiz-progress" aria-hidden="true">
-        <span style={{ width: progressPercent }} />
-      </div>
-      <div className="challenge-quiz-question">
-        <ReaderMarkdown className="markdown-body" text={question.question} />
-      </div>
-      <div className="challenge-options">
-        {question.options.map((option) => {
-          const isSelected = option.id === selectedOptionId;
-          const isCorrect = option.id === question.correctOptionId;
-          const stateClass = hasAnswered
-            ? isCorrect
-              ? "correct"
-              : isSelected
-                ? "incorrect"
-                : "dimmed"
-            : "";
-          return (
-            <button
-              className={`challenge-option ${stateClass}`}
-              key={option.id}
-              type="button"
-              onClick={() => {
-                if (!hasAnswered) {
-                  setAnswers((current) => ({ ...current, [currentIndex]: option.id }));
-                }
-              }}
-              aria-pressed={isSelected}
-              disabled={hasAnswered}
-            >
-              <span className="challenge-option-id">{option.id}</span>
-              <span className="challenge-option-text">
-                <ReaderMarkdown className="markdown-body" text={option.text} />
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      {hasAnswered && (
-        <div className={`challenge-feedback ${correct ? "correct" : "incorrect"}`}>
-          <div className="challenge-feedback-title">
-            {correct ? <CheckCircle2 /> : <XCircle />}
-            <span>{correct ? copy.agent.challengeCorrect : copy.agent.challengeIncorrect}</span>
-            {selectedOption && <span className="challenge-feedback-selection">{selectedOption.id}</span>}
-          </div>
-          <ReaderMarkdown
-            className="markdown-body"
-            text={[
-              correct ? question.feedback.correct : question.feedback.incorrect,
-              question.explanation ? `${copy.agent.challengeAnswerLabel} ${question.correctOptionId}. ${question.explanation}` : "",
-              question.followUp ? `${copy.agent.challengeFollowUpLabel} ${question.followUp}` : "",
-            ].filter(Boolean).join("\n\n")}
-          />
-          <button
-            className="challenge-next"
-            type="button"
-            onClick={() => {
-              if (!isLastQuestion) {
-                setCurrentIndex((index) => Math.min(index + 1, quiz.questions.length - 1));
-                return;
-              }
-              thread.append({
-                role: "user",
-                content: [{ type: "text", text: copy.agent.challengeUserMessage("quiz", quiz.questions.length) }],
-              });
-            }}
-          >
-            {isLastQuestion ? copy.agent.challengeNewSet : copy.agent.challengeNext}
-          </button>
-        </div>
-      )}
-    </section>
+    <>
+      <QuizThreadCard run={run} />
+      <QuizOverlay run={run} />
+    </>
   );
 }
 
@@ -690,34 +640,18 @@ function SelectedSourcePreview({ context, onRemove }: { context: SelectedContext
 function parseChallengeContent(text: string): ChallengeContent | null {
   const raw = extractJsonObjectText(text);
   if (!raw) return null;
-  const parsed = parseChallengeJson(raw);
+  const parsed = parseJsonLoose(raw);
   if (!parsed || typeof parsed !== "object") return null;
   const value = parsed as Record<string, unknown>;
-  if (value.type === "synchropage.challenge_quiz.v1") {
-    const quiz = parseChallengeQuizValue(value);
+  if (value.type === QUIZ_TYPE_V2 || value.type === QUIZ_TYPE_V1) {
+    const quiz = parseQuizSetValue(value);
     return quiz ? { kind: "quiz", quiz } : null;
   }
-  if (value.type === "synchropage.challenge_problem.v1") {
+  if (value.type === PROBLEM_TYPE_V1) {
     const problem = parseChallengeProblemValue(value);
     return problem ? { kind: "problem", problem } : null;
   }
   return null;
-}
-
-function parseChallengeQuizValue(value: Record<string, unknown>): ChallengeQuizSet | null {
-  const rawQuestions = Array.isArray(value.questions) && value.questions.length
-    ? value.questions
-    : [value];
-  const questions = rawQuestions
-    .map((item) => normalizeChallengeQuestion(item))
-    .filter((item): item is ChallengeQuizQuestion => Boolean(item))
-    .slice(0, 10);
-  if (!questions.length) return null;
-
-  return {
-    title: stringField(value.title) || "Challenge Quiz",
-    questions,
-  };
 }
 
 function parseChallengeProblemValue(value: Record<string, unknown>): ChallengeProblem | null {
@@ -746,134 +680,6 @@ function parseChallengeProblemValue(value: Record<string, unknown>): ChallengePr
     rubric: stringArrayField(problem.rubric ?? coach.rubric),
     selfCheck: stringField(coach.after_attempt_check ?? coach.afterAttemptCheck ?? coach.self_check ?? coach.selfCheck),
   };
-}
-
-function normalizeChallengeQuestion(item: unknown): ChallengeQuizQuestion | null {
-  if (!item || typeof item !== "object") return null;
-  const value = item as Record<string, unknown>;
-  const rawOptions = Array.isArray(value.options) ? value.options : [];
-  const options = rawOptions
-    .map((item, index) => {
-      if (!item || typeof item !== "object") return null;
-      const option = item as Record<string, unknown>;
-      const fallbackId = String.fromCharCode(65 + index);
-      const id = normalizeOptionId(option.id, fallbackId);
-      const textValue = stringField(option.text);
-      return id && textValue ? { id, text: textValue } : null;
-    })
-    .filter((item): item is { id: string; text: string } => Boolean(item))
-    .slice(0, 6);
-  const correctOptionId = normalizeOptionId(value.correct_option_id ?? value.correctOptionId ?? value.answer, "");
-  if (!stringField(value.question) || options.length < 2 || !options.some((option) => option.id === correctOptionId)) {
-    return null;
-  }
-  const feedback = value.feedback && typeof value.feedback === "object"
-    ? value.feedback as Record<string, unknown>
-    : {};
-  return {
-    knowledgeType: stringField(value.knowledge_type ?? value.knowledgeType) || "mixed",
-    challengeType: stringField(value.challenge_type ?? value.challengeType) || "diagnostic",
-    question: stringField(value.question),
-    options,
-    correctOptionId,
-    feedback: {
-      correct: stringField(feedback.correct) || "回答正确。",
-      incorrect: stringField(feedback.incorrect) || "这个选项暴露了一个常见误区。",
-    },
-    explanation: stringField(value.explanation),
-    followUp: stringField(value.follow_up ?? value.followUp),
-  };
-}
-
-function parseChallengeJson(raw: string): unknown {
-  const repaired = escapeInvalidJsonStringCharacters(raw);
-  if (repaired !== raw) {
-    try {
-      return JSON.parse(repaired);
-    } catch {
-      // Fall through to the raw parse path. Some non-LaTeX JSON escapes are still valid as-is.
-    }
-  }
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function escapeInvalidJsonStringCharacters(input: string) {
-  let output = "";
-  let inString = false;
-  const structuralEscapes = new Set(['"', "\\", "/"]);
-  for (let index = 0; index < input.length; index += 1) {
-    const char = input.charAt(index);
-    if (!inString) {
-      if (char === "\"") inString = true;
-      output += char;
-      continue;
-    }
-    if (char === "\\") {
-      const next = input.charAt(index + 1);
-      if (structuralEscapes.has(next)) {
-        output += char + next;
-        index += 1;
-      } else if (next === "u" && isJsonUnicodeEscape(input, index + 2)) {
-        output += input.slice(index, index + 6);
-        index += 5;
-      } else {
-        output += "\\\\";
-      }
-      continue;
-    }
-    if (char === "\"") {
-      inString = false;
-      output += char;
-      continue;
-    }
-    if (char === "\n") {
-      output += "\\n";
-      continue;
-    }
-    if (char === "\r") {
-      output += "\\r";
-      continue;
-    }
-    if (char === "\t") {
-      output += "\\t";
-      continue;
-    }
-    output += char;
-  }
-  return output;
-}
-
-function isJsonUnicodeEscape(input: string, start: number) {
-  return /^[0-9a-fA-F]{4}$/.test(input.slice(start, start + 4));
-}
-
-function looksLikeChallengeText(text: string) {
-  const value = text.trim();
-  return value.startsWith("{") || value.startsWith("```json") || containsChallengeMarker(value);
-}
-
-function containsChallengeMarker(text: string) {
-  return text.includes("synchropage.challenge_quiz.v1") || text.includes("synchropage.challenge_problem.v1");
-}
-
-function extractJsonObjectText(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) return "";
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  const candidate = fenced ? fenced[1].trim() : trimmed;
-  if (candidate.startsWith("{") && candidate.endsWith("}")) return candidate;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
-  return start >= 0 && end > start ? candidate.slice(start, end + 1) : "";
-}
-
-function normalizeOptionId(value: unknown, fallback: string) {
-  const id = String(value || fallback).trim().toUpperCase();
-  return /^[A-Z]$/.test(id) ? id : "";
 }
 
 function stringField(value: unknown) {

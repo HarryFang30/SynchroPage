@@ -21,3 +21,6 @@ data/runtime/
 outputs/
 runs/
 *.log
+
+# Playwright output when run from the repo root
+test-results/

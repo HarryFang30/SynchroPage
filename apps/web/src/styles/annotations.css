@@ -1,0 +1,456 @@
+/* PDF highlights and margin notes.
+   Loaded after calm-surface.css: tonal surfaces, hairlines ≤ 8%, no gradients,
+   weights ≤ 600, radius 8 / 12. Highlight inks are defined once per colour and
+   multiplied onto the (always white) PDF page, so they read like a marker in
+   both themes. */
+
+.app-shell {
+  --annot-yellow: oklch(0.90 0.17 96);
+  --annot-green: oklch(0.88 0.14 150);
+  --annot-blue: oklch(0.87 0.10 240);
+  --annot-pink: oklch(0.86 0.12 350);
+  --annot-yellow-ink: oklch(0.62 0.13 88);
+  --annot-green-ink: oklch(0.55 0.12 150);
+  --annot-blue-ink: oklch(0.55 0.11 245);
+  --annot-pink-ink: oklch(0.58 0.14 350);
+}
+
+[data-color="yellow"] { --annot-color: var(--annot-yellow); --annot-ink: var(--annot-yellow-ink); }
+[data-color="green"] { --annot-color: var(--annot-green); --annot-ink: var(--annot-green-ink); }
+[data-color="blue"] { --annot-color: var(--annot-blue); --annot-ink: var(--annot-blue-ink); }
+[data-color="pink"] { --annot-color: var(--annot-pink); --annot-ink: var(--annot-pink-ink); }
+
+/* ---------- Highlight layer (between canvas and text layer) ---------- */
+.pdf-highlight-layer {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.pdf-highlight {
+  position: absolute;
+  display: block;
+  border-radius: 2px;
+  background: var(--annot-color);
+  mix-blend-mode: multiply;
+  opacity: 0.55;
+  transition: opacity 120ms ease, box-shadow 120ms ease;
+}
+
+.pdf-highlight.active {
+  opacity: 0.78;
+  box-shadow: 0 0 0 1.5px color-mix(in oklch, var(--annot-ink) 70%, transparent);
+}
+
+/* ---------- Selection toolbar additions ---------- */
+.selection-toolbar-annotate {
+  color: var(--pp-text);
+  font-weight: var(--cs-w-medium, 500);
+}
+
+.selection-toolbar-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--cs-hairline-strong, color-mix(in oklch, var(--line) 60%, transparent));
+}
+
+/* ---------- Margin notes under each page ---------- */
+.pdf-page-notes {
+  /* Same column as the rendered page (set by the viewer per page). */
+  width: var(--pdf-page-width, min(100%, 900px));
+  max-width: 100%;
+  display: grid;
+  gap: 8px;
+  padding: 2px 0 0;
+}
+
+.page-note {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px 8px 16px;
+  border-radius: 12px;
+  background: var(--pp-bg-panel, var(--panel));
+  box-shadow: 0 0 0 1px var(--cs-hairline, color-mix(in oklch, var(--line) 40%, transparent));
+  transition: box-shadow 120ms ease, background 120ms ease;
+}
+
+.page-note::before {
+  position: absolute;
+  inset: 10px auto 10px 0;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--annot-ink);
+  content: "";
+  opacity: 0.85;
+}
+
+.page-note.active {
+  background: color-mix(in oklch, var(--annot-color) 7%, var(--pp-bg-panel, var(--panel)));
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--annot-ink) 34%, transparent);
+}
+
+.page-note-quote {
+  margin: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--pp-text-secondary, var(--muted));
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.page-note-quote::before {
+  content: "“";
+}
+
+.page-note-quote::after {
+  content: "”";
+}
+
+.page-note-kicker {
+  color: var(--pp-text-muted, var(--muted));
+  font-size: 11px;
+  font-weight: var(--cs-w-medium, 500);
+  letter-spacing: 0.01em;
+}
+
+.page-note-input {
+  width: 100%;
+  min-height: 24px;
+  margin: 0;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--pp-text, var(--text));
+  font-family: var(--font-ui);
+  font-size: calc(14px * var(--reader-font-scale, 1));
+  line-height: 1.6;
+  resize: none;
+  overflow: hidden;
+  box-shadow: none;
+  outline: 0;
+}
+
+.page-note-input::placeholder {
+  color: var(--pp-text-faint, color-mix(in oklch, var(--muted) 70%, transparent));
+}
+
+.page-note-input:focus-visible {
+  box-shadow: none;
+  outline: 0;
+}
+
+.page-note-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+}
+
+.page-note-colors {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.page-note-color {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--annot-color);
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--annot-ink) 30%, transparent);
+  cursor: pointer;
+  opacity: 0.8;
+  transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
+}
+
+.page-note-color:hover {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
+.page-note-color.selected {
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--pp-bg-panel, var(--panel)), 0 0 0 3.5px var(--annot-ink);
+}
+
+.page-note-time {
+  margin-left: auto;
+  color: var(--pp-text-faint, var(--muted));
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.page-note-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pp-text-muted, var(--muted));
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.page-note-delete svg {
+  width: 13px;
+  height: 13px;
+}
+
+.page-note:hover .page-note-delete,
+.page-note:focus-within .page-note-delete,
+.page-note-delete:focus-visible,
+.page-note-delete.confirming {
+  opacity: 1;
+}
+
+.page-note-delete:hover {
+  background: var(--cs-tint-2, color-mix(in oklch, var(--secondary) 60%, transparent));
+  color: var(--pp-text, var(--text));
+}
+
+.page-note-delete.confirming {
+  background: var(--pp-danger-soft, color-mix(in oklch, var(--brand) 12%, transparent));
+  color: var(--pp-danger, var(--brand));
+}
+
+.pdf-page-add-note {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--pp-text-muted, var(--muted));
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 140ms ease, background 120ms ease, color 120ms ease;
+}
+
+.pdf-page-add-note svg {
+  width: 14px;
+  height: 14px;
+}
+
+.pdf-page-shell:hover .pdf-page-add-note,
+.pdf-page-shell.active .pdf-page-add-note,
+.pdf-page-notes.has-notes .pdf-page-add-note,
+.pdf-page-add-note:focus-visible {
+  opacity: 0.85;
+}
+
+.pdf-page-add-note:hover {
+  background: var(--cs-tint-2, color-mix(in oklch, var(--secondary) 60%, transparent));
+  color: var(--pp-text, var(--text));
+  opacity: 1;
+}
+
+/* ---------- Notes-pane tab: document-wide index ---------- */
+.annotations-panel {
+  display: grid;
+  gap: 14px;
+  max-width: 76ch;
+}
+
+.annotations-panel-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.annotations-panel-title {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.annotations-panel-title strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--pp-text-strong, var(--text-strong));
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.annotations-panel-title span {
+  color: var(--pp-text-muted, var(--muted));
+  font-size: 12px;
+}
+
+.annotations-export {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--cs-tint-2, color-mix(in oklch, var(--secondary) 60%, transparent));
+  color: var(--pp-text, var(--text));
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.annotations-export svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.annotations-export span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The notes pane is ~230px wide in the three-pane workbench: keep the export
+   icon, drop its label so the header never spills past the pane. */
+@container (max-width: 300px) {
+  .annotations-export {
+    padding: 0 7px;
+  }
+
+  .annotations-export span {
+    display: none;
+  }
+}
+
+.annotations-export:disabled {
+  opacity: 0.5;
+}
+
+.annotations-empty {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  overflow-wrap: anywhere;
+  padding: 18px 16px;
+  border-radius: 12px;
+  background: var(--cs-tint-1, color-mix(in oklch, var(--secondary) 40%, transparent));
+  color: var(--pp-text-secondary, var(--muted));
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.annotations-empty strong {
+  color: var(--pp-text-strong, var(--text-strong));
+  font-weight: 600;
+}
+
+.annotations-empty p {
+  margin: 0;
+}
+
+.annotations-page-group {
+  display: grid;
+  gap: 6px;
+}
+
+.annotations-page-heading {
+  padding: 4px 0;
+  color: var(--pp-text-muted, var(--muted));
+  font-size: 11px;
+  font-weight: var(--cs-w-medium, 500);
+  letter-spacing: 0.02em;
+}
+
+.annotations-item {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 9px 12px 9px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  transition: background 120ms ease;
+}
+
+.annotations-item::before {
+  position: absolute;
+  inset: 10px auto 10px 4px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--annot-ink);
+  content: "";
+  opacity: 0.85;
+}
+
+.annotations-item:hover,
+.annotations-item.active {
+  background: var(--cs-tint-2, color-mix(in oklch, var(--secondary) 60%, transparent));
+}
+
+.annotations-item > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.annotations-item-quote,
+.annotations-item-kicker {
+  color: var(--pp-text-secondary, var(--muted));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.annotations-item-note {
+  color: var(--pp-text, var(--text));
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.annotations-item-note.empty {
+  color: var(--pp-text-faint, var(--muted));
+  font-style: italic;
+}
+
+.annotations-item-time {
+  color: var(--pp-text-faint, var(--muted));
+  font-size: 11px;
+}
+
+/* ---------- Dark theme ---------- */
+:root[data-synchropage-resolved-theme="dark"] .page-note {
+  background: color-mix(in oklch, var(--pp-bg-panel, var(--panel)) 92%, white);
+}
+
+:root[data-synchropage-resolved-theme="dark"] .page-note.active {
+  background: color-mix(in oklch, var(--annot-ink) 10%, var(--pp-bg-panel, var(--panel)));
+}
+
+:root[data-synchropage-resolved-theme="dark"] .pdf-highlight {
+  opacity: 0.62;
+}
+
+/* ---------- Narrow PDF pane ---------- */
+@media (max-width: 720px) {
+  .page-note-time {
+    display: none;
+  }
+}

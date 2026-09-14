@@ -1,6 +1,7 @@
 import type { AppCopy } from "../../i18n";
 import type { ModelRef, UiPreferences } from "../../settings";
 import type { SelectedContext } from "../../hooks/usePageSelection";
+import { markLiveQuizMessage, readQuizWeakPoints, setActiveQuizDocumentId } from "../../components/agent/quizModel";
 import { requestJson } from "../http/requestJson";
 import type { PdfDirectFileInput } from "../pdf/directFile";
 import type { PdfContextPayload } from "../pdf/textExtraction";
@@ -87,7 +88,9 @@ type ChallengeRequest = {
   count: number;
 };
 
-const CHALLENGE_MODEL: ModelRef = { providerId: "codex_oauth", model: "gpt-5.5" };
+// Challenge/quiz requests follow the configured assistant model (e.g. coproxy /
+// gpt-6-astra) instead of a hard-coded OAuth model, and always ask for deep
+// reasoning because distractor quality depends on it.
 const CHALLENGE_REASONING_EFFORT: UiPreferences["modelReasoningEffort"] = "xhigh";
 const DEFAULT_CHALLENGE_COUNT = 1;
 const MAX_CHALLENGE_COUNT = 10;
@@ -103,11 +106,19 @@ export function createPdfAgentAdapter(args: {
   clearSelectedContext: () => void;
   persistChatMessage?: (input: ChatPersistInput) => Promise<void>;
 }): ChatModelAdapter {
+  // Publish the document id for UI that only receives page data (the quiz
+  // weak-point note in the composer footer).
+  try {
+    setActiveQuizDocumentId(args.getPack().document.id);
+  } catch {
+    // A pack that is not ready yet simply leaves the previous id in place.
+  }
   return {
     async *run(options: ChatModelRunOptions) {
       const snapshot = args.getSnapshot();
       const pack = args.getPack();
       const page = args.getPage();
+      setActiveQuizDocumentId(pack.document.id);
       const selectedAgentContext = snapshot.selectedContext
         ? selectedContextToAgentContext(snapshot.selectedContext, args.copy)
         : null;
@@ -127,10 +138,11 @@ export function createPdfAgentAdapter(args: {
         page,
         copy: args.copy,
       });
-      const requestModel = challengeRequest ? CHALLENGE_MODEL : snapshot.assistantModel;
+      const requestModel: ModelRef = snapshot.assistantModel;
       const requestReasoningEffort = challengeRequest ? CHALLENGE_REASONING_EFFORT : snapshot.reasoningEffort;
       const latestUserMeta = latestUser as { id?: string; createdAt?: Date };
       const assistantMessageId = options.unstable_assistantMessageId || args.createId("assistant");
+      if (challengeRequest?.kind === "quiz") markLiveQuizMessage(assistantMessageId);
       const selectedContextRecord = snapshot.selectedContext ? asPersistedRecord(selectedContextPayload(snapshot.selectedContext)) : null;
       const sourceRefs = [
         ...(selectedAgentContext ? [asPersistedRecord(selectedAgentContext)] : []),
@@ -417,20 +429,23 @@ function buildAgentRequestPrompt({
   return buildSelectedQuestionPrompt(question, selectedContext, pdfContext, copy);
 }
 
-const CHALLENGE_COACH_PROMPT = `你是我的理工科 PPT 挑战教练。当前页是我手动选择触发 challenge 的页面，因此你应当默认这页很重要，不需要判断是否出题。
+const CHALLENGE_COACH_PROMPT = `你是我的理工科 PPT 挑战教练，同时也是一个出过卷子、知道学生在哪一步丢分的命题人。当前页是我手动选择触发 challenge 的页面，因此你应当默认这页很重要，不需要判断是否出题。
 
-你的目标不是讲课，也不是机械刷题，而是基于当前 PPT 页生成一个高质量问题，用最少的问题暴露最大的理解漏洞。
+你的目标不是讲课，也不是机械刷题，而是基于当前 PPT 页生成一组高质量诊断题，用最少的题暴露最大的理解漏洞。
 
 你会收到：
 - 课程名称
+- 文档 ID
 - 当前 PPT 页内容
 - 当前页图示/公式/例题描述
 - AI 对当前页的讲解
+- 本页讲解已识别的易卡点 / 考试角度
 - 前后页摘要
 - 我的历史薄弱点
 - 当前挑战模式
+- 当前挑战数量
 
-你需要先判断当前页的知识类型：
+你需要先判断当前页的知识类型（写进每题的 knowledge_type）：
 1. concept：概念/定义页
 2. formula：公式/定理/结论页
 3. derivation：推导页
@@ -439,69 +454,92 @@ const CHALLENGE_COACH_PROMPT = `你是我的理工科 PPT 挑战教练。当前�
 6. diagram：图示/结构/流程页
 7. mixed：混合页
 
-然后选择最适合的 challenge 类型：
-- 概念页：优先出辨析题，检查概念边界。
-- 公式页：优先出适用条件题或误用反例题。
-- 推导页：优先问“哪一步用了什么假设”。
-- 方法页：优先问“考场第一步怎么想”。
-- 例题页：优先出同类题型入口题或轻量变式题。
-- 图示页：优先问图中关系、方向、因果、状态变化或结构作用。
-- 混合页：选择最能暴露理解漏洞的问题。
+然后选择最适合的提问角度：
+- 概念页：辨析题，检查概念边界。
+- 公式页：适用条件题或误用反例题。
+- 推导页：“哪一步用了什么假设”。
+- 方法页：“考场第一步怎么想”。
+- 例题页：同类题型入口题或轻量变式题。
+- 图示页：图中关系、方向、因果、状态变化或结构作用。
+- 混合页：最能暴露理解漏洞的问题。
 
-出题原则：
-1. 按“当前挑战数量”生成题目；每一道题只检查一个关键理解漏洞。
-2. 每题可以准备 1 个追问，但不要一开始展示。
-3. 多题时不要重复同一种问法，应尽量覆盖不同漏洞。
-4. 不要问“请解释一下本页内容”这种泛问题。
-5. 不要考纯记忆，除非这是必要前置。
-6. 问题必须具体、短、有诊断力。
-7. 问题应该能区分：
-   - 看懂讲解；
-   - 能独立说清；
-   - 知道适用条件；
-   - 能用于题目；
-   - 能处理变式。
-8. 如果本页有公式，必须检查适用条件或误用场景。
-9. 如果本页有例题，必须检查题型入口或第一步切入。
-10. 如果本页和我的历史薄弱点有关，要优先针对薄弱点出题。
-11. 不要直接给答案。
+出题原则（逐条遵守）：
+1. Every question must require the learner to apply, discriminate or predict — not recognize a phrase from the page. 不要出“下列关于 X 的说法哪个正确”这类认读题。
+2. One question tests exactly one gap. 题干 stem 不超过 2 句话，必须具体、短、有诊断力。
+3. Options must be homogeneous in form and roughly equal in length. 不要用“以上都对 / 以上都不对”。
+4. Distractors must be plausible misconceptions based on common student errors（Haladyna, Downing & Rodriguez 2002）：每个错误选项都必须是真实学生会犯的错，不要写明显荒谬的选项。
+5. 每个错误选项必须同时给出 misconception（这个学生把什么理解错了）和 diagnosis（选它通常是因为……，以及题干里的哪个线索本可以排除它），尽量再给一句 fix。正确选项的 diagnosis 是一句确认，指出关键线索。
+6. hint 只指向该去看哪个条件 / 图 / 定义，禁止包含正确选项中的关键词，也不得直接说出答案。
+7. 一组题的 bloom 至少覆盖 3 个层级，并按 difficulty 从易到难排序（start simple, then increase difficulty）。
+8. Write as an examiner who has seen where students lose marks on this topic：exam_relevance.how_tested 写这一点考试会怎么考（题型 / 典型变式 / 第一步切入），typical_trap 写常见失分点。
+9. evidence 指向真实位置：page 用 PDF 页码，anchor 用公式编号 / 图名 / 小节标题，quote 是不超过 25 字的原文片段；没有把握时 quote 留空字符串，不要编造。
+10. 如果给了“本页讲解已识别的易卡点 / 考试角度”，必须优先把它们做成干扰项和 exam_relevance 的素材，因为它们是这一页真实的坑。
+11. 如果给了“我的历史薄弱点”，至少有一道题的一个干扰项要对应它。
+12. 如果本页有公式，必须检查适用条件或误用场景；如果本页有例题，必须检查题型入口或第一步切入。
+13. follow_up 是答对后的进阶追问（迁移到邻近情形或真实问题）；bridge 是答错后更基础的桥接问题。
+14. retry_variant 可选：同一考点的换皮问法，用于错题重做。
+15. 不要直接给答案，不要输出讲解式长文。
 
 你必须输出一个可交互选择题题集的严格 JSON，不要输出 Markdown，不要包裹代码块，不要输出 schema 之外的解释。
 JSON schema:
 {
-  "type": "synchropage.challenge_quiz.v1",
+  "type": "synchropage.challenge_quiz.v2",
   "title": "short quiz title",
-  "question_count": 3,
+  "set_goal": "一句话：这组题要暴露的理解漏洞",
+  "document_id": "回填我给你的文档 ID",
+  "skills": [
+    {"id": "snake_case_skill_id", "label": "考点中文标签"}
+  ],
   "questions": [
     {
+      "id": "q1",
+      "skill_id": "snake_case_skill_id",
       "knowledge_type": "concept|formula|derivation|method|example|diagram|mixed",
-      "challenge_type": "short challenge type label",
-      "question": "one concrete diagnostic question",
+      "bloom": "remember|understand|apply|analyze|evaluate",
+      "difficulty": 1,
+      "stem": "具体、短、有诊断力的题干",
       "options": [
-        {"id": "A", "text": "option text"},
-        {"id": "B", "text": "option text"},
-        {"id": "C", "text": "option text"},
-        {"id": "D", "text": "option text"}
+        {"id": "A", "text": "option text", "correct": true, "diagnosis": "选 A 说明你抓住了……"},
+        {"id": "B", "text": "option text", "correct": false, "misconception": "把……误当成……", "diagnosis": "选 B 通常是因为……；题干里的“……”其实排除了它", "fix": "一句纠正或记忆钩子"},
+        {"id": "C", "text": "option text", "correct": false, "misconception": "……", "diagnosis": "……", "fix": "……"}
       ],
-      "correct_option_id": "A|B|C|D",
-      "feedback": {
-        "correct": "short feedback shown after a correct click",
-        "incorrect": "short feedback shown after a wrong click"
+      "correct_option_id": "A",
+      "hint": "不泄露答案：提示去看哪个条件/图/定义",
+      "explanation": {
+        "why_correct": "为什么正确选项成立",
+        "core_idea": "一句可迁移的原则"
       },
-      "explanation": "concise explanation shown only after selection",
-      "follow_up": "optional hidden follow-up question shown only after selection"
+      "exam_relevance": {
+        "how_tested": "考试会怎么考这一点：题型/典型变式/第一步切入",
+        "typical_trap": "常见失分点",
+        "weight": "high|medium|low"
+      },
+      "evidence": {
+        "page": 12,
+        "anchor": "公式编号/图名/小节标题",
+        "quote": "不超过 25 字的原文片段"
+      },
+      "follow_up": "答对后的进阶追问",
+      "bridge": "答错后的更基础的桥接问题",
+      "retry_variant": {
+        "stem": "同一考点的换皮问法（可选）",
+        "options": [
+          {"id": "A", "text": "option text", "correct": false},
+          {"id": "B", "text": "option text", "correct": true}
+        ],
+        "correct_option_id": "B"
+      }
     }
   ]
 }
 
-选项要求：
+输出约束：
 - questions 数组长度必须严格等于“当前挑战数量”。
 - 不要输出旧的顶层 question/options 单题格式；所有题必须放进 questions 数组。
-- 必须提供 4 个选项，id 必须是 A、B、C、D。
-- 只有 1 个正确选项。
-- 错误选项必须是有诊断价值的常见误解，不要写明显荒谬的选项。
-- correct_option_id 必须和 options 中的 id 完全一致。
-- explanation 不要太长，优先说明为什么正确选项成立以及错误选项暴露什么误区。
+- options 为 3-4 个，id 依次是 A、B、C（、D）；有且只有一个选项的 correct 为 true。
+- correct_option_id 必须和那个 correct 为 true 的选项 id 完全一致。
+- skills 必须覆盖 questions 里出现的每一个 skill_id。
+- document_id 必须原样回填我给你的“文档 ID”。
 - JSON 字符串里的 LaTeX 反斜杠必须双重转义，例如写作 "\\vec{E}"、"\\int_A^B"、"\\frac{a}{b}"。`;
 
 const CHALLENGE_PROBLEM_PROMPT = `你是我的理工科 PPT 典型大题挑战教练。当前页是我手动选择触发 challenge 的页面，因此你应当默认这页很重要，但你必须先判断它是否适合生成“典型大题”。
@@ -592,22 +630,86 @@ function buildChallengeCoachPrompt({
     ? teaching.concepts.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6)
     : [];
   const neighborContext = neighboringPdfContext(pdfContext, pageNo);
+  const stuckPoints = promptStringList(teaching.stuck_points);
+  const examAngles = promptStringList(teaching.exam_angles);
+  const documentId = pack.document.id || "unknown";
+  const weakPoints = storedWeakPointLines(documentId);
   return [
     CHALLENGE_COACH_PROMPT,
     "",
     "当前挑战上下文：",
     `- 课程名称：${pack.document.title || "Untitled"}`,
+    `- 文档 ID：${documentId}`,
     `- 当前页：${pageNo ? `PDF p.${pageNo}` : "unknown page"}${title ? ` · ${title}` : ""}`,
     concepts.length ? `- 当前页概念：${concepts.join("、")}` : null,
     `- 当前挑战模式：${mode}`,
     `- 当前挑战数量：${count}`,
-    "- 我的历史薄弱点：暂无显式结构化记录；如果最近对话中已经暴露薄弱点，请优先针对它，不要编造不存在的历史。",
+    stuckPoints.length
+      ? `- 本页讲解已识别的易卡点：${stuckPoints.join("；")}（这些是这一页真实的坑，优先做成干扰项的 misconception）`
+      : "- 本页讲解已识别的易卡点：本页讲解没有给出结构化易卡点，请自行判断，但不要编造讲解里没有的内容。",
+    examAngles.length
+      ? `- 本页讲解已识别的考试角度：${examAngles.join("；")}（优先写进 exam_relevance.how_tested）`
+      : "- 本页讲解已识别的考试角度：本页讲解没有给出结构化考试角度，请以命题人视角自行判断。",
+    weakPoints.length
+      ? `- 我的历史薄弱点：\n${weakPoints.join("\n")}\n  至少有一道题的一个干扰项要对应上面的某个薄弱点。`
+      : "- 我的历史薄弱点：暂无显式结构化记录；如果最近对话中已经暴露薄弱点，请优先针对它，不要编造不存在的历史。",
     neighborContext ? `- 前后页摘要：\n${neighborContext}` : "- 前后页摘要：请使用随请求提供的 PDF 文本上下文和最近对话；若没有明确前后页信息，不要编造。",
     source.text_md ? "- 当前 PPT 页内容：已随请求作为 Current page source text 提供。" : "- 当前 PPT 页内容：当前页无可用抽取文本时，请优先使用附加 PDF/图片证据和已有讲解。",
     teaching.speaker_notes_md ? "- AI 对当前页的讲解：已随请求作为 Existing notes 提供。" : "- AI 对当前页的讲解：暂无已生成讲解时，请仅基于 PPT 页内容出题。",
     "",
-    `输出要求：返回严格 JSON；questions 数组必须恰好包含 ${count} 道题；前端会把 JSON 渲染为可点击选项卡片。不要在 JSON 之外展示答案或追问。`,
+    `输出要求：返回严格 JSON；questions 数组必须恰好包含 ${count} 道题；前端会把 JSON 渲染为一个居中的测验浮层。不要在 JSON 之外展示答案或追问。`,
   ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function promptStringList(value: unknown, max = 6) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, max);
+}
+
+function storedWeakPointLines(documentId: string) {
+  return readQuizWeakPoints(documentId)
+    .slice(0, 8)
+    .map((point) => {
+      const where = point.page ? ` · p.${point.page}` : "";
+      const misconception = point.misconception ? `：${point.misconception}` : "";
+      return `  - ${point.label}${misconception}${where}`;
+    });
+}
+
+/**
+ * The "追问 AI" action inside the quiz overlay. This is deliberately a normal
+ * chat message (it must not match the challenge prefix) so the assistant answers
+ * in prose instead of returning another quiz payload.
+ */
+export function buildChallengeFollowUpPrompt(input: {
+  stem: string;
+  chosenOptionId: string;
+  chosenOptionText: string;
+  correctOptionId: string;
+  correctOptionText: string;
+  isCorrect: boolean;
+  misconception?: string;
+  diagnosis?: string;
+  coreIdea?: string;
+  pageNo?: number | null;
+  anchor?: string;
+}) {
+  return [
+    "我刚在测验里做了这道题，请针对我的选择讲清楚，不要重新出题：",
+    `- 题干：${compactPromptLine(input.stem, 400)}`,
+    `- 我选了：${input.chosenOptionId}. ${compactPromptLine(input.chosenOptionText, 200)}`,
+    `- 正确选项：${input.correctOptionId}. ${compactPromptLine(input.correctOptionText, 200)}`,
+    input.isCorrect ? "- 我这次选对了，我想把它讲透并迁移到变式。" : "- 我这次选错了。",
+    input.misconception ? `- 系统判断我的误解是：${compactPromptLine(input.misconception, 200)}` : null,
+    input.diagnosis ? `- 系统给的诊断是：${compactPromptLine(input.diagnosis, 200)}` : null,
+    input.coreIdea ? `- 这题的可迁移原则是：${compactPromptLine(input.coreIdea, 200)}` : null,
+    input.pageNo ? `- 相关原文位置：PDF p.${input.pageNo}${input.anchor ? ` · ${input.anchor}` : ""}` : null,
+    "",
+    "请先用一句话说明我错/对在哪一步，再说清正确选项成立的关键条件，最后给一个换皮变式让我确认自己真的懂了。",
+  ].filter((line): line is string => line !== null).join("\n");
 }
 
 function buildChallengeProblemPrompt({

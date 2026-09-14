@@ -42,6 +42,9 @@ import {
 } from "./components/pdf/PdfScrollViewer";
 import { OAuthDeviceDialog } from "./components/OAuthDeviceDialog";
 import { SelectionToolbar } from "./components/SelectionToolbar";
+import { AnnotationsPanel } from "./components/annotations/AnnotationsPanel";
+import { PageHighlightLayer } from "./components/annotations/PageHighlightLayer";
+import { PageNotes, type PageNotesHandlers } from "./components/annotations/PageNotes";
 import {
   AgentPanel,
   type QuickSelectionPrompt,
@@ -63,6 +66,9 @@ import {
   usePageSelection,
   type SelectedContext,
 } from "./hooks/usePageSelection";
+import { useDocumentAnnotations } from "./hooks/useDocumentAnnotations";
+import { annotationHitTest, normalizeSelectionRects } from "./lib/annotations/annotationModel";
+import type { AnnotationRecord } from "./lib/persistence";
 import { getAppCopy, type AppCopy } from "./i18n";
 import {
   selectedContextPayload,
@@ -71,7 +77,6 @@ import {
   type ChatPersistInput,
 } from "./lib/assistant/agentChatAdapter";
 import {
-  generationFailureMarkdown,
   resolveTeachingOutputLanguage,
   type PageData,
   type PagePack,
@@ -142,6 +147,7 @@ import {
   createDraftPagePack,
   createId,
   isActiveTab,
+  type ActiveTab,
   isPanelVisibility,
   normalizePack,
   pagePackFromPersistence,
@@ -374,7 +380,7 @@ export default function App() {
   const [pack, setPack] = useState<PagePack>(() => samplePacks[uiPreferences.language]);
   const [currentPageNo, setCurrentPageNo] = useState(1);
   const [pdfUrl, setPdfUrl] = useState("");
-  const [activeTab, setActiveTab] = useState<"notes" | "structure" | "json">("notes");
+  const [activeTab, setActiveTab] = useState<ActiveTab>("notes");
   const [panels, setPanels] = useState<PanelVisibility>(defaultPanelVisibility);
   const [query, setQuery] = useState("");
   const [jobStatus, setJobStatus] = useState(copy.status.localPrototype);
@@ -448,20 +454,21 @@ export default function App() {
     setIsGeneratingNotes(false);
     setGenerateMenuOpen(false);
     setJobStatus(message);
+    // Stopping is not a failure: revert in-flight pages to their pre-run draft
+    // state so the next run treats them as never generated instead of escalating
+    // them to the heavy "previously weak" plan. The stop is reported in the job
+    // status only.
     setPack((current) => ({
       ...current,
       pages: current.pages.map((page) => {
         if (page.status !== "running" && page.status !== "retrying") return page;
         return {
           ...page,
-          status: "failed",
+          status: "draft",
           teaching: {
             ...page.teaching,
             output_language: teachingOutputLanguage,
             slide_title: page.teaching.slide_title || `PDF p.${page.page_no}`,
-            speaker_notes_md: generationFailureMarkdown(message, teachingOutputLanguage),
-            confidence: 0,
-            needs_review: true,
           },
         };
       }),
@@ -1265,6 +1272,20 @@ export default function App() {
     return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, []);
 
+  // The quiz overlay's "看原文 p.N" link asks the reader to jump to a page.
+  useEffect(() => {
+    const handleNavigatePage = (event: Event) => {
+      const detail = (event as CustomEvent<{ pageNo?: number }>).detail;
+      const pageNo = Math.round(Number(detail?.pageNo));
+      if (!Number.isFinite(pageNo) || pageNo < 1) return;
+      setCurrentPageNo(pageNo);
+      pdfScrollViewerRef.current?.scrollToPage(pageNo, "smooth");
+    };
+
+    window.addEventListener("synchropage:navigate-page", handleNavigatePage);
+    return () => window.removeEventListener("synchropage:navigate-page", handleNavigatePage);
+  }, []);
+
   useEffect(() => {
     const root = document.documentElement;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1804,6 +1825,115 @@ export default function App() {
     workspaceId,
   ]);
 
+  // ── PDF highlights & margin notes ─────────────────────────
+  const reportAnnotationError = useCallback((message: string) => {
+    setJobStatus(copy.annotations.saveFailed(message));
+  }, [copy.annotations]);
+  const {
+    annotations,
+    byPage: annotationsByPage,
+    activeId: activeAnnotationId,
+    setActiveId: setActiveAnnotationId,
+    focusRequestId: annotationFocusRequestId,
+    requestFocus: requestAnnotationFocus,
+    consumeFocusRequest: consumeAnnotationFocusRequest,
+    add: addAnnotation,
+    updateNote: updateAnnotationNote,
+    updateColor: updateAnnotationColor,
+    remove: removeAnnotation,
+  } = useDocumentAnnotations({
+    workspaceId,
+    documentId,
+    persist: persistOperation,
+    onError: reportAnnotationError,
+  });
+
+  const createAnnotationFromSelection = useCallback(async (context: SelectedContext, withNote: boolean) => {
+    if (!documentId) {
+      setJobStatus(copy.annotations.requiresDocument);
+      return;
+    }
+    const pageNumber = context.pdfPageNumber || context.pageNumber;
+    if (!pageNumber || !context.pageSize) return;
+    const rects = normalizeSelectionRects(context.selectionRects || [], context.pageSize.width, context.pageSize.height);
+    if (!rects.length) return;
+    clearSelection();
+    const record = await addAnnotation({ pageNumber, kind: "highlight", quote: context.text, rects });
+    if (!record) return;
+    if (withNote) {
+      requestAnnotationFocus(record.id);
+      setJobStatus(copy.annotations.noteAdded(pageNumber));
+    } else {
+      setJobStatus(copy.annotations.highlightAdded(pageNumber));
+    }
+  }, [addAnnotation, clearSelection, copy.annotations, documentId, requestAnnotationFocus]);
+
+  const pageNotesHandlers = useMemo<PageNotesHandlers>(() => ({
+    onActivate: setActiveAnnotationId,
+    onChangeNote: updateAnnotationNote,
+    onChangeColor: (id, color) => {
+      void updateAnnotationColor(id, color);
+    },
+    onDelete: (id) => {
+      void removeAnnotation(id).then(() => setJobStatus(copy.annotations.deleted));
+    },
+    onAddPageNote: (pageNo) => {
+      void addAnnotation({ pageNumber: pageNo, kind: "note" }).then((record) => {
+        if (!record) return;
+        requestAnnotationFocus(record.id);
+        setJobStatus(copy.annotations.noteAdded(pageNo));
+      });
+    },
+    onFocusHandled: consumeAnnotationFocusRequest,
+  }), [
+    addAnnotation,
+    consumeAnnotationFocusRequest,
+    copy.annotations,
+    removeAnnotation,
+    requestAnnotationFocus,
+    setActiveAnnotationId,
+    updateAnnotationColor,
+    updateAnnotationNote,
+  ]);
+
+  const renderPageOverlay = useCallback((pageNo: number) => {
+    const pageAnnotations = annotationsByPage.get(pageNo);
+    if (!pageAnnotations?.length) return null;
+    return (
+      <PageHighlightLayer
+        annotations={pageAnnotations}
+        activeId={activeAnnotationId}
+        label={copy.annotations.highlightLayerAria(pageNo)}
+      />
+    );
+  }, [activeAnnotationId, annotationsByPage, copy.annotations]);
+
+  const renderPageFooter = useCallback((pageNo: number) => {
+    if (!documentId) return null;
+    return (
+      <PageNotes
+        pageNo={pageNo}
+        annotations={annotationsByPage.get(pageNo) || []}
+        activeId={activeAnnotationId}
+        focusRequestId={annotationFocusRequestId}
+        copy={copy}
+        language={uiPreferences.language}
+        handlers={pageNotesHandlers}
+      />
+    );
+  }, [activeAnnotationId, annotationFocusRequestId, annotationsByPage, copy, documentId, pageNotesHandlers, uiPreferences.language]);
+
+  const handlePdfPageClick = useCallback((pageNo: number, point: { x: number; y: number }) => {
+    const hit = annotationHitTest(annotationsByPage.get(pageNo) || [], point);
+    if (hit) requestAnnotationFocus(hit.id);
+  }, [annotationsByPage, requestAnnotationFocus]);
+
+  const jumpToAnnotation = useCallback((annotation: AnnotationRecord) => {
+    setCurrentPageNo(annotation.pageNumber);
+    pdfScrollViewerRef.current?.scrollToPage(annotation.pageNumber, "smooth");
+    window.setTimeout(() => requestAnnotationFocus(annotation.id), 240);
+  }, [requestAnnotationFocus]);
+
   const handleActivePdfPageChange = useCallback((pageNumber: number) => {
     setCurrentPageNo((current) => {
       const nextPage = Math.min(Math.max(pageNumber, 1), pdfNavigationPageCount);
@@ -2155,6 +2285,8 @@ export default function App() {
         onAdd={(context) => captureSelection(context)}
         onExplain={(context) => sendSelectionPrompt(context, "explain")}
         onSummarize={(context) => sendSelectionPrompt(context, "summarize")}
+        onHighlight={documentId ? (context) => { void createAnnotationFromSelection(context, false); } : undefined}
+        onNote={documentId ? (context) => { void createAnnotationFromSelection(context, true); } : undefined}
       />
 
       {courseDialogOpen && (
@@ -2475,6 +2607,9 @@ export default function App() {
                     onPdfContextReady={handlePdfContextReady}
                     onPdfPagesTextReady={handlePdfPagesTextReady}
                     onViewerScroll={clearSelection}
+                    renderPageOverlay={renderPageOverlay}
+                    renderPageFooter={renderPageFooter}
+                    onPageClick={handlePdfPageClick}
                   />
                 ) : (
                   <SlidePreview page={page} copy={copy} />
@@ -2516,27 +2651,42 @@ export default function App() {
                       )}
                     </div>
                     <div className="tab-group">
-                      {(["notes", "structure", "json"] as const).map((tab) => (
-                        <button
-                          key={tab}
-                          type="button"
-                          className={`tab-button ${activeTab === tab ? "active" : ""}`}
-                          onClick={() => setActiveTab(tab)}
-                        >
-                          <span className="tab-label-full">
-                            {tab === "notes" ? copy.notes.tabNotes : tab === "structure" ? copy.notes.tabStructure : copy.notes.tabJson}
-                          </span>
-                          <span className="tab-label-short" aria-hidden="true">
-                            {tab === "notes" ? copy.notes.tabNotesShort : tab === "structure" ? copy.notes.tabStructureShort : copy.notes.tabJsonShort}
-                          </span>
-                        </button>
-                      ))}
+                      {(["notes", "annotations", "structure", "json"] as const).map((tab) => {
+                        const fullLabel = tab === "notes" ? copy.notes.tabNotes : tab === "annotations" ? copy.notes.tabAnnotations : tab === "structure" ? copy.notes.tabStructure : copy.notes.tabJson;
+                        const shortLabel = tab === "notes" ? copy.notes.tabNotesShort : tab === "annotations" ? copy.notes.tabAnnotationsShort : tab === "structure" ? copy.notes.tabStructureShort : copy.notes.tabJsonShort;
+                        return (
+                          <button
+                            key={tab}
+                            type="button"
+                            className={`tab-button ${activeTab === tab ? "active" : ""}`}
+                            // The full label is display:none in a narrow pane; keep the name stable.
+                            aria-label={fullLabel}
+                            aria-pressed={activeTab === tab}
+                            title={fullLabel}
+                            onClick={() => setActiveTab(tab)}
+                          >
+                            <span className="tab-label-full">{fullLabel}</span>
+                            <span className="tab-label-short" aria-hidden="true">{shortLabel}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 }
               />
               <div className="notes-content">
                 {activeTab === "notes" && <MarkdownBlock markdown={page.teaching.speaker_notes_md} concepts={page.teaching.concepts} />}
+                {activeTab === "annotations" && (
+                  <AnnotationsPanel
+                    documentTitle={pack.document.title}
+                    annotations={annotations}
+                    activeId={activeAnnotationId}
+                    copy={copy}
+                    language={uiPreferences.language}
+                    onJump={jumpToAnnotation}
+                    onExported={(count) => setJobStatus(copy.annotations.exported(count))}
+                  />
+                )}
                 {activeTab === "structure" && <StructurePanel page={page} copy={copy} />}
                 {activeTab === "json" && <pre className="json-panel">{JSON.stringify(page, null, 2)}</pre>}
               </div>

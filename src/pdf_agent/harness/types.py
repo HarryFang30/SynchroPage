@@ -100,6 +100,8 @@ class PageTeaching:
     contextual_bridge: str
     visual_explanations: list[str]
     formula_explanations: list[str]
+    stuck_points: list[str]
+    exam_angles: list[str]
     evidence: list[Evidence]
     confidence: float
     needs_review: bool
