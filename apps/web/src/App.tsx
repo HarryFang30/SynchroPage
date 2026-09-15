@@ -82,6 +82,7 @@ import {
   type PageData,
   type PagePack,
 } from "./lib/generation/teachingGeneration";
+import { lessonPlanKeyPages, lessonPlanNoteInfo } from "./lib/generation/lessonPlan";
 import {
   generationPageStatus,
   hasCompletedTeaching,
@@ -2002,6 +2003,11 @@ export default function App() {
     pdfScrollViewerRef.current?.scrollToPage(annotation.pageNumber, "smooth");
     window.setTimeout(() => requestAnnotationFocus(annotation.id), 240);
   }, [requestAnnotationFocus]);
+  const jumpToPdfPage = useCallback((pageNo: number) => {
+    setCurrentPageNo(pageNo);
+    pdfScrollViewerRef.current?.scrollToPage(pageNo, "smooth");
+  }, []);
+  const lessonPlanKeyPageNumbers = useMemo(() => lessonPlanKeyPages(pack.document.lesson_plan), [pack.document.lesson_plan]);
 
   const handleActivePdfPageChange = useCallback((pageNumber: number) => {
     setCurrentPageNo((current) => {
@@ -2676,6 +2682,7 @@ export default function App() {
                     onPdfContextReady={handlePdfContextReady}
                     onPdfPagesTextReady={handlePdfPagesTextReady}
                     onViewerScroll={clearSelection}
+                    keyPageNumbers={lessonPlanKeyPageNumbers}
                     renderPageOverlay={renderPageOverlay}
                     renderPageFooter={renderPageFooter}
                     onPageClick={handlePdfPageClick}
@@ -2750,6 +2757,8 @@ export default function App() {
                     title={page.teaching.slide_title}
                     pageNo={page.page_no}
                     pageType={page.source.page_type}
+                    plan={lessonPlanNoteInfo(pack.document.lesson_plan, page.page_no)}
+                    onJumpToPage={jumpToPdfPage}
                   />}
                 {activeTab === "annotations" && (
                   <AnnotationsPanel

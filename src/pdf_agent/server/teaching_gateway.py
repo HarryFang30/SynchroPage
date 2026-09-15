@@ -30,12 +30,15 @@ from pdf_agent.gateway import (
 )
 from pdf_agent.server.constants import (
     DEFAULT_AGENT_MODEL,
+    LESSON_PLAN_CHUNK_PAGES,
+    LESSON_PLAN_VERSION,
 )
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.gateway_transport import post_json_responses
 from pdf_agent.server.generation_parsing import (
     _parse_generated_page,
     _parse_generated_pages_with_missing,
+    _parse_lesson_plan,
 )
 from pdf_agent.server.generation_policy import (
     MAX_TIMEOUT_RETRIES,
@@ -60,7 +63,9 @@ from pdf_agent.server.model_gateway import (
     supported_reasoning_efforts,
 )
 from pdf_agent.server.payload_builders import (
+    _build_lesson_plan_payload,
     _build_teaching_generation_payload,
+    _lesson_plan_pages,
     _reasoning_effort,
     _teaching_generation_candidate_bodies,
     _teaching_generation_page_numbers,
@@ -81,6 +86,7 @@ LOGGER = logging.getLogger("pdf_agent.server.teaching_gateway")
 REPAIR_INSTRUCTIONS_SUFFIX = "Return only the JSON object."
 
 ParseFn = Callable[[str], dict[str, Any]]
+PayloadBuilder = Callable[[Mapping[str, Any], str, int], dict[str, Any]]
 
 
 class _RequestContext:
@@ -190,6 +196,61 @@ class TeachingGenerationGateway:
 
         return await self._generate(body, kind="pages", parse=parse)
 
+    async def generate_plan(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        """Plan the whole document once: segments, per-page role and depth.
+
+        Long documents are planned in chunks of ``LESSON_PLAN_CHUNK_PAGES``
+        pages, sequentially, with the running summary carried forward; the
+        chunks' segments are renumbered into one contiguous plan.
+        """
+        pages = _lesson_plan_pages(body)
+        if not pages:
+            raise HttpError(400, "Lesson plan request did not contain pages", code="invalid_request")
+        chunks = [pages[index : index + LESSON_PLAN_CHUNK_PAGES] for index in range(0, len(pages), LESSON_PLAN_CHUNK_PAGES)]
+        started = time.monotonic()
+        summary = ""
+        segments: list[dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
+        attempts = 0
+        last: dict[str, Any] = {}
+        for index, chunk in enumerate(chunks, start=1):
+            chunk_body: dict[str, Any] = {
+                **body,
+                "pages": list(chunk),
+                "previousSummary": summary,
+                "chunk": {"index": index, "count": len(chunks)},
+            }
+
+            def parse(content: str, _chunk_body: Mapping[str, Any] = chunk_body) -> dict[str, Any]:
+                return {"plan": _parse_lesson_plan(content, _chunk_body)}
+
+            last = await self._generate(
+                chunk_body, kind="plan", parse=parse, payload_builder=self._build_plan_payload
+            )
+            plan = last["plan"]
+            summary = plan["document_summary"] or summary
+            offset = len(segments)
+            for segment in plan["segments"]:
+                segments.append({**segment, "id": segment["id"] + offset})
+            for row in plan["pages"]:
+                rows.append({**row, "segment": row["segment"] + offset})
+            timing = last.get("timing") if isinstance(last.get("timing"), Mapping) else {}
+            attempts += int(timing.get("attempts", 1) or 1)
+        result = dict(last)
+        result["plan"] = {
+            "version": LESSON_PLAN_VERSION,
+            "model": string_value(last.get("model"), ""),
+            "document_summary": summary,
+            "segments": segments,
+            "pages": rows,
+        }
+        result["timing"] = {
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+            "attempts": max(1, attempts),
+            "coalesced": False,
+        }
+        return result
+
     def status(self) -> dict[str, Any]:
         """Cheap, read-only snapshot for ``GET /api/generate/status``."""
         remaining = self._rate_limit_cooldown_until - time.monotonic()
@@ -225,6 +286,7 @@ class TeachingGenerationGateway:
         *,
         kind: str,
         parse: ParseFn,
+        payload_builder: PayloadBuilder | None = None,
     ) -> dict[str, Any]:
         started = time.monotonic()
         key = self._request_key(body, kind=kind)
@@ -251,7 +313,9 @@ class TeachingGenerationGateway:
             return result
 
         try:
-            result = await self._generate_uncoalesced(body, parse=parse, started=started)
+            result = await self._generate_uncoalesced(
+                body, parse=parse, started=started, payload_builder=payload_builder
+            )
         except asyncio.CancelledError:
             if not future.done():
                 future.cancel()
@@ -276,6 +340,7 @@ class TeachingGenerationGateway:
         *,
         parse: ParseFn,
         started: float,
+        payload_builder: PayloadBuilder | None = None,
     ) -> dict[str, Any]:
         page_count = max(1, len(_teaching_generation_pages(body)))
         effort = _reasoning_effort(body)
@@ -283,7 +348,12 @@ class TeachingGenerationGateway:
             request_deadline_seconds(effort, page_count), started=started
         )
         parsed, result, document_file_used, cache_metadata = await self._generate_content_with_fallback(
-            body, parse=parse, context=context, effort=effort, page_count=page_count
+            body,
+            parse=parse,
+            context=context,
+            effort=effort,
+            page_count=page_count,
+            payload_builder=payload_builder or self._build_payload,
         )
         return {
             **parsed,
@@ -312,6 +382,7 @@ class TeachingGenerationGateway:
         context: _RequestContext,
         effort: str,
         page_count: int,
+        payload_builder: PayloadBuilder,
     ):
         candidate_bodies = await asyncio.to_thread(
             _teaching_generation_candidate_bodies, body, pdf_file_cache=self.pdf_file_cache
@@ -321,7 +392,7 @@ class TeachingGenerationGateway:
         repaired = False
         for candidate_index, (candidate_body, document_file_used) in enumerate(candidate_bodies):
             payload = await asyncio.to_thread(
-                self._build_payload, candidate_body, effort, page_count
+                payload_builder, candidate_body, effort, page_count
             )
             try:
                 content, result = await self._post_and_extract(candidate_body, payload, context)
@@ -412,6 +483,16 @@ class TeachingGenerationGateway:
             default_model=self.model,
             pdf_file_cache=self.pdf_file_cache,
         )
+        payload.setdefault("max_output_tokens", max_output_tokens_for(effort, page_count))
+        return payload
+
+    def _build_plan_payload(
+        self,
+        candidate_body: Mapping[str, Any],
+        effort: str,
+        page_count: int,
+    ) -> dict[str, Any]:
+        payload = _build_lesson_plan_payload(candidate_body, default_model=self.model)
         payload.setdefault("max_output_tokens", max_output_tokens_for(effort, page_count))
         return payload
 

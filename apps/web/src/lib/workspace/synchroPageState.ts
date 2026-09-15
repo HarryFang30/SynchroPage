@@ -14,6 +14,7 @@ import {
   type PageData,
   type PagePack,
 } from "../generation/teachingGeneration";
+import { normalizeLessonPlan } from "../generation/lessonPlan";
 import type { DocumentRecord, GeneratedPageRecord, StorageRepairResult } from "../persistence/schema";
 import type { ThreadMessageLike } from "../persistence/workspaceStore";
 
@@ -90,13 +91,16 @@ export function pagePackFromPersistence(
           title: documentTitle,
           source_pdf_url: document.fileName,
           page_count: Math.max(document.pageCount || 0, rawPages.length),
+          lesson_plan: document.lessonPlan,
         },
         pages: rawPages,
       },
       copy,
     );
   }
-  return createDraftPagePack(documentTitle, document.fileName, Math.max(document.pageCount || 1, 1), document.id);
+  const draft = createDraftPagePack(documentTitle, document.fileName, Math.max(document.pageCount || 1, 1), document.id);
+  const lessonPlan = normalizeLessonPlan(document.lessonPlan);
+  return lessonPlan ? { ...draft, document: { ...draft.document, lesson_plan: lessonPlan } } : draft;
 }
 
 export function settingsRecordToPreferences(record: Partial<UiPreferences> | null | undefined): UiPreferences {
@@ -193,6 +197,7 @@ export function normalizePack(raw: unknown, copy: AppCopy): PagePack {
   const pages = Array.isArray(source) ? source : source.pages;
   if (!Array.isArray(pages)) throw new Error(copy.errors.jsonNeedsPages);
 
+  const lessonPlan = normalizeLessonPlan((source.document as { lesson_plan?: unknown } | undefined)?.lesson_plan);
   return {
     schema: source.schema || "synchropage.lecture.v1",
     document: {
@@ -200,6 +205,7 @@ export function normalizePack(raw: unknown, copy: AppCopy): PagePack {
       title: source.document?.title || source.title || copy.errors.importedDocument,
       source_pdf_url: source.document?.source_pdf_url || "",
       page_count: pages.length,
+      ...(lessonPlan ? { lesson_plan: lessonPlan } : {}),
     },
     pages: pages.map((rawPage, index) => {
       const page = rawPage as Partial<PageData> & {

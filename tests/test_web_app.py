@@ -466,7 +466,7 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("Target page:", content[2]["text"])
         self.assertIn("page_no: 2", content[2]["text"])
 
-    def test_teaching_generation_fast_model_uses_compact_prompt_cache(self) -> None:
+    def test_teaching_generation_mini_model_uses_the_shared_prompt(self) -> None:
         payload = _build_teaching_generation_payload(
             {
                 "model": "gpt-5.4-mini",
@@ -491,13 +491,15 @@ class WebAppTest(unittest.TestCase):
 
         self.assertEqual(payload["model"], "gpt-5.4-mini")
         self.assertEqual(payload["reasoning"]["effort"], "none")
-        self.assertIn("Generate SynchroPage teaching notes", payload["instructions"])
+        self.assertIn("You are the model backend for SynchroPage.", payload["instructions"])
         content = payload["input"][0]["content"]
         self.assertEqual(content[0]["type"], "input_text")
         self.assertIn("SYNCHROPAGE CACHEABLE DOCUMENT CONTEXT", content[0]["text"])
         self.assertIn("[p.1] Intro", content[0]["text"])
         self.assertEqual(content[1]["type"], "input_text")
-        self.assertIn("Pages JSONL:", content[1]["text"])
+        self.assertIn("Lesson plan for this request:", content[1]["text"])
+        self.assertIn("Target page:", content[1]["text"])
+        self.assertNotIn("Pages JSONL:", content[1]["text"])
         self.assertTrue(str(payload["prompt_cache_key"]).startswith("synchropage:doc_1:"))
         self.assertEqual(payload["prompt_cache_retention"], "24h")
 
@@ -738,8 +740,8 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("first target text", prompt)
         self.assertIn("second target text", prompt)
 
-    def test_teaching_prompt_limits_fast_source_text_more_aggressively(self) -> None:
-        long_text = ("A" * 4100) + "AFTER_FAST_LIMIT"
+    def test_teaching_prompt_keeps_balanced_source_text_for_mini_models(self) -> None:
+        long_text = ("A" * 4100) + "STILL_VISIBLE"
         prompt = _build_teaching_generation_prompt(
             {
                 "model": "gpt-5.4-mini",
@@ -755,13 +757,12 @@ class WebAppTest(unittest.TestCase):
             }
         )
 
-        self.assertNotIn("AFTER_FAST_LIMIT", prompt)
-        self.assertNotIn("For binary counting sequences", prompt)
-        self.assertNotIn("Document:", prompt)
-        self.assertNotIn("Generation quality plan:", prompt)
-        self.assertIn("Pages JSONL:", prompt)
+        self.assertIn("STILL_VISIBLE", prompt)
+        self.assertIn("Document:", prompt)
+        self.assertIn("Generation quality plan:", prompt)
+        self.assertIn("Lesson plan for this request:", prompt)
 
-    def test_fast_teaching_missing_confidence_defaults_to_reviewable_value(self) -> None:
+    def test_generated_page_missing_confidence_defaults_and_handoff_is_kept(self) -> None:
         page = _parse_generated_page(
             json.dumps(
                 {
@@ -769,37 +770,34 @@ class WebAppTest(unittest.TestCase):
                         "page_no": 1,
                         "teaching": {
                             "slide_title": "Intro",
-                            "speaker_notes_md": "A concise but confidence-free fast response.",
+                            "speaker_notes_md": "A concise but confidence-free response.",
+                            "handoff": "  The student now knows\n what a loss is.  ",
                         },
                     }
                 }
             ),
             {
                 "model": "gpt-5.4-mini",
-                "qualityPlan": {
-                    "model": "gpt-5.4-mini",
-                    "reasoningEffort": "none",
-                    "attachPdf": False,
-                    "batchable": True,
-                    "reasons": ["text-fast-path"],
-                },
                 "page": {"page_no": 1, "source": {"text_md": "overview", "pdf_page_ref": "#page=1"}},
             },
         )
 
-        self.assertLess(page["teaching"]["confidence"], 0.58)
-        self.assertTrue(page["teaching"]["needs_review"])
+        self.assertEqual(page["teaching"]["confidence"], 0.78)
+        self.assertFalse(page["teaching"]["needs_review"])
+        self.assertEqual(page["teaching"]["handoff"], "The student now knows what a loss is.")
 
-    def test_fast_teaching_batch_prompt_uses_compact_jsonl_pages(self) -> None:
+    def test_teaching_batch_prompt_carries_one_plan_row_per_target_page(self) -> None:
         prompt = _build_teaching_generation_prompt(
             {
                 "model": "gpt-5.4-mini",
-                "qualityPlan": {
-                    "model": "gpt-5.4-mini",
-                    "reasoningEffort": "low",
-                    "attachPdf": False,
-                    "batchable": True,
-                    "reasons": ["text-fast-path"],
+                "lessonPlan": {
+                    "document_summary": "Two pages.",
+                    "segment": {"id": 1, "title": "Opening", "pages": [3, 7], "goal": "Know the setup."},
+                    "pages": [
+                        {"page_no": 3, "role": "title", "depth": "skim", "cue": "cover"},
+                        {"page_no": 7, "role": "concept", "depth": "full", "key": True, "cue": "the definition"},
+                    ],
+                    "handoff": "",
                 },
                 "pages": [
                     {"page_no": 3, "source": {"text_md": "first target text", "pdf_page_ref": "#page=3"}},
@@ -809,19 +807,13 @@ class WebAppTest(unittest.TestCase):
             }
         )
 
-        self.assertIn("Pages JSONL:", prompt)
-        self.assertIn('"page_no":3', prompt)
-        self.assertIn('"source_text":"first target text"', prompt)
-        self.assertIn('"page_no":7', prompt)
-        self.assertIn('"source_text":"second target text"', prompt)
-        self.assertEqual(prompt.count('"page_no":"<requested_page_no>"'), 1)
-        self.assertEqual(prompt.count('"speaker_notes_md"'), 1)
-        self.assertIn('"confidence"', prompt)
-        self.assertIn('"needs_review"', prompt)
-        self.assertNotIn('"needs_parser_fallback"', prompt)
-        self.assertNotIn("--- Target page", prompt)
-        self.assertNotIn("Document:", prompt)
-        self.assertNotIn("existing_notes:", prompt)
+        self.assertIn("segment: Opening (pages 3-7)", prompt)
+        self.assertIn("- p3: role=title depth=skim — cover", prompt)
+        self.assertIn("- p7: role=concept depth=full key=true — the definition", prompt)
+        self.assertIn("handoff_from_previous_page: none", prompt)
+        self.assertIn("--- Target page 3 ---", prompt)
+        self.assertIn("source_text:", prompt)
+        self.assertNotIn("Pages JSONL:", prompt)
 
     def test_teaching_prompt_keeps_more_source_text_for_balanced_pages(self) -> None:
         long_text = ("A" * 4100) + "BALANCED_VISIBLE"
@@ -908,7 +900,7 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(agent_payload["prompt_cache_key"], teaching_payload["prompt_cache_key"])
         self.assertEqual(agent_payload["instructions"], teaching_payload["instructions"])
         self.assertIn("You are the AI agent panel inside SynchroPage.", agent_payload["input"][0]["content"][1]["text"])
-        self.assertIn("You are the SynchroPage study companion.", teaching_payload["input"][0]["content"][1]["text"])
+        self.assertIn("You are the SynchroPage teaching assistant", teaching_payload["input"][0]["content"][1]["text"])
 
     def test_document_cache_prefix_is_stable_for_page_order(self) -> None:
         base = {

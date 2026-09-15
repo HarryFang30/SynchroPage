@@ -3,7 +3,6 @@ import {
   generationFailureMarkdown,
   teachingQualityPlanPayload,
   teachingRequestPage,
-  teachingDocumentContextForPlan,
   type GeneratedTeachingPageResponse,
   type GenerationFailureKind,
   type PageData,
@@ -12,7 +11,9 @@ import {
   type TeachingOutputLanguage,
 } from "../lib/generation/teachingGeneration";
 import { normalizeGeneratedPage } from "../lib/generation/generationRuntime";
+import type { LessonPlanRequestSlice } from "../lib/generation/lessonPlan";
 import type { PdfDirectFileInput } from "../lib/pdf/directFile";
+import type { PdfContextPayload } from "../lib/pdf/textExtraction";
 
 // ── Running page builder ──────────────────────────────────────
 
@@ -94,7 +95,7 @@ export function normalizeGeneratedWithLanguage(
 export interface SinglePageRequestParams {
   plan: TeachingGenerationQualityPlan;
   document: PagePack["document"];
-  documentContext: ReturnType<typeof teachingDocumentContextForPlan>;
+  documentContext: PdfContextPayload | null;
   documentFile: PdfDirectFileInput | null;
   outputLanguage: TeachingOutputLanguage;
   outputLanguageLabel: string;
@@ -103,10 +104,12 @@ export interface SinglePageRequestParams {
   pageCount: number;
   previousPage: { page_no: number; title: string } | null;
   nextPage: { page_no: number; title: string } | null;
+  /** Lesson-plan rows and segment for this page, with the previous page's handoff. */
+  lessonPlan?: LessonPlanRequestSlice;
 }
 
 export function buildSinglePageRequestBody(params: SinglePageRequestParams) {
-  const { plan, document, documentContext, documentFile, outputLanguage, outputLanguageLabel, uiLanguage, runningPage, pageCount, previousPage, nextPage } = params;
+  const { plan, document, documentContext, documentFile, outputLanguage, outputLanguageLabel, uiLanguage, runningPage, pageCount, previousPage, nextPage, lessonPlan } = params;
   return {
     method: "POST" as const,
     body: JSON.stringify({
@@ -126,6 +129,7 @@ export function buildSinglePageRequestBody(params: SinglePageRequestParams) {
       pageCount,
       previousPage,
       nextPage,
+      lessonPlan,
     }),
   };
 }
@@ -133,17 +137,19 @@ export function buildSinglePageRequestBody(params: SinglePageRequestParams) {
 export interface BatchPagesRequestParams {
   plan: TeachingGenerationQualityPlan;
   document: PagePack["document"];
-  documentContext: ReturnType<typeof teachingDocumentContextForPlan>;
+  documentContext: PdfContextPayload | null;
   documentFile: PdfDirectFileInput | null;
   outputLanguage: TeachingOutputLanguage;
   outputLanguageLabel: string;
   uiLanguage: string;
   runningPages: PageData[];
   pageCount: number;
+  /** Lesson-plan rows and segment for these pages, with the previous page's handoff. */
+  lessonPlan?: LessonPlanRequestSlice;
 }
 
 export function buildBatchPagesRequestBody(params: BatchPagesRequestParams) {
-  const { plan, document, documentContext, documentFile, outputLanguage, outputLanguageLabel, uiLanguage, runningPages, pageCount } = params;
+  const { plan, document, documentContext, documentFile, outputLanguage, outputLanguageLabel, uiLanguage, runningPages, pageCount, lessonPlan } = params;
   return {
     method: "POST" as const,
     body: JSON.stringify({
@@ -161,6 +167,7 @@ export function buildBatchPagesRequestBody(params: BatchPagesRequestParams) {
       uiLanguage,
       pages: runningPages.map((page) => teachingRequestPage(page, plan)),
       pageCount,
+      lessonPlan,
     }),
   };
 }

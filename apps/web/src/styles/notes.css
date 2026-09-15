@@ -78,6 +78,29 @@
   color: var(--pp-text-faint);
 }
 
+.note-eyebrow .note-key {
+  color: var(--pp-accent-strong);
+}
+
+.note-segment-link {
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--pp-accent);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.note-segment-link:focus-visible {
+  outline: 2px solid var(--pp-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 .note-title {
   margin: 0;
   color: var(--pp-text-primary);
@@ -434,6 +457,103 @@
 
 .note-answer > .note-markdown-content p:last-child {
   margin-bottom: 0;
+}
+
+/* Teaching devices: the labelled blockquotes a lecture may use at most twice
+   per page. A plain quote (no label) keeps a neutral look. */
+.note-markdown .markdown-body blockquote {
+  margin: 14px 0;
+  padding: 10px 14px 10px 16px;
+  border-left: 3px solid var(--pp-border);
+  border-radius: 0 10px 10px 0;
+  background: color-mix(in oklch, var(--pp-text-primary) 4%, transparent);
+  color: inherit;
+}
+
+.note-markdown .markdown-body blockquote p {
+  margin: 0;
+}
+
+.note-markdown .markdown-body blockquote p + p {
+  margin-top: 0.5em;
+}
+
+.note-device > p:first-child > strong:first-child {
+  margin-right: 4px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.note-device-remember {
+  border-left-color: var(--annot-yellow-ink, oklch(0.62 0.13 88));
+  background: color-mix(in oklch, var(--annot-yellow, oklch(0.9 0.17 96)) 30%, var(--pp-bg-panel));
+  font-weight: 500;
+}
+
+.note-device-remember > p:first-child > strong:first-child {
+  color: color-mix(in oklch, var(--annot-yellow-ink, oklch(0.62 0.13 88)) 70%, var(--pp-text-primary));
+}
+
+.note-device-example {
+  border-left-color: var(--pp-success);
+  background: color-mix(in oklch, var(--pp-success) 8%, var(--pp-bg-panel));
+}
+
+.note-device-example > p:first-child > strong:first-child {
+  color: var(--pp-success);
+}
+
+.note-device-trap {
+  border-left-color: var(--pp-warning);
+  background: color-mix(in oklch, var(--pp-warning) 10%, var(--pp-bg-panel));
+}
+
+.note-device-trap > p:first-child > strong:first-child {
+  color: color-mix(in oklch, var(--pp-warning) 72%, var(--pp-text-primary));
+}
+
+.note-device-exam {
+  border-left-color: var(--pp-accent);
+  background: color-mix(in oklch, var(--pp-accent-soft) 26%, var(--pp-bg-panel));
+}
+
+.note-device-exam > p:first-child > strong:first-child {
+  color: var(--pp-accent-strong);
+}
+
+.note-device-check {
+  border-left-color: var(--violet);
+  background: color-mix(in oklch, var(--violet) 7%, var(--pp-bg-panel));
+}
+
+.note-device-check > p:first-child > strong:first-child {
+  color: var(--violet);
+}
+
+.note-device .note-answer {
+  margin-top: 8px;
+  padding-top: 6px;
+  border: 0;
+  border-top: 1px dashed color-mix(in oklch, var(--violet) 30%, var(--pp-border));
+  border-radius: 0;
+  background: transparent;
+}
+
+.note-device .note-answer summary {
+  padding: 2px 0;
+}
+
+.note-device .note-answer[open] summary {
+  border-bottom: 0;
+}
+
+.note-device .note-answer > p {
+  margin-top: 6px;
+}
+
+:root[data-synchropage-resolved-theme="dark"] .note-device-remember {
+  background: color-mix(in oklch, var(--annot-yellow, oklch(0.9 0.17 96)) 14%, var(--pp-bg-panel));
 }
 
 /* Links to neighbouring pages: a quiet footnote. */

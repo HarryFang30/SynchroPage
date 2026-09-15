@@ -10,6 +10,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from pdf_agent.server.constants import TEACHING_DEPTHS, TEACHING_PAGE_ROLES
 from pdf_agent.server.document_context import _pdf_file_input
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.markdown_math import (
@@ -19,7 +20,7 @@ from pdf_agent.server.markdown_math import (
     normalize_markdown_math as _normalize_markdown_math,
 )
 from pdf_agent.server.payload_builders import (
-    _is_fast_teaching_generation,
+    _lesson_plan_pages,
     _teaching_generation_pages,
     _teaching_output_language,
 )
@@ -163,11 +164,8 @@ def _normalize_generated_page_candidate(
     has_pdf_file = bool(_pdf_file_input(body.get("documentFile"), pdf_file_cache=pdf_file_cache))
     no_source_available = not source_text and not has_pdf_file
     needs_fallback = bool(teaching.get("needs_parser_fallback")) or no_source_available
-    fast_generation = _is_fast_teaching_generation(body)
-    confidence_missing = teaching.get("confidence") is None
-    needs_review = bool(teaching.get("needs_review")) or needs_fallback or (fast_generation and confidence_missing)
-    default_confidence = 0.56 if fast_generation else 0.78
-    confidence = _float_value(teaching.get("confidence"), 0.28 if no_source_available else default_confidence)
+    needs_review = bool(teaching.get("needs_review")) or needs_fallback
+    confidence = _float_value(teaching.get("confidence"), 0.28 if no_source_available else 0.78)
     if needs_fallback:
         confidence = min(confidence, 0.35)
 
@@ -211,6 +209,7 @@ def _normalize_generated_page_candidate(
             "output_language": output_language_code,
             "slide_title": _string_value(teaching.get("slide_title"), f"PDF p.{page_no}"),
             "speaker_notes_md": notes,
+            "handoff": " ".join(_string_value(teaching.get("handoff"), "").split()),
             "concepts": _string_list(teaching.get("concepts")),
             "prerequisites": _string_list(teaching.get("prerequisites")),
             "contextual_bridge": _string_value(teaching.get("contextual_bridge"), ""),
@@ -224,6 +223,96 @@ def _normalize_generated_page_candidate(
             "needs_parser_fallback": needs_fallback,
         },
         "status": "needs_review" if needs_review else "ready",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Lesson plan parsing
+# ---------------------------------------------------------------------------
+
+_SKIM_ROLES = {"title", "agenda", "blank", "transition"}
+
+
+def _parse_lesson_plan(content: str, body: Mapping[str, Any]) -> dict[str, Any]:
+    value = _json_from_model_text(content)
+    page_numbers = [_int_value(item.get("page_no"), 0) for item in _lesson_plan_pages(body)]
+    page_numbers = [page_no for page_no in page_numbers if page_no > 0]
+    if not page_numbers:
+        raise HttpError(400, "Lesson plan request did not contain pages", code="invalid_request")
+    if not isinstance(value, Mapping):
+        raise HttpError(502, "Lesson plan response was not a JSON object", code="invalid_generation_json")
+    plan = normalize_lesson_plan(value, page_numbers)
+    if not plan["pages"]:
+        raise HttpError(502, "Lesson plan response did not cover any page", code="invalid_generation_json")
+    return plan
+
+
+def normalize_lesson_plan(value: Mapping[str, Any], page_numbers: list[int]) -> dict[str, Any]:
+    """Coerce a model plan into contiguous segments that cover *page_numbers*.
+
+    Every requested page gets a row (defaults when the model skipped it);
+    segments are rebuilt by walking the pages in order, so they are always
+    consecutive and non-overlapping even when the model's numbering was not.
+    """
+    raw_segments: dict[int, Mapping[str, Any]] = {}
+    for item in value.get("segments") if isinstance(value.get("segments"), list) else []:
+        if isinstance(item, Mapping):
+            segment_id = _int_value(item.get("id"), 0)
+            if segment_id > 0 and segment_id not in raw_segments:
+                raw_segments[segment_id] = item
+    raw_rows: dict[int, Mapping[str, Any]] = {}
+    for item in value.get("pages") if isinstance(value.get("pages"), list) else []:
+        if isinstance(item, Mapping):
+            page_no = _int_value(item.get("page_no"), 0)
+            if page_no > 0 and page_no not in raw_rows:
+                raw_rows[page_no] = item
+
+    rows: list[dict[str, Any]] = []
+    last_segment_id = 0
+    for page_no in sorted(set(page_numbers)):
+        item = raw_rows.get(page_no, {})
+        role = _string_value(item.get("role"), "")
+        if role not in TEACHING_PAGE_ROLES:
+            role = "concept"
+        depth = _string_value(item.get("depth"), "")
+        if depth not in TEACHING_DEPTHS:
+            depth = "skim" if role in _SKIM_ROLES else "full"
+        segment_id = _int_value(item.get("segment"), 0)
+        if segment_id <= 0:
+            segment_id = last_segment_id or 1
+        rows.append(
+            {
+                "page_no": page_no,
+                "segment": segment_id,
+                "role": role,
+                "depth": depth,
+                "key": bool(item.get("key")) and depth == "full",
+                "cue": " ".join(_string_value(item.get("cue"), "").split()),
+            }
+        )
+        last_segment_id = segment_id
+
+    segments: list[dict[str, Any]] = []
+    current_source_id: int | None = None
+    for row in rows:
+        if current_source_id is None or row["segment"] != current_source_id:
+            current_source_id = row["segment"]
+            source = raw_segments.get(current_source_id, {})
+            segments.append(
+                {
+                    "id": len(segments) + 1,
+                    "title": _string_value(source.get("title"), f"Part {len(segments) + 1}"),
+                    "goal": " ".join(_string_value(source.get("goal"), "").split()),
+                    "pages": [row["page_no"], row["page_no"]],
+                }
+            )
+        segments[-1]["pages"][1] = row["page_no"]
+        row["segment"] = segments[-1]["id"]
+
+    return {
+        "document_summary": " ".join(_string_value(value.get("document_summary"), "").split()),
+        "segments": segments,
+        "pages": rows,
     }
 
 

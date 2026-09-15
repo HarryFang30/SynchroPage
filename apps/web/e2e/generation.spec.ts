@@ -56,11 +56,34 @@ function mockNotes(label: string, pageNo: number) {
   return `${label} for page ${pageNo}. These mocked notes are deliberately long enough to stay above the weak-output retry threshold so the test exercises only the path it is about.`;
 }
 
+/** A lesson plan for a small fixture: page 1 is the cover, page 2 the key concept, the rest brief. */
+function planMock(pageCount = 3) {
+  const pages = Array.from({ length: pageCount }, (_, index) => {
+    const pageNo = index + 1;
+    if (pageNo === 1) return { page_no: 1, segment: 1, role: "title", depth: "skim", key: false, cue: "cover page" };
+    if (pageNo === 2) return { page_no: 2, segment: 1, role: "concept", depth: "full", key: true, cue: "the definition" };
+    return { page_no: pageNo, segment: 1, role: "example", depth: "brief", key: false, cue: "a small example" };
+  });
+  return {
+    plan: {
+      version: "synchropage.lesson-plan.v1",
+      document_summary: "A mocked deck about one concept.",
+      segments: [{ id: 1, title: "Opening segment", goal: "Know the concept.", pages: [1, pageCount] }],
+      pages,
+    },
+  };
+}
+
+async function fulfilPlan(route: import("@playwright/test").Route, pageCount = 3) {
+  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(planMock(pageCount)) });
+}
+
 test.describe("Teaching Generation (mocked)", () => {
   test.beforeEach(async ({ page }) => {
     await resetStorage(page);
     // Mock all API calls including generation endpoints
     await mockApi(page, {
+      "/api/generate/plan": planMock(3),
       "/api/generate/page": {
         page: {
           page_no: 1,
@@ -135,6 +158,10 @@ test.describe("Teaching Generation (mocked)", () => {
     const pageCalls = new Map<number, number>();
     await page.route("**/api/**", async (route) => {
       const url = route.request().url();
+      if (url.includes("/api/generate/plan")) {
+        await fulfilPlan(route);
+        return;
+      }
       if (url.includes("/api/generate/pages")) {
         await route.fulfill({
           status: 502,
@@ -198,6 +225,10 @@ test.describe("Teaching Generation (mocked)", () => {
     const pageCalls = new Map<number, number>();
     await page.route("**/api/**", async (route) => {
       const url = route.request().url();
+      if (url.includes("/api/generate/plan")) {
+        await fulfilPlan(route);
+        return;
+      }
       if (url.includes("/api/generate/pages")) {
         batchCalls += 1;
         await new Promise((resolve) => setTimeout(resolve, 1_500));
@@ -249,6 +280,10 @@ test.describe("Teaching Generation (mocked)", () => {
     const pageCalls = new Map<number, number>();
     await page.route("**/api/**", async (route) => {
       const url = route.request().url();
+      if (url.includes("/api/generate/plan")) {
+        await fulfilPlan(route);
+        return;
+      }
       if (url.includes("/api/generate/pages")) {
         await route.fulfill({
           status: 502,
@@ -301,6 +336,10 @@ test.describe("Teaching Generation (mocked)", () => {
     const pageCalls = new Map<number, number>();
     await page.route("**/api/**", async (route) => {
       const url = route.request().url();
+      if (url.includes("/api/generate/plan")) {
+        await fulfilPlan(route);
+        return;
+      }
       if (url.includes("/api/generate/pages")) {
         await route.fulfill({
           status: 502,
@@ -355,6 +394,10 @@ test.describe("Teaching Generation (mocked)", () => {
     const pageCalls = new Map<number, number>();
     await page.route("**/api/**", async (route) => {
       const url = route.request().url();
+      if (url.includes("/api/generate/plan")) {
+        await fulfilPlan(route);
+        return;
+      }
       if (url.includes("/api/generate/pages")) {
         await route.fulfill({
           status: 502,
@@ -416,6 +459,10 @@ test.describe("Teaching Generation (mocked)", () => {
     const pageCalls = new Map<number, number>();
     await page.route("**/api/**", async (route) => {
       const url = route.request().url();
+      if (url.includes("/api/generate/plan")) {
+        await fulfilPlan(route);
+        return;
+      }
       if (url.includes("/api/generate/pages")) {
         batchCalls += 1;
         await route.fulfill({
@@ -484,6 +531,10 @@ test.describe("Teaching Generation (mocked)", () => {
     const pageRequests: TeachingRequestBody[] = [];
     await page.route("**/api/**", async (route) => {
       const url = route.request().url();
+      if (url.includes("/api/generate/plan")) {
+        await fulfilPlan(route);
+        return;
+      }
       if (url.includes("/api/generate/pages")) {
         await route.fulfill({
           status: 504,
@@ -544,7 +595,11 @@ test.describe("Teaching Generation (mocked)", () => {
 
     await page.route("**/api/**", async (route) => {
       const url = route.request().url();
-      if (url.includes("/api/generate/")) {
+      if (url.includes("/api/generate/plan")) {
+        await fulfilPlan(route);
+        return;
+      }
+      if (url.includes("/api/generate/page")) {
         // Never answers: the run is still in flight when the user presses Stop.
         await new Promise((resolve) => setTimeout(resolve, 25_000));
         await route.fulfill({ status: 200, contentType: "application/json", body: "{}" }).catch(() => undefined);
@@ -566,6 +621,135 @@ test.describe("Teaching Generation (mocked)", () => {
     await expect(popover).toContainText(/待生成|Pending/i);
     await expect(popover).not.toContainText(/失败|Failed/i);
     await expect(page.locator(".notes-content")).not.toContainText(/本页讲解生成失败|Page notes generation failed/i);
+  });
+
+  test("the lesson plan is requested first and its slice travels with the page batch", async ({ page }) => {
+    await uploadPdfFromRail(page);
+    // Planning reads every page, so the run must know the page count first.
+    await expect(page.locator(".pdf-page-shell")).toHaveCount(2);
+    await page.unroute("**/api/**");
+    const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      const body = JSON.parse(route.request().postData() || "{}") as Record<string, unknown>;
+      if (url.includes("/api/generate/plan")) {
+        calls.push({ path: "plan", body });
+        await fulfilPlan(route, 2);
+        return;
+      }
+      if (url.includes("/api/generate/pages")) {
+        calls.push({ path: "pages", body });
+        const pages = (body.pages as Array<{ page_no: number }>).map((item) => ({
+          page_no: item.page_no,
+          teaching: {
+            slide_title: `Planned page ${item.page_no}`,
+            speaker_notes_md: mockNotes("Planned notes", item.page_no),
+            handoff: `after page ${item.page_no}`,
+            confidence: 0.9,
+            concepts: ["planned"],
+            output_language: "zh-CN",
+          },
+          status: "completed",
+        }));
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ pages }) });
+        return;
+      }
+      if (url.includes("/api/generate/page")) {
+        calls.push({ path: "page", body });
+        const pageNo = (body.page as { page_no: number }).page_no;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            page: {
+              page_no: pageNo,
+              teaching: { slide_title: `Planned page ${pageNo}`, speaker_notes_md: mockNotes("Planned notes", pageNo), handoff: `after page ${pageNo}`, confidence: 0.9, concepts: ["planned"], output_language: "zh-CN" },
+              status: "completed",
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await page.locator(".generate-main-button").click();
+    await expect(page.locator(".notes-content")).toContainText(/Planned notes/, { timeout: 15_000 });
+    await expect.poll(() => calls.filter((call) => call.path !== "plan").length).toBeGreaterThan(0);
+
+    // The plan came first and carried every page's text.
+    expect(calls[0].path).toBe("plan");
+    const planPages = calls[0].body.pages as Array<{ page_no: number; text_md: string }>;
+    expect(planPages.map((item) => item.page_no)).toEqual([1, 2]);
+    expect(planPages[0].text_md).toContain("Page One");
+    // Every teaching request carries the plan rows for its pages and the segment.
+    const teachingCall = calls.find((call) => call.path !== "plan");
+    const slice = teachingCall?.body.lessonPlan as { segment?: { title: string }; pages: Array<{ page_no: number; depth: string }>; handoff: string };
+    expect(slice.segment?.title).toBe("Opening segment");
+    expect(slice.pages.length).toBeGreaterThan(0);
+    expect(slice.pages.every((row) => ["skim", "brief", "full"].includes(row.depth))).toBe(true);
+
+    // The PDF label stars the key page and nothing else.
+    await expect(page.locator(".pdf-page-shell[data-page-container-number='2'] .pdf-page-label")).toContainText("★");
+    await expect(page.locator(".pdf-page-shell[data-page-container-number='1'] .pdf-page-label")).not.toContainText("★");
+  });
+
+  test("teaching devices render as styled quotes and the self-check answer folds", async ({ page }) => {
+    await uploadPdfFromRail(page);
+    await expect(page.locator(".pdf-page-shell")).toHaveCount(2);
+    await page.unroute("**/api/**");
+    const notes = [
+      "先把这页放回上一页留下的地方：损失还没定，这页把它定成平方。",
+      "",
+      "> **记住：** 平方损失对大偏差的惩罚是二次的。",
+      "",
+      "> **自测：** 残差从 1 变到 10，单点损失变成原来的几倍？",
+      "> 答案：一百倍，因为 $z^2/2$ 随 $z$ 二次增长。",
+      "",
+      "这段话足够长，可以越过弱输出的重试门槛，避免测试走到与本用例无关的路径上去。",
+    ].join("\n");
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/generate/plan")) {
+        await fulfilPlan(route, 2);
+        return;
+      }
+      if (url.includes("/api/generate/page")) {
+        const body = JSON.parse(route.request().postData() || "{}") as { page?: { page_no?: number }; pages?: Array<{ page_no: number }> };
+        const pageNumbers = body.pages ? body.pages.map((item) => item.page_no) : [body.page?.page_no || 1];
+        const pages = pageNumbers.map((pageNo) => ({
+          page_no: pageNo,
+          teaching: { slide_title: `Device page ${pageNo}`, speaker_notes_md: notes, confidence: 0.9, concepts: ["平方损失"], output_language: "zh-CN" },
+          status: "completed",
+        }));
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(body.pages ? { pages } : { page: pages[0] }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await page.locator(".generate-main-button").click();
+    const content = page.locator(".notes-content");
+    await expect(content.locator(".note-device-remember")).toBeVisible({ timeout: 15_000 });
+    await expect(content.locator(".note-device-remember")).toContainText("平方损失对大偏差的惩罚是二次的");
+    const check = content.locator(".note-device-check");
+    await expect(check).toContainText("残差从 1 变到 10");
+    // The answer is folded until the reader asks for it.
+    await expect(check.locator("details.note-answer")).toHaveCount(1);
+    await expect(check.locator("details.note-answer")).not.toHaveAttribute("open", "");
+    await expect(check).not.toContainText("答案：");
+    await check.locator("summary").click();
+    await expect(check.locator("details.note-answer")).toHaveAttribute("open", "");
+    await expect(check).toContainText("一百倍");
+    // The math inside the quote survived the blockquote-aware preprocessing.
+    await expect(check.locator(".katex").first()).toBeVisible();
+    // The header carries the plan's role and depth for the cover page.
+    await expect(content.locator(".note-eyebrow")).toContainText(/封面|Title page/);
+    await expect(content.locator(".note-eyebrow")).toContainText(/略讲|Skim/);
   });
 
   test("structure and JSON tabs only appear in Debug mode", async ({ page }) => {

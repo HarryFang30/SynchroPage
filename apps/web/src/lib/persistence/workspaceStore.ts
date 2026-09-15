@@ -30,6 +30,7 @@ type PagePackLike = {
     title: string;
     source_pdf_url?: string;
     page_count?: number;
+    lesson_plan?: unknown;
   };
   pages: Array<{
     page_no?: number;
@@ -844,12 +845,14 @@ export async function saveGeneratedPagesFromPack(input: {
   await synchroPageDb.transaction("rw", synchroPageDb.documents, synchroPageDb.generatedPages, synchroPageDb.workspaces, async () => {
     await synchroPageDb.generatedPages.where("documentId").equals(input.documentId).delete();
     if (records.length) await synchroPageDb.generatedPages.bulkPut(records);
+    const lessonPlan = input.pack.document.lesson_plan;
     await synchroPageDb.documents.update(input.documentId, {
       title: document?.mimeType === "application/pdf"
         ? documentTitleFromFileName(document.fileName, document.title)
         : input.pack.document.title,
       pageCount: Math.max(input.pack.document.page_count || 0, records.length),
       updatedAt: now,
+      ...(lessonPlan && typeof lessonPlan === "object" ? { lessonPlan: lessonPlan as PersistedJson } : {}),
     });
     await synchroPageDb.workspaces.update(input.workspaceId, {
       title: input.pack.document.title,
@@ -890,6 +893,9 @@ export async function saveImportedPagePack(input: {
     lastOpenedAt: now,
     currentPdfPageNumber: input.pack.pages[0]?.page_no || 1,
     status: "ready",
+    ...(input.pack.document.lesson_plan && typeof input.pack.document.lesson_plan === "object"
+      ? { lessonPlan: input.pack.document.lesson_plan as PersistedJson }
+      : {}),
   };
   const thread: ChatThreadRecord = {
     id: threadId,
@@ -934,6 +940,11 @@ export async function saveImportedPagePack(input: {
   await saveGeneratedPagesFromPack({ workspaceId: workspace.id, documentId, pack: input.pack });
   setLastWorkspaceId(workspace.id);
   return { workspace: { ...workspace, activeProjectId: projectId, activeDocumentId: document.id, activeThreadId: thread.id }, document, thread };
+}
+
+/** Store the document's lesson plan next to its metadata so reloads restore it. */
+export async function saveLessonPlan(documentId: string, lessonPlan: PersistedJson | undefined) {
+  await synchroPageDb.documents.update(documentId, { lessonPlan, updatedAt: Date.now() });
 }
 
 export async function saveGeneratedPage(record: GeneratedPageRecord) {

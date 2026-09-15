@@ -16,16 +16,22 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  Children,
+  cloneElement,
+  isValidElement,
   lazy,
   Suspense,
   useMemo,
   type ChangeEvent,
   type CSSProperties,
+  type ReactElement,
   type ReactNode,
 } from "react";
+import type { Components } from "react-markdown";
 import type { AppCopy } from "../../i18n";
 import { useAppCopy } from "../../lib/contexts";
-import { splitNoteSections, type NoteSectionKey } from "../../lib/notes/noteSections";
+import { prepareNoteMarkdown, splitNoteSections, type NoteSectionKey } from "../../lib/notes/noteSections";
+import type { LessonPlanNoteInfo } from "../../lib/generation/lessonPlan";
 import type { PageData } from "../../lib/generation/teachingGeneration";
 import type { GenerationPageStatus } from "../../lib/generation/generationRuntime";
 import {
@@ -176,23 +182,99 @@ function noteOrder(index: number): CSSProperties {
   return { "--note-i": index } as CSSProperties;
 }
 
+/** Teaching devices: labelled blockquotes the lecture may use at most twice per page. */
+const NOTE_DEVICE_KINDS: Array<[RegExp, string]> = [
+  [/^(记住|Remember)\s*[:：]/i, "remember"],
+  [/^(例子|Example)\s*[:：]/i, "example"],
+  [/^(别踩坑|Watch out)\s*[:：]/i, "trap"],
+  [/^(考法|On the exam)\s*[:：]/i, "exam"],
+  [/^(自测|Check yourself)\s*[:：]/i, "check"],
+];
+const NOTE_ANSWER_PREFIX = /^\s*(答案|Answer)\s*[:：]\s*/;
+
+function reactNodeText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(reactNodeText).join("");
+  if (isValidElement<{ children?: ReactNode }>(node)) return reactNodeText(node.props.children);
+  return "";
+}
+
+function stripAnswerPrefix(element: ReactElement<{ children?: ReactNode }>) {
+  const children = Children.toArray(element.props.children);
+  if (typeof children[0] !== "string") return element;
+  return cloneElement(element, {}, children[0].replace(NOTE_ANSWER_PREFIX, ""), ...children.slice(1));
+}
+
+export function noteDeviceKind(text: string) {
+  const label = text.trimStart();
+  return NOTE_DEVICE_KINDS.find(([pattern]) => pattern.test(label))?.[1];
+}
+
+function NoteDeviceQuote({ children, showAnswer, hideAnswer }: { children?: ReactNode; showAnswer: string; hideAnswer: string }) {
+  const items = Children.toArray(children).filter((child) => !(typeof child === "string" && !child.trim()));
+  const kind = noteDeviceKind(reactNodeText(items.find((child) => isValidElement(child))));
+  if (!kind) return <blockquote>{children}</blockquote>;
+  const body: ReactNode[] = [];
+  const answers: ReactNode[] = [];
+  for (const child of items) {
+    if (kind === "check" && isValidElement<{ children?: ReactNode }>(child) && NOTE_ANSWER_PREFIX.test(reactNodeText(child))) {
+      answers.push(stripAnswerPrefix(child));
+    } else {
+      body.push(child);
+    }
+  }
+  return (
+    <blockquote className={`note-device note-device-${kind}`}>
+      {body}
+      {answers.length > 0 && (
+        <details className="note-answer">
+          <summary>
+            <span className="note-answer-show">{showAnswer}</span>
+            <span className="note-answer-hide">{hideAnswer}</span>
+          </summary>
+          {answers}
+        </details>
+      )}
+    </blockquote>
+  );
+}
+
 export function MarkdownBlock({
   markdown,
   concepts,
   title,
   pageNo,
   pageType,
+  plan,
+  onJumpToPage,
 }: {
   markdown: string;
   concepts: string[];
   title?: string;
   pageNo?: number;
   pageType?: string;
+  /** Role, depth and segment the lesson plan assigned to this page. */
+  plan?: LessonPlanNoteInfo;
+  onJumpToPage?: (pageNo: number) => void;
 }) {
   const copy = useAppCopy();
   const sections = useMemo(() => splitNoteSections(markdown), [markdown]);
+  const components = useMemo<Components>(
+    () => ({
+      blockquote: ({ children }) => (
+        <NoteDeviceQuote showAnswer={copy.notes.showAnswer} hideAnswer={copy.notes.hideAnswer}>
+          {children}
+        </NoteDeviceQuote>
+      ),
+    }),
+    [copy],
+  );
   const heading = (title || "").trim();
   const typeLabel = pageType ? copy.notes.pageTypes[pageType.trim().toLowerCase()] : undefined;
+  const roleLabel = plan ? copy.notes.roles[plan.role] || plan.role : typeLabel;
+  const depthLabel = plan ? copy.notes.depths[plan.depth] || plan.depth : undefined;
+  const segmentStart = plan && plan.depth === "skim" && plan.segmentStartPage !== pageNo ? plan.segmentStartPage : undefined;
   const showHeader = Boolean(heading || concepts.length);
   let order = 0;
   return (
@@ -201,10 +283,12 @@ export function MarkdownBlock({
     <article className="note-markdown" key={pageNo ?? "notes"}>
       {showHeader && (
         <header className="note-header" style={noteOrder(order++)}>
-          {(pageNo !== undefined || typeLabel) && (
+          {(pageNo !== undefined || roleLabel) && (
             <p className="note-eyebrow">
               {pageNo !== undefined && <span>{copy.common.pageLabel(pageNo)}</span>}
-              {typeLabel && <span>{typeLabel}</span>}
+              {roleLabel && <span>{roleLabel}</span>}
+              {depthLabel && <span>{depthLabel}</span>}
+              {plan?.key && <span className="note-key">★ {copy.notes.keyPage}</span>}
             </p>
           )}
           {heading && (
@@ -220,6 +304,11 @@ export function MarkdownBlock({
                 </li>
               ))}
             </ul>
+          )}
+          {segmentStart !== undefined && onJumpToPage && (
+            <button type="button" className="note-segment-link" onClick={() => onJumpToPage(segmentStart)}>
+              {copy.notes.segmentStartsAt(segmentStart)}
+            </button>
           )}
         </header>
       )}
@@ -237,7 +326,9 @@ export function MarkdownBlock({
                 <span>{section.heading}</span>
               </h2>
             )}
-            {section.body && <ReaderMarkdown className="note-markdown-content markdown-body" text={section.body} />}
+            {section.body && (
+              <ReaderMarkdown className="note-markdown-content markdown-body" text={prepareNoteMarkdown(section.body)} components={components} />
+            )}
             {section.answer !== undefined && (
               <details className="note-answer">
                 <summary>
@@ -254,10 +345,20 @@ export function MarkdownBlock({
   );
 }
 
-export function ReaderMarkdown({ className, text, inline = false }: { className: string; text: string; inline?: boolean }) {
+export function ReaderMarkdown({
+  className,
+  text,
+  inline = false,
+  components,
+}: {
+  className: string;
+  text: string;
+  inline?: boolean;
+  components?: Components;
+}) {
   return (
     <Suspense fallback={inline ? <span className={className}>{text}</span> : <div className={className}>{text}</div>}>
-      <MarkdownRenderer className={className} inline={inline} text={text} />
+      <MarkdownRenderer className={className} inline={inline} text={text} components={components} />
     </Suspense>
   );
 }

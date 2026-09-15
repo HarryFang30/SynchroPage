@@ -358,7 +358,7 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 2. 如果已有生成结果，用 JSON 按钮导入 `synchropage.lecture.v1` 文件。
 3. 通过左侧页列表或 PDF pane toolbar 切换页面。打开 / 关闭侧栏或缩放窗口时，PDF 视图会保持在同一页的同一位置。
 4. 中间区域查看原 PDF 页面；当前实现优先走 PDF.js canvas + transparent text layer，失败时回退原生 PDF 预览。
-5. 讲解区在「讲解 / 笔记」之间切换；打开 设置 → 高级 → Debug 模式 后会多出「结构 / JSON」两个检查用的标签页。
+5. 讲解区在「讲解 / 笔记」之间切换；打开 设置 → 高级 → Debug 模式 后会多出「结构 / JSON」两个检查用的标签页。生成菜单里「整份 PDF」会重新备课并重写所有页，「补齐缺失」只生成还没有讲解的页。
 6. 在 PDF 页面真实可见文字上拖选文本，浮动工具条可「添加到对话 / 解释选中内容 / 总结选中内容」。
 7. 在 Agent 面板中加入当前页、PDF 选区、公式或图片。
 8. 在 composer 中提问，后端会带上当前 PDF context、选中文字、页码位置、上下文 chips、最近对话和图片附件。
@@ -375,11 +375,16 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 
 ### 讲解的结构
 
-逐页讲解写给正在看这一页的你，用第二人称、先具体后抽象：先用大白话说这页在讲什么，再把页面用到却没讲清的符号解开，用页面自己的符号或图举一个例子，给出一句能背下来的结论。之后的小节只在有内容时才出现：真会犯的错（可以为零，不硬凑）、考试怎么考（只在这页有真正会考的内容时写，带一个用本页素材写的示例题干）、自测一问（答案默认折叠）、和前后页的关系（只在有前后页信息时写，关于这页在课程里的位置只允许写在这里）。篇幅按这页需要多少解释来定，不按字数配额。小节标题固定为：
-`一句话` / `符号与术语` / `举个例子` / `记住这一条` / `容易错的地方` / `公式怎么读`（公式页）/ `图怎么看`（图页、表页）/ `解题入口`（习题页）/ `自测清单`（总结页）/ `考试怎么考` / `自测一问` / `和前后页的关系`。
-封面、目录、空白页只写一两行。页面 JSON 里同时带有 `stuck_points` 和 `exam_angles` 两个数组（对应小节省略时为空），Debug 模式下的「结构」标签页会展示，测验出题会把它们作为干扰项素材。讲解语言跟随界面语言（设置里也可以单独指定）。
-前端按这些标题把讲解拆成小节渲染（`apps/web/src/lib/notes/noteSections.ts`）。讲解顶部是这一页的标题、页码与页面类型、本页概念标签；每个小节带一个图标和自己的颜色：「一句话」是暖色卡片，「举个例子」有一道绿色竖线，「记住这一条」像用荧光笔划过，「容易错的地方」每条前是一个警示圆点，「考试怎么考」每种题型一张卡，「自测一问」是一张提问卡、答案折叠在「看答案 / 收起答案」里，「和前后页的关系」是页脚小字。换页时小节会依次淡入（系统开启「减少动态效果」时不动）。
-Prompt 定义在 `src/pdf_agent/server/constants.py` 与 `payload_builders.py`，中文版契约见 [config/prompts/course_agent.prompt.yaml](config/prompts/course_agent.prompt.yaml)。
+讲解不再按固定板块填表，而是先备课、再按段落讲：
+
+1. **备课**：第一次点「生成」（或选「整份 PDF」重新生成）时，先把全文每页最多 400 字送给"质量档"模型通读一遍（`POST /api/generate/plan`，超过 100 页分段读、摘要接力），得到备课计划：整份文档在讲什么、分成哪几段（按内容的自然边界，一段通常 2 到 8 页）、每页的角色（封面 / 目录 / 过渡 / 概念 / 推导 / 例子 / 习题 / 回顾 / 总结 / 空白）、深度（略 / 简 / 详）、是否是全文最值得花时间的 2 到 4 个重点页，以及给讲课者的一句备注。计划存在 pack 的 `document.lesson_plan`（`synchropage.lesson-plan.v1`）里，随文档持久化，导出 / 导入的 JSON 也带着它；单页重新生成沿用旧计划，备课失败时按每页自行判断详略继续。
+2. **按段落讲**：一个段落里的页在同一次调用里按顺序写完，段与段并行，先讲当前页所在的段；每页都写一句 `handoff`（讲完这页学生手里有了什么），下一页 / 下一段的请求带着它接着讲。讲解是连贯的散文，助教口吻，第二人称；深度按计划：略讲一句话（40 字以内），简讲一小段（80 到 200 字），详讲 300 到 800 字，重点页可到 1200 字。
+3. **教具**：老师手里只有五件，只在讲到那里自然需要时用，每页最多两件，略讲页不用：`> **记住：**`（荧光笔划出的一句）、`> **例子：**`、`> **别踩坑：**`、`> **考法：**`（题型 + 一句示例题干）、`> **自测：**`（答案写在同一引用块的下一行，以「答案：」开头，界面默认折叠）。英文版标签是 Remember / Example / Watch out / On the exam / Check yourself / Answer。符号、公式、图都融进正文讲。
+
+页面 JSON 里仍然有 `stuck_points` 和 `exam_angles` 两个数组，只给测验出题当干扰项素材，不再展示在讲解里。质量门槛按深度放宽：略讲页只要非空，简讲页 30 字以下才重试，详讲页沿用原来的 90 / 180 字阈值。讲解语言跟随界面语言（设置里也可以单独指定），换语言会重新备课。
+
+界面上：讲解顶部显示页码 · 角色 · 深度，重点页带 ★（PDF 页标签也带 ★）；略讲的承接页有「这一段从 p.N 讲起」的链接；五件教具渲染成各自颜色的引用块（`apps/web/src/components/workspace/WorkspaceChrome.tsx` 的 `NoteDeviceQuote`）。旧版带 `## ` 小标题的讲解仍按小节渲染（`apps/web/src/lib/notes/noteSections.ts`）。
+Prompt 定义在 `src/pdf_agent/server/constants.py`（`TEACHING_PLANNER_INSTRUCTIONS`、`TEACHING_GENERATOR_INSTRUCTIONS`、`TEACHING_DEVICE_LABELS`）与 `payload_builders.py`，中文版契约见 [config/prompts/course_agent.prompt.yaml](config/prompts/course_agent.prompt.yaml)。模型在中文里用英文直引号把 JSON 截断时，服务端会把不挨着 JSON 结构的直引号转成弯引号再解析（`markdown_math.repair_json_prose_quotes`）。
 
 ### 字体
 

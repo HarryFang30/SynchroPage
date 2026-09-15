@@ -52,6 +52,8 @@ export type DocumentRecord = {
   currentPdfPageNumber: number;
   status: "draft" | "ready" | "processing" | "missing-file" | "failed";
   isStarred?: boolean;
+  /** The document's lesson plan (synchropage.lesson-plan.v1), written by the planning pass. */
+  lessonPlan?: PersistedJson;
 };
 
 export type DocumentSidebarItem = {
