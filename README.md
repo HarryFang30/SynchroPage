@@ -391,13 +391,24 @@ Prompt 定义在 `src/pdf_agent/server/constants.py`（`TEACHING_PLANNER_INSTRUC
 有些课件（比如 EECS 445 的 Lecture 4）把公式画成嵌入字体、没有可用的 ToUnicode 映射，PDF.js 抽出来的文字里公式变成一串 `! = 0 , ̅ & (") = ' 0` 这样的乱码，而正文还在，所以"没有文字层"的判断不会触发，只走文字的讲解会对着噪声胡讲。现在的处理：
 
 1. **识别**：每页抽完文字后用 `apps/web/src/lib/pdf/textQuality.ts` 打分：没有字母、只由孤零零的引号 / 美元号 / 感叹号 / 组合字符 / 私用区字符 / `(cid:N)` 组成的 token 算噪声，噪声占比过线就把 `source.text_garbled` 记为 true（Lecture 4 的 28 页标出 10 页，普通课件、论文和代码页不会误报；纯函数，Playwright `e2e/textQuality.spec.ts` 有样例）。
-2. **路径**（`unreadableTextRoute`，按当前模型配置自动选）：
-   - 质量档模型的 provider 能读 PDF（OpenAI Responses、ChatGPT Codex，或 `apiFeatures.pdfInputFile: true` 的网关，比如 coproxy）：这些页在讲课请求里附上 PDF 页面（`qualityPlan.reasons` 带 `garbled-source-text`，单页请求），备课请求也把它们作为 PDF 子集附上（`attachPages`，每个分段最多 40 页），模型直接看页面。
-   - 质量档读不了 PDF（比如 DeepSeek 这类 Chat Completions 接口，后端会把文件丢掉），但配置里还有一个启用的、能读 PDF 的 provider：先调用 `POST /api/generate/transcribe`（每次最多 8 页、前端 4 页一组），让那个模型把页面图像**转写**成带 LaTeX 的 Markdown，替换掉乱码文字（`source.parser = "model-transcription"`、`ocr_used = true`），备课和讲课都用转写后的文字；转写后的页随文档持久化，重新打开也不会被 PDF.js 的乱码盖掉。转写用哪个模型可以在 `~/.pdf_agent/model_providers.json` 的 `defaults.transcription` 指定，不指定时取第一个启用且能读 PDF 的 provider 的第一个模型。
-   - 什么都读不了：状态栏提示有几页读不了，prompt 里明确告诉模型这页的文字是噪声，只按标题、备课备注和前后页来讲，说清楚哪条公式看不到，并标为待复核（`needs_review`）。
+2. **路径**（`unreadableTextRoute`，按当前模型配置自动选，优先级从高到低）：
+   - **质量档模型自己能看页面**：provider 能读 PDF 文件（OpenAI Responses、ChatGPT Codex，或 `apiFeatures.pdfInputFile: true` 的网关，比如 coproxy）就附 PDF 子集；模型能读图片但读不了 PDF（`deepseek-flash`，以及 gpt-4o / gemini / claude / qwen-vl 一类，见 `providerModelReadsImages`，也可用 `apiFeatures.imageInput` / `visionModels` / `models[<id>].imageInput` 指定）就把这页在浏览器里用 PDF.js 渲染成约 1100 px 宽的 PNG（`lib/pdf/pageImages.ts`）随请求附上。两种情况讲课请求都带 `garbled-source-text` / `garbled-source-text-image`、单页发送，备课请求也把这些页作为 PDF 子集或 `pageImages` 附上（`attachPages`，每个分段最多 40 页），模型直接看页面。
+   - **专用 OCR 模型**：配置了 `defaults.ocr`（比如 SiliconFlow 上的 `deepseek-ai/DeepSeek-OCR`）时，每页图片单独调用一次 `POST /api/generate/transcribe`（`mode: "ocr"`），发送的就是 deepseek-ocr SDK 那一套（一张图 + `Free OCR.` 提示词，`ocrMode: "grounding"` 时用 `<|grounding|>Convert the document to markdown.`），返回的 Markdown 去掉定位标记后替换掉乱码文字（`source.parser = "deepseek-ocr"`）。这里不依赖 SDK 本身：SDK 的价值是用 PyMuPDF 渲染 PDF，而页面已经在浏览器里渲染好了，打包进桌面版也不用多带一个 PyMuPDF。注意 DeepSeek 官方 API 不提供 OCR 模型，需要 SiliconFlow / PPIO 之类的端点。
+   - **通用模型转写**：`defaults.transcription` 指定的模型，或第一个启用且能读图片的模型（其次是能读 PDF 的），一次最多 8 页（前端 4 页一组），把页面**转写**成带 LaTeX 的 Markdown 替换掉乱码文字（`source.parser = "model-transcription"`、`ocr_used = true`）；对 DeepSeek flash 这一步关掉 thinking（`reasoningEffort: "none"` → `thinking: disabled`），一页两三秒、几百个 token。转写后的页随文档持久化，重新打开也不会被 PDF.js 的乱码盖掉。
+   - **什么都读不了**：状态栏提示有几页读不了，prompt 里明确告诉模型这页的文字是噪声，只按标题、备课备注和前后页来讲，说清楚哪条公式看不到，并标为待复核（`needs_review`）。
 3. **界面**：讲解头部和课程地图里，转写过的页带绿色的「页面转写」标签，仍不可读的页带琥珀色的「文字层不可读」标签。
 
-Prompt 在 `constants.py` 的 `TEACHING_TRANSCRIBER_INSTRUCTIONS`，`payload_builders._source_text_layer_lines` 负责讲课 / 备课 prompt 里的 `text_layer:` 说明。
+实测（2026-09-15，对 api.deepseek.com）：`deepseek-flash` 能读 `image_url` 传的 PNG，`deepseek-v4-pro` 会静默丢掉图片；两者都不接受 PDF 文件（OpenAI 风格的 `file` 部件返回 400，Anthropic 兼容接口的 `document` 块被忽略）。后端的 Chat Completions 适配器只对能读图片的模型发内容数组（`input_image` → `image_url`），其他模型仍然是纯文字加一行占位说明；Anthropic 适配器同理（`image` 块）。Prompt 在 `constants.py` 的 `TEACHING_TRANSCRIBER_INSTRUCTIONS`，`payload_builders._source_text_layer_lines` 负责讲课 / 备课 prompt 里的 `text_layer:` 说明。
+
+在 `~/.pdf_agent/model_providers.json` 里指定 OCR 或转写模型的写法：
+
+```json
+"defaults": {
+  "teachingQuality": { "providerId": "deepseek", "model": "deepseek-flash" },
+  "ocr": { "providerId": "silicon", "model": "deepseek-ai/DeepSeek-OCR" },
+  "transcription": { "providerId": "deepseek", "model": "deepseek-flash" }
+}
+```
 
 ### 字体
 
@@ -497,7 +508,7 @@ POST   /api/agent/chat
 POST   /api/generate/page
 POST   /api/generate/pages      部分成功时返回 pages + missing
 POST   /api/generate/plan       备课：整份文档的段落 / 每页角色与详略 / 重点页（>100 页分段读；文字层不可读的页可随 documentFile + attachPages 附上 PDF 子集）
-POST   /api/generate/transcribe 把文字层不可读的页（≤8 页/次，必须带 documentFile）从 PDF 页面转写成带 LaTeX 的 Markdown
+POST   /api/generate/transcribe 把文字层不可读的页转写成带 LaTeX 的 Markdown（≤8 页/次，带 pageImages 或 documentFile；mode: "ocr" 时逐页调用专用 OCR 模型）
 GET    /api/generate/status     活跃 / 排队 / 冷却 / 截止时间
 GET    /api/model-config
 POST   /api/model-config

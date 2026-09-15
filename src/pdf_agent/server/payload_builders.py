@@ -16,8 +16,14 @@ from pdf_agent.server.constants import (
     LESSON_PLAN_PAGE_TEXT_CHARS,
     MAX_AGENT_PDF_SUBSET_PAGES,
     MAX_CONTEXT_CHARS,
+    MAX_IMAGE_DATA_URL_CHARS,
+    MAX_PAGE_IMAGES,
     MAX_TEACHING_BALANCED_SOURCE_CHARS,
     MAX_TEACHING_QUALITY_SOURCE_CHARS,
+    OCR_FREE_PROMPT,
+    OCR_GROUNDING_PROMPT,
+    OCR_MAX_OUTPUT_TOKENS,
+    OCR_PARSER,
     SYNCHROPAGE_SHARED_INSTRUCTIONS,
     TEACHING_DEPTHS,
     TEACHING_DEVICE_LABELS,
@@ -351,23 +357,65 @@ def _teaching_neighbor_lines(page_no: int, titles: Mapping[int, str]) -> list[st
 
 
 # ---------------------------------------------------------------------------
+# Page images (renderings of PDF pages the client attaches)
+# ---------------------------------------------------------------------------
+
+
+def _page_images(body: Mapping[str, Any], page_numbers: Sequence[int] | None = None) -> dict[int, str]:
+    """``pageImages`` of the request as {page_no: data URL}, page order, capped."""
+    allowed = {int(page_no) for page_no in page_numbers} if page_numbers is not None else None
+    images: dict[int, str] = {}
+    for item in _iter_mapping_items(body.get("pageImages")):
+        page_no = _int_value(item.get("page_no"), 0)
+        data_url = str(item.get("data_url") or "")
+        if page_no <= 0 or page_no in images or not data_url.startswith("data:image/"):
+            continue
+        if allowed is not None and page_no not in allowed:
+            continue
+        if len(data_url) > MAX_IMAGE_DATA_URL_CHARS:
+            raise HttpError(413, f"Page image for p.{page_no} is too large", code="image_too_large")
+        images[page_no] = data_url
+        if len(images) >= MAX_PAGE_IMAGES:
+            break
+    return dict(sorted(images.items()))
+
+
+def _page_image_parts(images: Mapping[int, str]) -> list[dict[str, Any]]:
+    return [{"type": "input_image", "image_url": url} for _page_no, url in sorted(images.items())]
+
+
+# ---------------------------------------------------------------------------
 # Text layer notes (unreadable or transcribed source text)
 # ---------------------------------------------------------------------------
 
 
 def _source_is_transcribed(source: Mapping[str, Any]) -> bool:
-    return _string_value(source.get("parser"), "") == TRANSCRIPTION_PARSER
+    return _string_value(source.get("parser"), "") in {TRANSCRIPTION_PARSER, OCR_PARSER}
 
 
-def _source_text_layer_lines(source: Mapping[str, Any], *, pdf_attached: bool) -> list[str]:
+def _source_text_layer_lines(
+    source: Mapping[str, Any],
+    *,
+    pdf_attached: bool = False,
+    image_attached: bool = False,
+) -> list[str]:
     """Tell the model when the extracted text is not the page.
 
     A slide whose formulas were drawn with an embedded font extracts as stray
     symbols; the client flags such pages with ``source.text_garbled``. When
-    the PDF page travels with the request the model reads it there; when a
-    model already transcribed the page the text is trustworthy but unproofed;
-    otherwise the model must teach around the hole instead of decoding noise.
+    the PDF page or a rendering of it travels with the request the model reads
+    it there; when a model already transcribed the page the text is
+    trustworthy but unproofed; otherwise the model must teach around the hole
+    instead of decoding noise.
     """
+    parser = _string_value(source.get("parser"), "")
+    if parser == OCR_PARSER:
+        return [
+            (
+                "text_layer: read from the page image by an OCR model because the PDF's own text layer was unreadable; "
+                "the layout and prose are faithful, but check formula details (subscripts, bars, transposes) against the context."
+            )
+        ]
     if _source_is_transcribed(source):
         return [
             (
@@ -376,12 +424,21 @@ def _source_text_layer_lines(source: Mapping[str, Any], *, pdf_attached: bool) -
             )
         ]
     if not bool(source.get("text_garbled")):
+        if image_attached:
+            return ["page_image: a rendering of this page is attached; use it alongside the extracted text."]
         return []
     if pdf_attached:
         return [
             (
                 "text_layer: unreadable (formulas drawn with an embedded font came out as stray symbols). "
                 "The PDF page is attached: read every formula there and ignore the noise in source_text."
+            )
+        ]
+    if image_attached:
+        return [
+            (
+                "text_layer: unreadable (formulas drawn with an embedded font came out as stray symbols). "
+                "A rendering of the page is attached as an image: read every formula there and ignore the noise in source_text."
             )
         ]
     return [
@@ -439,7 +496,13 @@ def _teaching_prompt_rules(body: Mapping[str, Any], *, batch: bool) -> list[str]
 # ---------------------------------------------------------------------------
 
 
-def _build_teaching_generation_prompt(body: Mapping[str, Any], *, pdf_attached: bool = False) -> str:
+def _build_teaching_generation_prompt(
+    body: Mapping[str, Any],
+    *,
+    pdf_attached: bool = False,
+    image_pages: Sequence[int] | Mapping[int, Any] = (),
+) -> str:
+    image_set = {int(page_no) for page_no in image_pages}
     target_pages = _teaching_generation_pages(body)
     batch = len(target_pages) > 1
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
@@ -493,6 +556,11 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any], *, pdf_attached: 
         f"title: {_string_value(document.get('title'), 'Untitled PDF')}",
         f"page_count: {page_count}",
     ])
+    if image_set:
+        sections.append(
+            f"Attached page images: {_format_page_ranges(sorted(image_set))} (renderings of those PDF pages, in page order; "
+            "read each one as the page itself)."
+        )
 
     if not batch:
         page = target_pages[0] if target_pages else {}
@@ -508,7 +576,7 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any], *, pdf_attached: 
             f"page_no: {first_page_no}",
             f"pdf_page_ref: {_string_value(source.get('pdf_page_ref'), f'#page={first_page_no}')}",
             f"page_type: {_teaching_page_type(page)}",
-            *_source_text_layer_lines(source, pdf_attached=pdf_attached),
+            *_source_text_layer_lines(source, pdf_attached=pdf_attached, image_attached=first_page_no in image_set),
         ])
         neighbor_lines = []
         previous_title = _string_value(previous_page.get("title"), "") or neighbor_titles.get(first_page_no - 1, "")
@@ -541,7 +609,7 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any], *, pdf_attached: 
             f"page_no: {page_no}",
             f"pdf_page_ref: {_string_value(source.get('pdf_page_ref'), f'#page={page_no}')}",
             f"page_type: {_teaching_page_type(page)}",
-            *_source_text_layer_lines(source, pdf_attached=pdf_attached),
+            *_source_text_layer_lines(source, pdf_attached=pdf_attached, image_attached=page_no in image_set),
             *_teaching_neighbor_lines(page_no, neighbor_titles),
         ])
         if existing_notes:
@@ -595,7 +663,7 @@ def _lesson_plan_attach_page_numbers(body: Mapping[str, Any]) -> list[int]:
     garbled is attached. Only pages of this chunk count, capped so a long
     deck never attaches more than ``LESSON_PLAN_MAX_PDF_PAGES`` at once.
     """
-    if not isinstance(body.get("documentFile"), Mapping):
+    if not isinstance(body.get("documentFile"), Mapping) and not _page_images(body):
         return []
     pages = _lesson_plan_pages(body)
     in_request = {_int_value(item.get("page_no"), 0) for item in pages}
@@ -608,7 +676,12 @@ def _lesson_plan_attach_page_numbers(body: Mapping[str, Any]) -> list[int]:
     return ordered[:LESSON_PLAN_MAX_PDF_PAGES]
 
 
-def _build_lesson_plan_prompt(body: Mapping[str, Any], *, attached_pages: Sequence[int] = ()) -> str:
+def _build_lesson_plan_prompt(
+    body: Mapping[str, Any],
+    *,
+    attached_pages: Sequence[int] = (),
+    attached_as: str = "pdf",
+) -> str:
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
     pages = _lesson_plan_pages(body)
     page_count = _int_value(body.get("pageCount"), _int_value(document.get("page_count"), len(pages)))
@@ -624,7 +697,13 @@ def _build_lesson_plan_prompt(body: Mapping[str, Any], *, attached_pages: Sequen
         f"title: {_string_value(document.get('title'), 'Untitled PDF')}",
         f"page_count: {page_count}",
     ]
-    if attached:
+    if attached and attached_as == "images":
+        sections.append(
+            f"Attached page images: {_format_page_ranges(sorted(attached))}. Their text layer is unreadable (formulas drawn "
+            "with an embedded font came out as stray symbols), so those pages are attached as images, one rendering per "
+            "page in page order: read them there to judge what they teach. The other pages are text only."
+        )
+    elif attached:
         sections.append(
             f"Attached PDF pages: {_format_page_ranges(sorted(attached))}. Their text layer is unreadable (formulas drawn "
             "with an embedded font came out as stray symbols), so those pages are attached as an input_file: read them "
@@ -646,7 +725,11 @@ def _build_lesson_plan_prompt(body: Mapping[str, Any], *, attached_pages: Sequen
         page_no = _int_value(item.get("page_no"), 0)
         sections.append(f"--- p{page_no} ---")
         if page_no in attached:
-            sections.append("(text layer unreadable; read the attached PDF page)")
+            sections.append(
+                "(text layer unreadable; read the attached page image)"
+                if attached_as == "images"
+                else "(text layer unreadable; read the attached PDF page)"
+            )
         elif _lesson_plan_page_garbled(item):
             sections.append(
                 "(text layer unreadable: the formulas came out as stray symbols and no PDF page is attached; "
@@ -667,6 +750,7 @@ def _build_lesson_plan_payload(
 ) -> dict[str, Any]:
     model = _clean_model(body.get("model")) or default_model
     attach_pages = _lesson_plan_attach_page_numbers(body)
+    images = _page_images(body, page_numbers=attach_pages) if attach_pages else {}
     pdf_file = (
         _pdf_file_input(
             body.get("documentFile"),
@@ -674,15 +758,21 @@ def _build_lesson_plan_payload(
             fallback_to_original_on_subset_failure=False,
             pdf_file_cache=pdf_file_cache,
         )
-        if attach_pages
+        if attach_pages and not images
         else None
     )
     content: list[dict[str, Any]] = []
-    if pdf_file:
+    if images:
+        content.extend(_page_image_parts(images))
+        attached, attached_as = list(images), "images"
+    elif pdf_file:
         content.append(pdf_file)
+        attached, attached_as = list(attach_pages), "pdf"
+    else:
+        attached, attached_as = [], "pdf"
     content.append({
         "type": "input_text",
-        "text": _build_lesson_plan_prompt(body, attached_pages=attach_pages if pdf_file else ()),
+        "text": _build_lesson_plan_prompt(body, attached_pages=attached, attached_as=attached_as),
     })
     return {
         "model": model,
@@ -706,11 +796,18 @@ def _transcription_page_numbers(body: Mapping[str, Any]) -> list[int]:
     return [page_no for page_no in (_int_value(item.get("page_no"), 0) for item in _transcription_pages(body)) if page_no > 0]
 
 
-def _build_transcription_prompt(body: Mapping[str, Any]) -> str:
+def _build_transcription_prompt(body: Mapping[str, Any], *, attached_as: str = "pdf") -> str:
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
     pages = _transcription_pages(body)
     page_numbers = _transcription_page_numbers(body)
     page_count = _int_value(body.get("pageCount"), _int_value(document.get("page_count"), 0))
+    attached_line = (
+        f"Attached page images: {_format_page_ranges(page_numbers)} (one rendering per page, in this order; "
+        "page_no below refers to the original document)."
+        if attached_as == "images"
+        else f"Attached PDF pages: {_format_page_ranges(page_numbers)} (a subset of the original PDF, in this order; "
+        "page_no below refers to the original document)."
+    )
     sections = [
         "Task-specific instructions:",
         TEACHING_TRANSCRIBER_INSTRUCTIONS,
@@ -718,10 +815,7 @@ def _build_transcription_prompt(body: Mapping[str, Any]) -> str:
         "Document:",
         f"title: {_string_value(document.get('title'), 'Untitled PDF')}",
         f"page_count: {page_count}",
-        (
-            f"Attached PDF pages: {_format_page_ranges(page_numbers)} (a subset of the original PDF, in this order; "
-            "page_no below refers to the original document)."
-        ),
+        attached_line,
         "",
         "Pages:",
     ]
@@ -742,23 +836,66 @@ def _build_transcription_payload(
     pdf_file_cache: PdfFileCache | None = None,
 ) -> dict[str, Any]:
     model = _clean_model(body.get("model")) or default_model
-    pdf_file = _pdf_file_input(
-        body.get("documentFile"),
-        page_numbers=_transcription_page_numbers(body),
-        fallback_to_original_on_subset_failure=False,
-        pdf_file_cache=pdf_file_cache,
-    )
-    if not pdf_file:
-        raise HttpError(
-            400,
-            "Page transcription needs the PDF file: send documentFile with fileData or a cached sha256",
-            code="transcription_needs_pdf",
+    page_numbers = _transcription_page_numbers(body)
+    images = _page_images(body, page_numbers=page_numbers)
+    if images:
+        content: list[dict[str, Any]] = [
+            *_page_image_parts(images),
+            {"type": "input_text", "text": _build_transcription_prompt(body, attached_as="images")},
+        ]
+    else:
+        pdf_file = _pdf_file_input(
+            body.get("documentFile"),
+            page_numbers=page_numbers,
+            fallback_to_original_on_subset_failure=False,
+            pdf_file_cache=pdf_file_cache,
         )
+        if not pdf_file:
+            raise HttpError(
+                400,
+                "Page transcription needs the pages: send pageImages, or documentFile with fileData or a cached sha256",
+                code="transcription_needs_pdf",
+            )
+        content = [pdf_file, {"type": "input_text", "text": _build_transcription_prompt(body)}]
     return {
         "model": model,
         "instructions": SYNCHROPAGE_SHARED_INSTRUCTIONS,
-        "input": [{"role": "user", "content": [pdf_file, {"type": "input_text", "text": _build_transcription_prompt(body)}]}],
+        "input": [{"role": "user", "content": content}],
         "reasoning": {"effort": _reasoning_effort(body)},
+    }
+
+
+# ---------------------------------------------------------------------------
+# OCR payload (a dedicated document model such as DeepSeek-OCR, one page image per call)
+# ---------------------------------------------------------------------------
+
+
+def _ocr_prompt(body: Mapping[str, Any]) -> str:
+    return OCR_GROUNDING_PROMPT if _string_value(body.get("ocrMode"), "") == "grounding" else OCR_FREE_PROMPT
+
+
+def _build_ocr_payload(
+    body: Mapping[str, Any],
+    *,
+    default_model: str,
+    pdf_file_cache: PdfFileCache | None = None,
+) -> dict[str, Any]:
+    """The request the deepseek-ocr SDK sends: one image, the OCR prompt, no system text."""
+    del pdf_file_cache  # OCR models take page images, never PDF files
+    model = _clean_model(body.get("model")) or default_model
+    images = _page_images(body, page_numbers=_transcription_page_numbers(body))
+    if len(images) != 1:
+        raise HttpError(400, "OCR reads exactly one page image per request", code="ocr_needs_page_image")
+    (_page_no, data_url), = images.items()
+    return {
+        "model": model,
+        "instructions": "",
+        "input": [{"role": "user", "content": [
+            {"type": "input_image", "image_url": data_url},
+            {"type": "input_text", "text": _ocr_prompt(body)},
+        ]}],
+        "reasoning": {"effort": "none"},
+        "max_output_tokens": OCR_MAX_OUTPUT_TOKENS,
     }
 
 
@@ -1000,9 +1137,14 @@ def _build_teaching_generation_payload(
         fallback_to_original_on_subset_failure=False,
         pdf_file_cache=pdf_file_cache,
     )
+    page_images = _page_images(body, page_numbers=_teaching_generation_page_numbers(body))
     if pdf_file:
         content.append(pdf_file)
-    content.append({"type": "input_text", "text": _build_teaching_generation_prompt(body, pdf_attached=bool(pdf_file))})
+    content.extend(_page_image_parts(page_images))
+    content.append({
+        "type": "input_text",
+        "text": _build_teaching_generation_prompt(body, pdf_attached=bool(pdf_file), image_pages=page_images),
+    })
     payload: dict[str, Any] = {
         "model": model,
         "instructions": _teaching_payload_instructions(body),

@@ -71,6 +71,7 @@ import {
   pdfDirectFileCacheKey,
   type PdfDirectFileInput,
 } from "../lib/pdf/directFile";
+import { renderPdfPageImages, type PageImageInput } from "../lib/pdf/pageImages";
 import {
   extractPdfPagesFromBlob,
   mergePdfContextPages,
@@ -294,12 +295,14 @@ export function useGenerationEngine(p: GenerationEngineParams) {
 
         // One planning call over the whole deck: segments, per-page role and
         // depth. Failure is not fatal; the backend then judges depth per page.
-        const ensureLessonPlan = async (attachPageNumbers: number[] = []) => {
+        const ensureLessonPlan = async (attachment: UnreadablePagesAttachment = { pdfPages: [], imagePages: [] }) => {
           if (generationSignal.aborted) return;
           const planRef = p.modelApiConfig.defaults.teachingQuality;
-          // Pages whose text layer is noise travel as a PDF subset so the
-          // planner can see what they teach.
-          const documentFile = attachPageNumbers.length ? await getDocumentFile() : null;
+          // Pages whose text layer is noise travel as a PDF subset or as page
+          // images so the planner can see what they teach.
+          const documentFile = attachment.pdfPages.length ? await getDocumentFile() : null;
+          const pageImages = attachment.imagePages.length ? await getPageImages(attachment.imagePages) : [];
+          const attachPages = pageImages.length ? pageImages.map((image) => image.page_no) : documentFile ? attachment.pdfPages : [];
           const reasoningEffort = clampTeachingReasoningEffort(
             "medium",
             teachingModelCapabilities(teachingProviderForPlan(p.modelApiConfig, planRef.providerId), planRef.model),
@@ -322,7 +325,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                     outputLanguageLabel: pageOutputLanguageLabel,
                     uiLanguage: p.uiPreferences.language,
                     pages: lessonPlanRequestPages(workingPack.pages),
-                    ...(documentFile ? { documentFile, attachPages: attachPageNumbers } : {}),
+                    ...(pageImages.length ? { pageImages, attachPages } : documentFile ? { documentFile, attachPages } : {}),
                   }),
                   signal: requestSignal,
                 },
@@ -366,6 +369,28 @@ export function useGenerationEngine(p: GenerationEngineParams) {
 
         const getDocumentFile = () =>
           cachedPdfDirectFileInputFromUrl(p.pdfUrl, workingPack.document.source_pdf_url || workingPack.document.title).catch(() => null);
+        // Renderings of pages for models that read images but not PDF files;
+        // rendered once per run and cached across runs on the same document.
+        let sharedPdfBlob: Promise<Blob | null> | null = null;
+        const getPdfBlob = () => {
+          sharedPdfBlob ??= p.pdfUrl ? fetchPdfBlobForGeneration(p.pdfUrl, generationSignal, p.copy).catch(() => null) : Promise.resolve(null);
+          return sharedPdfBlob;
+        };
+        const pageImagesByNumber = new Map<number, PageImageInput>();
+        const getPageImages = async (pageNumbers: number[]) => {
+          const missing = pageNumbers.filter((pageNo) => !pageImagesByNumber.has(pageNo));
+          if (missing.length) {
+            const blob = await getPdfBlob();
+            if (blob && !generationSignal.aborted) {
+              const rendered = await renderPdfPageImages(blob, missing, {
+                cacheKey: p.documentId || p.pdfUrl,
+                signal: generationSignal,
+              }).catch(() => new Map<number, PageImageInput>());
+              for (const [pageNo, image] of rendered) pageImagesByNumber.set(pageNo, image);
+            }
+          }
+          return pageNumbers.map((pageNo) => pageImagesByNumber.get(pageNo)).filter((image): image is PageImageInput => Boolean(image));
+        };
         const applyTranscribedPages = (texts: ReadonlyMap<number, string>) => {
           for (const [pageNo, text] of texts) sourceTextByPage.set(pageNo, text);
           extractedPagesForGeneration = mergePdfContextPages(
@@ -387,40 +412,50 @@ export function useGenerationEngine(p: GenerationEngineParams) {
         const textRoute = unreadableTextRoute(p.modelApiConfig);
         let unreadableNoticeShown = false;
         // Pages whose text layer came out as noise (formulas drawn with an
-        // embedded font). Returns the page numbers the planner should receive
-        // as attached PDF pages; the rest were transcribed, or nothing here
-        // can read them and the prompt says so.
-        const prepareUnreadablePages = async (pageNumbers: number[]): Promise<number[]> => {
+        // embedded font). Returns what the planner should receive for them:
+        // PDF pages or page images; the rest were read by an OCR model or
+        // transcribed, or nothing here can read them and the prompt says so.
+        const prepareUnreadablePages = async (pageNumbers: number[]): Promise<UnreadablePagesAttachment> => {
+          const none: UnreadablePagesAttachment = { pdfPages: [], imagePages: [] };
           const unreadable = pageNumbers
             .map((pageNo) => workingPagesByNumber.get(pageNo))
             .filter((page): page is PageData => Boolean(page && pageTextLayerIsUnreadable(page)));
-          if (!unreadable.length || generationSignal.aborted) return [];
-          if (textRoute.mode === "transcribe" && p.pdfUrl) {
-            p.setJobStatus(p.copy.status.generationTranscribing(0, unreadable.length));
+          if (!unreadable.length || generationSignal.aborted) return none;
+          if (textRoute.mode === "attach" && p.pdfUrl) {
+            if (textRoute.input === "pdf") return { pdfPages: unreadable.map((page) => page.page_no), imagePages: [] };
+            const images = await getPageImages(unreadable.map((page) => page.page_no));
+            return { pdfPages: [], imagePages: images.map((image) => image.page_no) };
+          }
+          if ((textRoute.mode === "ocr" || textRoute.mode === "transcribe") && p.pdfUrl) {
+            const ocr = textRoute.mode === "ocr";
+            const status = ocr ? p.copy.status.generationOcr : p.copy.status.generationTranscribing;
+            p.setJobStatus(status(0, unreadable.length));
             const transcribed = await transcribeUnreadablePages(unreadable, {
               ref: textRoute.ref,
+              mode: ocr ? "ocr" : "transcribe",
+              input: ocr ? "image" : textRoute.input,
               document: workingPack.document,
               pageCount: totalPages,
               outputLanguage: pageOutputLanguage,
               uiLanguage: p.uiPreferences.language,
               getDocumentFile,
+              getPageImages,
               signal: generationSignal,
               copy: p.copy,
               runtimeLimits,
-              onProgress: (done, total) => p.setJobStatus(p.copy.status.generationTranscribing(done, total)),
+              onProgress: (done, total) => p.setJobStatus(status(done, total)),
             });
-            if (generationSignal.aborted) return [];
+            if (generationSignal.aborted) return none;
             if (transcribed.size) applyTranscribedPages(transcribed);
             const failed = unreadable.length - transcribed.size;
             if (failed) p.setJobStatus(p.copy.status.generationTranscriptionFailed(failed));
-            return [];
+            return none;
           }
-          if (textRoute.mode === "attach" && p.pdfUrl) return unreadable.map((page) => page.page_no);
           if (!unreadableNoticeShown) {
             unreadableNoticeShown = true;
             p.setJobStatus(p.copy.status.generationTextLayerUnreadable(unreadable.length));
           }
-          return [];
+          return none;
         };
 
         const runGenerationPass = async (passPagesToGenerate: PageData[], contextPages: PdfContextPage[]) => {
@@ -458,6 +493,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             const previousPage = generationInputPagesByNumber.get(pageNo - 1);
             const nextPage = generationInputPagesByNumber.get(pageNo + 1);
             const documentFile = await getDocumentFileForPlan(plan);
+            const pageImages = plan.attachPageImage ? await getPageImages([pageNo]) : undefined;
             const priority = teachingModelRequestPriority([runningPage], p.currentPdfPageNo, "now", "next");
             const timeoutMs = teachingRequestTimeoutMs(plan.reasoningEffort, 1, runtimeLimits.deadlines);
             const response = await runLimitedGenerationRequest(
@@ -479,6 +515,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                         runningPage,
                         pageCount: totalPages,
                         lessonPlan: lessonPlanRequestSlice(lessonPlan, [pageNo], handoffFor(pageNo)),
+                        pageImages,
                         previousPage: previousPage
                           ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
                           : null,
@@ -674,12 +711,14 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               : null;
             if (extracted?.pages.length) mergeExtractedPages(extracted.pages);
             if (generationSignal.aborted) return;
-            const attachPageNumbers = await prepareUnreadablePages(allPageNumbers);
+            sharedPdfBlob = Promise.resolve(pdfBlob);
+            const attachment = await prepareUnreadablePages(allPageNumbers);
             if (generationSignal.aborted) return;
-            await ensureLessonPlan(attachPageNumbers);
+            await ensureLessonPlan(attachment);
             if (generationSignal.aborted) return;
             await runGenerationPass(currentPagesToGenerate(), extractedPagesForGeneration);
           } else if (pdfBlob && missingTargetSourceText.length > TEACHING_PROJECT_WARMUP_PAGE_COUNT) {
+            sharedPdfBlob = Promise.resolve(pdfBlob);
             const warmupPageNumbers = teachingWarmupPageNumbers(totalPages, p.currentPdfPageNo, targetPageNumbers);
             const warmupPageSet = new Set(warmupPageNumbers);
             const warmupExtractionPageNumbers = teachingExtractionPageNumbers(totalPages, warmupPageNumbers)
@@ -730,6 +769,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             // finished (F14).
             await runGenerationPass(currentPagesToGenerate(), extractedPagesForGeneration);
           } else if (pdfBlob) {
+            sharedPdfBlob = Promise.resolve(pdfBlob);
             const extracted = await extractPdfPagesForGeneration(pdfBlob, {
               priorityPageNumbers: targetPageNumbers,
               pageNumbers: teachingExtractionPageNumbers(totalPages, targetPageNumbers),
@@ -750,9 +790,9 @@ export function useGenerationEngine(p: GenerationEngineParams) {
         } else {
           if (generationSignal.aborted) return;
           if (needsPlan) {
-            const attachPageNumbers = await prepareUnreadablePages(allPageNumbers);
+            const attachment = await prepareUnreadablePages(allPageNumbers);
             if (generationSignal.aborted) return;
-            await ensureLessonPlan(attachPageNumbers);
+            await ensureLessonPlan(attachment);
           } else {
             await prepareUnreadablePages(targetPageNumbers);
           }
@@ -992,9 +1032,23 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           // model attaches them itself when it can read PDFs.
           const projectTextRoute = unreadableTextRoute(p.modelApiConfig);
           const projectUnreadablePages = initialPagesToGenerate.filter((page) => pageTextLayerIsUnreadable(page));
-          if (projectUnreadablePages.length && projectTextRoute.mode === "transcribe" && !generationSignal.aborted) {
+          const projectPageImages = new Map<number, PageImageInput>();
+          const getProjectPageImages = async (pageNumbers: number[]) => {
+            const missing = pageNumbers.filter((pageNo) => !projectPageImages.has(pageNo));
+            if (missing.length && !generationSignal.aborted) {
+              const rendered = await renderPdfPageImages(pdfBlob, missing, { cacheKey: item.documentId, signal: generationSignal })
+                .catch(() => new Map<number, PageImageInput>());
+              for (const [pageNo, image] of rendered) projectPageImages.set(pageNo, image);
+            }
+            return pageNumbers.map((pageNo) => projectPageImages.get(pageNo)).filter((image): image is PageImageInput => Boolean(image));
+          };
+          if (projectUnreadablePages.length && (projectTextRoute.mode === "transcribe" || projectTextRoute.mode === "ocr") && !generationSignal.aborted) {
+            const ocr = projectTextRoute.mode === "ocr";
+            const status = ocr ? p.copy.status.generationOcr : p.copy.status.generationTranscribing;
             const transcribed = await transcribeUnreadablePages(projectUnreadablePages, {
               ref: projectTextRoute.ref,
+              mode: ocr ? "ocr" : "transcribe",
+              input: ocr ? "image" : projectTextRoute.input,
               document: workingPack.document,
               pageCount: totalPages,
               outputLanguage: p.teachingOutputLanguage,
@@ -1005,10 +1059,11 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                   bundle.document.fileName,
                   pdfDirectFileCacheKey(_workspaceId, item.documentId),
                 ).catch(() => null),
+              getPageImages: getProjectPageImages,
               signal: generationSignal,
               copy: p.copy,
               runtimeLimits,
-              onProgress: (done, total) => p.setJobStatus(p.copy.status.generationTranscribing(done, total)),
+              onProgress: (done, total) => p.setJobStatus(status(done, total)),
             });
             if (generationSignal.aborted) return;
             if (transcribed.size) {
@@ -1056,6 +1111,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               const previousPage = generationInputPagesByNumber.get(pageNo - 1);
               const nextPage = generationInputPagesByNumber.get(pageNo + 1);
               const documentFile = await getDocumentFileForPlan(plan);
+              const pageImages = plan.attachPageImage ? await getProjectPageImages([pageNo]) : undefined;
               const priority = item.documentId === _documentId
                 ? teachingModelRequestPriority([runningPage], p.currentPdfPageNo, "next", "later")
                 : "later";
@@ -1079,6 +1135,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                           runningPage,
                           pageCount: totalPages,
                           lessonPlan: lessonPlanRequestSlice(lessonPlan, [pageNo], handoffFor(pageNo)),
+                          pageImages,
                           previousPage: previousPage
                             ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
                             : null,
@@ -1337,13 +1394,20 @@ type TranscriptionResponse = {
   pages?: Array<{ page_no?: number; text_md?: string; unreadable?: boolean }>;
 };
 
+type UnreadablePagesAttachment = { pdfPages: number[]; imagePages: number[] };
+
 type TranscribeUnreadablePagesOptions = {
   ref: ModelRef;
+  /** "ocr" sends each page image to a dedicated OCR model; "transcribe" asks a general model for Markdown + LaTeX. */
+  mode?: "transcribe" | "ocr";
+  /** What the model receives: a PDF subset or renderings of the pages. */
+  input?: "pdf" | "image";
   document: PagePack["document"];
   pageCount: number;
   outputLanguage: TeachingOutputLanguage;
   uiLanguage: string;
   getDocumentFile: () => Promise<PdfDirectFileInput | null>;
+  getPageImages?: (pageNumbers: number[]) => Promise<PageImageInput[]>;
   signal: AbortSignal;
   copy: AppCopy;
   runtimeLimits: GenerationRuntimeLimits;
@@ -1366,11 +1430,18 @@ async function transcribeUnreadablePages(
   for (let index = 0; index < ordered.length; index += TRANSCRIPTION_CHUNK_PAGES) {
     chunks.push(ordered.slice(index, index + TRANSCRIPTION_CHUNK_PAGES));
   }
-  const documentFile = await options.getDocumentFile();
-  if (!documentFile || options.signal.aborted) return results;
+  const useImages = options.input === "image" || options.mode === "ocr";
+  const documentFile = useImages ? null : await options.getDocumentFile();
+  if ((!useImages && !documentFile) || options.signal.aborted) return results;
   let done = 0;
   await runWithConcurrencyLimit(chunks, TRANSCRIPTION_CONCURRENCY, async (chunk) => {
     if (options.signal.aborted) return;
+    const pageImages = useImages ? await options.getPageImages?.(chunk.map((page) => page.page_no)) : undefined;
+    if (useImages && !pageImages?.length) {
+      done += chunk.length;
+      options.onProgress(Math.min(done, ordered.length), ordered.length);
+      return;
+    }
     const timeoutMs = teachingRequestTimeoutMs("medium", chunk.length, options.runtimeLimits.deadlines);
     try {
       const response = await runGenerationRequestWithTimeout(options.signal, timeoutMs, (requestSignal) =>
@@ -1381,12 +1452,16 @@ async function transcribeUnreadablePages(
             body: JSON.stringify({
               modelProviderId: options.ref.providerId,
               model: options.ref.model,
-              reasoningEffort: "low",
+              // A page image needs no chain of thought: flash then answers in
+              // seconds instead of spending its whole budget thinking.
+              reasoningEffort: useImages ? "none" : "low",
+              ...(options.mode === "ocr" ? { mode: "ocr" } : {}),
               document: { id: options.document.id, title: options.document.title, page_count: options.pageCount },
               pageCount: options.pageCount,
               outputLanguage: options.outputLanguage,
               uiLanguage: options.uiLanguage,
-              documentFile,
+              ...(documentFile ? { documentFile } : {}),
+              ...(pageImages?.length ? { pageImages } : {}),
               pages: chunk.map((page) => ({
                 page_no: page.page_no,
                 text_md: page.source.text_md.replace(/\s+/g, " ").trim().slice(0, TRANSCRIPTION_HINT_CHARS),

@@ -7,10 +7,12 @@ JSON responses.  No dependency on ``web_app.py``.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
 from pdf_agent.server.constants import (
+    OCR_PARSER,
     TEACHING_DEPTHS,
     TEACHING_PAGE_ROLES,
     TRANSCRIPTION_PARSER,
@@ -359,6 +361,34 @@ def _parse_transcription(content: str, body: Mapping[str, Any]) -> dict[str, Any
     if all(page["unreadable"] for page in pages):
         raise HttpError(502, "Transcription response did not transcribe any page", code="invalid_generation_json")
     return {"pages": pages}
+
+
+# ---------------------------------------------------------------------------
+# OCR response parsing (DeepSeek-OCR returns Markdown, grounding mode adds boxes)
+# ---------------------------------------------------------------------------
+
+_OCR_DET_BLOCK = re.compile(r"<\|det\|>.*?<\|/det\|>", re.DOTALL)
+_OCR_MARKERS = re.compile(r"<\|/?(?:ref|grounding)\|>")
+
+
+def clean_ocr_text(text: str) -> str:
+    """Strip DeepSeek-OCR grounding markup (``<|ref|>…<|/ref|><|det|>[[…]]<|/det|>``) to plain Markdown."""
+    cleaned = _OCR_DET_BLOCK.sub("", str(text or ""))
+    cleaned = _OCR_MARKERS.sub("", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _parse_ocr_page(content: str, page_no: int) -> dict[str, Any]:
+    text = _normalize_markdown_math(clean_ocr_text(content))
+    unreadable = not text
+    return {
+        "page_no": page_no,
+        "text_md": text,
+        "unreadable": unreadable,
+        "ocr_used": not unreadable,
+        "parser": OCR_PARSER if not unreadable else "pdfjs",
+    }
 
 
 def _json_from_model_text(content: str) -> Any:

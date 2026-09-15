@@ -147,6 +147,15 @@ TRANSCRIPTION_PARSER = "model-transcription"
 TRANSCRIPTION_MAX_PAGES = 8
 #: Characters of the (noisy) extracted text handed to the transcriber as a hint.
 TRANSCRIPTION_HINT_CHARS = 600
+#: Page renderings (``pageImages``) one request may carry.
+MAX_PAGE_IMAGES = 40
+
+#: ``source.parser`` of a page read by a dedicated OCR model (DeepSeek-OCR).
+OCR_PARSER = "deepseek-ocr"
+#: The prompts DeepSeek-OCR understands; the same strings the deepseek-ocr SDK sends.
+OCR_FREE_PROMPT = "Free OCR."
+OCR_GROUNDING_PROMPT = "<|grounding|>Convert the document to markdown."
+OCR_MAX_OUTPUT_TOKENS = 4000
 
 TEACHING_TRANSCRIBER_INSTRUCTIONS = r"""You are the SynchroPage page transcriber. The attached PDF pages come from a lecture slide deck whose text layer is unreadable: the formulas were drawn with an embedded font, so text extraction turned them into stray symbols. Write down what is on each page, faithfully and completely, so that a text-only model can teach it.
 

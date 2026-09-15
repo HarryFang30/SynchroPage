@@ -13,6 +13,7 @@ import {
 import { normalizeGeneratedPage } from "../lib/generation/generationRuntime";
 import type { LessonPlanRequestSlice } from "../lib/generation/lessonPlan";
 import type { PdfDirectFileInput } from "../lib/pdf/directFile";
+import type { PageImageInput } from "../lib/pdf/pageImages";
 import type { PdfContextPayload } from "../lib/pdf/textExtraction";
 
 // ── Running page builder ──────────────────────────────────────
@@ -106,10 +107,12 @@ export interface SinglePageRequestParams {
   nextPage: { page_no: number; title: string } | null;
   /** Lesson-plan rows and segment for this page, with the previous page's handoff. */
   lessonPlan?: LessonPlanRequestSlice;
+  /** Renderings of pages whose text layer is unreadable, for a model that reads images. */
+  pageImages?: PageImageInput[];
 }
 
 export function buildSinglePageRequestBody(params: SinglePageRequestParams) {
-  const { plan, document, documentContext, documentFile, outputLanguage, outputLanguageLabel, uiLanguage, runningPage, pageCount, previousPage, nextPage, lessonPlan } = params;
+  const { plan, document, documentContext, documentFile, outputLanguage, outputLanguageLabel, uiLanguage, runningPage, pageCount, previousPage, nextPage, lessonPlan, pageImages } = params;
   return {
     method: "POST" as const,
     body: JSON.stringify({
@@ -130,6 +133,7 @@ export function buildSinglePageRequestBody(params: SinglePageRequestParams) {
       previousPage,
       nextPage,
       lessonPlan,
+      ...(pageImages?.length ? { pageImages } : {}),
     }),
   };
 }
@@ -146,10 +150,11 @@ export interface BatchPagesRequestParams {
   pageCount: number;
   /** Lesson-plan rows and segment for these pages, with the previous page's handoff. */
   lessonPlan?: LessonPlanRequestSlice;
+  pageImages?: PageImageInput[];
 }
 
 export function buildBatchPagesRequestBody(params: BatchPagesRequestParams) {
-  const { plan, document, documentContext, documentFile, outputLanguage, outputLanguageLabel, uiLanguage, runningPages, pageCount, lessonPlan } = params;
+  const { plan, document, documentContext, documentFile, outputLanguage, outputLanguageLabel, uiLanguage, runningPages, pageCount, lessonPlan, pageImages } = params;
   return {
     method: "POST" as const,
     body: JSON.stringify({
@@ -168,6 +173,7 @@ export function buildBatchPagesRequestBody(params: BatchPagesRequestParams) {
       pages: runningPages.map((page) => teachingRequestPage(page, plan)),
       pageCount,
       lessonPlan,
+      ...(pageImages?.length ? { pageImages } : {}),
     }),
   };
 }
