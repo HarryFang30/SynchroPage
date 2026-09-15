@@ -61,9 +61,11 @@ def default_model_config_path() -> Path:
 # Backwards-compatible alias for callers that imported the old constant.
 DEFAULT_MODEL_CONFIG_PATH = default_model_config_path()
 MODEL_REF_KEYS = frozenset({"assistant", "teachingFast", "teachingBalanced", "teachingQuality"})
-#: Optional default: the model that transcribes pages whose text layer is
-#: unreadable. Absent means "pick a provider that accepts PDF input".
-OPTIONAL_MODEL_REF_KEYS = frozenset({"transcription"})
+#: Optional defaults: ``transcription`` is the model that transcribes pages
+#: whose text layer is unreadable (absent: pick a provider that accepts page
+#: images or PDF input); ``ocr`` is a dedicated OCR model such as
+#: ``deepseek-ai/DeepSeek-OCR`` on an OpenAI-compatible host.
+OPTIONAL_MODEL_REF_KEYS = frozenset({"transcription", "ocr"})
 LEGACY_PROVIDER_ID_ALIASES = {
     "openai_api": "openai",
     "siliconflow": "silicon",

@@ -69,9 +69,11 @@ export type ModelApiConfig = {
     teachingQuality: ModelRef;
     /**
      * Transcribes pages whose text layer is unreadable from the page image.
-     * Optional: when absent, the first enabled provider that accepts PDF input is used.
+     * Optional: when absent, the first enabled model that reads images or PDFs is used.
      */
     transcription?: ModelRef;
+    /** A dedicated OCR model (DeepSeek-OCR on an OpenAI-compatible host). Optional. */
+    ocr?: ModelRef;
   };
 };
 
@@ -169,7 +171,7 @@ export const defaultModelApiConfig: ModelApiConfig = {
       apiHost: "https://api.deepseek.com",
       apiKeyRequired: true,
       enabled: false,
-      models: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
+      models: ["deepseek-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
     },
     {
       id: "openrouter",
@@ -267,16 +269,17 @@ export function normalizeModelApiConfig(value: unknown): ModelApiConfig {
       teachingBalanced: normalizeModelRef(source.defaults?.teachingBalanced, providers, defaultModelApiConfig.defaults.teachingBalanced),
       teachingQuality: normalizeModelRef(source.defaults?.teachingQuality, providers, defaultModelApiConfig.defaults.teachingQuality),
       ...optionalModelRef(source.defaults?.transcription, providers, "transcription"),
+      ...optionalModelRef(source.defaults?.ocr, providers, "ocr"),
     },
   };
 }
 
 /** An optional default: kept only when it names a known provider and a model. */
-function optionalModelRef(value: unknown, providers: ModelApiProvider[], key: "transcription"): Partial<Record<"transcription", ModelRef>> {
+function optionalModelRef<K extends "transcription" | "ocr">(value: unknown, providers: ModelApiProvider[], key: K): Partial<Record<K, ModelRef>> {
   const ref = (value && typeof value === "object" ? value : {}) as Partial<ModelRef>;
   const provider = providers.find((item) => item.id === ref.providerId);
   const model = cleanString(ref.model) || provider?.models[0] || "";
-  return provider && model ? { [key]: { providerId: provider.id, model } } : {};
+  return provider && model ? ({ [key]: { providerId: provider.id, model } } as Partial<Record<K, ModelRef>>) : {};
 }
 
 export function modelRefLabel(config: ModelApiConfig, ref: ModelRef) {

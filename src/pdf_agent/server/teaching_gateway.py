@@ -40,6 +40,7 @@ from pdf_agent.server.generation_parsing import (
     _parse_generated_page,
     _parse_generated_pages_with_missing,
     _parse_lesson_plan,
+    _parse_ocr_page,
     _parse_transcription,
 )
 from pdf_agent.server.generation_policy import (
@@ -66,9 +67,11 @@ from pdf_agent.server.model_gateway import (
 )
 from pdf_agent.server.payload_builders import (
     _build_lesson_plan_payload,
+    _build_ocr_payload,
     _build_teaching_generation_payload,
     _build_transcription_payload,
     _lesson_plan_pages,
+    _page_images,
     _reasoning_effort,
     _teaching_generation_candidate_bodies,
     _teaching_generation_page_numbers,
@@ -81,7 +84,7 @@ from pdf_agent.server.prompt_cache import (
     _should_try_next_teaching_generation_candidate,
     _transient_retry_delay_seconds,
 )
-from pdf_agent.server.value_utils import string_value
+from pdf_agent.server.value_utils import int_value, string_value
 
 LOGGER = logging.getLogger("pdf_agent.server.teaching_gateway")
 
@@ -271,6 +274,8 @@ class TeachingGenerationGateway:
                 f"Transcription covers at most {TRANSCRIPTION_MAX_PAGES} pages per request",
                 code="invalid_request",
             )
+        if string_value(body.get("mode"), "") == "ocr":
+            return await self._generate_ocr(body, pages)
         request_body: dict[str, Any] = {**body, "requirePdfFile": True}
 
         def parse(content: str) -> dict[str, Any]:
@@ -279,6 +284,65 @@ class TeachingGenerationGateway:
         return await self._generate(
             request_body, kind="transcribe", parse=parse, payload_builder=self._build_transcription_payload
         )
+
+    async def _generate_ocr(self, body: Mapping[str, Any], pages: list[Mapping[str, Any]]) -> dict[str, Any]:
+        """Read each page image with a dedicated OCR model, one call per page.
+
+        Mirrors what the deepseek-ocr SDK does per page (image + "Free OCR."
+        prompt); pages without an image, and pages whose call failed, come back
+        ``unreadable`` so the caller keeps their extracted text.
+        """
+        page_numbers = [page_no for page_no in (int_value(item.get("page_no"), 0) for item in pages) if page_no > 0]
+        images = _page_images(body, page_numbers=page_numbers)
+        if not images:
+            raise HttpError(400, "OCR needs pageImages for the requested pages", code="ocr_needs_page_image")
+        started = time.monotonic()
+
+        async def read_page(page_no: int) -> dict[str, Any]:
+            data_url = images.get(page_no)
+            if not data_url:
+                return {"page": {"page_no": page_no, "text_md": "", "unreadable": True, "ocr_used": False, "parser": "pdfjs"}}
+            page_body: dict[str, Any] = {
+                **body,
+                "pages": [{"page_no": page_no}],
+                "pageImages": [{"page_no": page_no, "data_url": data_url}],
+                "reasoningEffort": "none",
+            }
+
+            def parse(content: str, _page_no: int = page_no) -> dict[str, Any]:
+                return {"page": _parse_ocr_page(content, _page_no)}
+
+            return await self._generate(page_body, kind="ocr", parse=parse, payload_builder=self._build_ocr_payload)
+
+        outcomes = await asyncio.gather(*(read_page(page_no) for page_no in page_numbers), return_exceptions=True)
+        rows: list[dict[str, Any]] = []
+        errors: list[BaseException] = []
+        attempts = 0
+        last: dict[str, Any] = {}
+        for page_no, outcome in zip(page_numbers, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                if isinstance(outcome, asyncio.CancelledError):
+                    raise outcome
+                LOGGER.info("teaching.ocr_page_failed page=%d error=%s", page_no, outcome)
+                errors.append(outcome)
+                rows.append({"page_no": page_no, "text_md": "", "unreadable": True, "ocr_used": False, "parser": "pdfjs"})
+                continue
+            rows.append(outcome["page"])
+            if "model" in outcome:
+                last = outcome
+                timing = outcome.get("timing") if isinstance(outcome.get("timing"), Mapping) else {}
+                attempts += int(timing.get("attempts", 1) or 1)
+        if errors and all(row["unreadable"] for row in rows):
+            raise errors[0]
+        result = dict(last)
+        result.pop("page", None)
+        result["pages"] = rows
+        result["timing"] = {
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+            "attempts": max(1, attempts),
+            "coalesced": False,
+        }
+        return result
 
     def status(self) -> dict[str, Any]:
         """Cheap, read-only snapshot for ``GET /api/generate/status``."""
@@ -538,6 +602,15 @@ class TeachingGenerationGateway:
         )
         payload.setdefault("max_output_tokens", max_output_tokens_for(effort, page_count))
         return payload
+
+    def _build_ocr_payload(
+        self,
+        candidate_body: Mapping[str, Any],
+        effort: str,
+        page_count: int,
+    ) -> dict[str, Any]:
+        del effort, page_count  # an OCR page has its own fixed budget
+        return _build_ocr_payload(candidate_body, default_model=self.model, pdf_file_cache=self.pdf_file_cache)
 
     def _repair_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Same plan, one reasoning step lower, JSON-only instructions."""

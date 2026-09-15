@@ -127,7 +127,7 @@ async def post_responses_payload_for_body(
         api_payload = _strip_nonportable_responses_fields(payload, provider=provider)
     elif provider_type == ENDPOINT_ANTHROPIC_MESSAGES:
         url = provider_api_url(provider, "messages", endpoint_type=provider_type)
-        api_payload = responses_payload_to_anthropic_messages(payload)
+        api_payload = responses_payload_to_anthropic_messages(payload, provider=provider)
     elif provider_type == ENDPOINT_GOOGLE_GENERATE_CONTENT:
         model_path = urllib.parse.quote(ref["model"].removeprefix("models/"), safe="")
         url = provider_api_url(provider, f"models/{model_path}:generateContent", endpoint_type=provider_type)
@@ -395,13 +395,20 @@ def responses_payload_to_chat_completions(
     provider: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     system_text = string_value(payload.get("instructions"), "")
-    user_text = _responses_input_text(payload.get("input"))
-    messages: list[dict[str, str]] = []
+    model = string_value(payload.get("model"), "")
+    messages: list[dict[str, Any]] = []
     if system_text:
         messages.append({"role": "system", "content": system_text})
-    messages.append({"role": "user", "content": user_text or "Continue."})
+    parts = _responses_content_parts(payload.get("input"))
+    has_images = any(part.get("type") == "image_url" for part in parts)
+    if has_images and provider_model_reads_images(provider, model):
+        # Multimodal content array: the text parts in order, each image where it was.
+        messages.append({"role": "user", "content": parts})
+    else:
+        user_text = _responses_input_text(payload.get("input"))
+        messages.append({"role": "user", "content": user_text or "Continue."})
     chat_payload: dict[str, Any] = {
-        "model": string_value(payload.get("model"), ""),
+        "model": model,
         "messages": messages,
         "stream": False,
     }
@@ -410,12 +417,29 @@ def responses_payload_to_chat_completions(
     return chat_payload
 
 
-def responses_payload_to_anthropic_messages(payload: Mapping[str, Any]) -> dict[str, Any]:
-    user_text = _responses_input_text(payload.get("input"))
+def responses_payload_to_anthropic_messages(
+    payload: Mapping[str, Any],
+    *,
+    provider: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    model = string_value(payload.get("model"), "")
+    parts = _responses_content_parts(payload.get("input"))
+    content: Any = _responses_input_text(payload.get("input")) or "Continue."
+    if any(part.get("type") == "image_url" for part in parts) and provider_model_reads_images(provider, model):
+        blocks: list[dict[str, Any]] = []
+        for part in parts:
+            if part.get("type") == "image_url":
+                media_type, data = _data_url_media(string_value(part["image_url"].get("url"), ""))
+                if media_type and data:
+                    blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+            elif part.get("type") == "text":
+                blocks.append({"type": "text", "text": part["text"]})
+        if blocks:
+            content = blocks
     anthropic_payload: dict[str, Any] = {
-        "model": string_value(payload.get("model"), ""),
+        "model": model,
         "max_tokens": _max_output_tokens(payload, default=4096),
-        "messages": [{"role": "user", "content": user_text or "Continue."}],
+        "messages": [{"role": "user", "content": content}],
         "stream": False,
     }
     system_text = string_value(payload.get("instructions"), "")
@@ -728,6 +752,87 @@ def _max_output_tokens_value(payload: Mapping[str, Any]) -> int:
     return int(value) if isinstance(value, (int, float)) and value > 0 else 0
 
 
+#: Model ids known to accept image input on Chat Completions / Messages
+#: endpoints. DeepSeek: flash reads images, v4-pro silently drops them (verified
+#: 2026-09-15 against api.deepseek.com); the OCR model only takes images.
+IMAGE_INPUT_MODEL_PATTERN = re.compile(
+    r"deepseek-flash|deepseek-v4-flash|deepseek-ocr|gpt-4o|gpt-4\.1|gpt-5|gpt-6|gemini|claude"
+    r"|qwen[\w.-]*-vl|qwen-vl|glm-4\.?v|-vl-|(?:^|[-_/])vl(?:$|[-_/])|vision|-ocr(?:$|[-_/:])",
+    re.IGNORECASE,
+)
+
+
+def provider_model_reads_images(provider: Mapping[str, Any] | None, model: str) -> bool:
+    """Whether image parts should be sent to *model* at *provider*.
+
+    ``apiFeatures`` may say so explicitly (``imageInput`` for the provider,
+    ``visionModels`` substrings, or ``models[<id>].imageInput``); otherwise the
+    model id decides. Sending an image to a model that ignores it is not an
+    error, but it costs bandwidth and the prompt then promises a page the
+    model never saw, so the default is conservative.
+    """
+    if provider is None:
+        return False
+    features = provider.get("apiFeatures") if isinstance(provider.get("apiFeatures"), Mapping) else {}
+    per_model = features.get("models") if isinstance(features.get("models"), Mapping) else {}
+    model_features = per_model.get(model) if isinstance(per_model.get(model), Mapping) else {}
+    if isinstance(model_features.get("imageInput"), bool):
+        return bool(model_features["imageInput"])
+    vision_models = features.get("visionModels")
+    if isinstance(vision_models, list):
+        lowered = model.lower()
+        if any(string_value(token, "").lower() in lowered for token in vision_models if string_value(token, "")):
+            return True
+    if isinstance(features.get("imageInput"), bool):
+        return bool(features["imageInput"])
+    return bool(IMAGE_INPUT_MODEL_PATTERN.search(model))
+
+
+def _data_url_media(data_url: str) -> tuple[str, str]:
+    """Split ``data:<media>;base64,<data>`` into (media type, base64 data)."""
+    match = re.match(r"^data:([^;,]+);base64,(.+)$", data_url, re.DOTALL)
+    if not match:
+        return "", ""
+    return match.group(1), match.group(2)
+
+
+def _responses_content_parts(value: Any) -> list[dict[str, Any]]:
+    """Chat Completions content parts for a Responses ``input``: text kept as
+    text, ``input_image`` as ``image_url``, ``input_file`` as a note."""
+    parts: list[dict[str, Any]] = []
+    messages = value if isinstance(value, list) else [value]
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        role = string_value(message.get("role"), "user")
+        content = message.get("content") if "content" in message else message
+        items = content if isinstance(content, list) else [content]
+        prefix = f"{role}:\n" if role != "user" else ""
+        for item in items:
+            if isinstance(item, str):
+                if item.strip():
+                    parts.append({"type": "text", "text": prefix + item.strip()})
+                    prefix = ""
+                continue
+            if not isinstance(item, Mapping):
+                continue
+            item_type = item.get("type")
+            if item_type in {"input_text", "text"}:
+                text = string_value(item.get("text"), "")
+                if text:
+                    parts.append({"type": "text", "text": prefix + text})
+                    prefix = ""
+            elif item_type == "input_image":
+                raw = item.get("image_url")
+                url = string_value(raw.get("url") if isinstance(raw, Mapping) else raw, "")
+                if url:
+                    parts.append({"type": "image_url", "image_url": {"url": url}})
+            elif item_type == "input_file":
+                filename = string_value(item.get("filename") or item.get("file_id"), "attached PDF")
+                parts.append({"type": "text", "text": f"[Attached file omitted for Chat Completions compatibility: {filename}]"})
+    return parts
+
+
 def _is_deepseek_provider(provider: Mapping[str, Any], *, parsed: urllib.parse.ParseResult | None = None) -> bool:
     provider_id = string_value(provider.get("id"), "").lower()
     if provider_id == DEEPSEEK_PROVIDER_ID:
@@ -746,6 +851,10 @@ def _deepseek_chat_options(payload: Mapping[str, Any], model: str) -> dict[str, 
     if isinstance(reasoning, Mapping):
         effort = string_value(reasoning.get("effort"), "")
     lowered_model = model.lower()
+    # flash thinks by default and burns its whole output budget on a page
+    # transcription; "none" switches thinking off (verified 2026-09-15).
+    if "flash" in lowered_model and effort == "none":
+        return {"thinking": {"type": "disabled"}}
     if lowered_model == "deepseek-chat":
         return {"thinking": {"type": "disabled"}}
     if lowered_model == "deepseek-reasoner":

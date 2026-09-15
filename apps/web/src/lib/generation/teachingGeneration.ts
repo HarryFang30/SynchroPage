@@ -91,6 +91,8 @@ export type TeachingGenerationQualityPlan = {
   fallbackModel?: string;
   reasoningEffort: UiPreferences["modelReasoningEffort"];
   attachPdf: boolean;
+  /** Send a rendering of the page for a model that reads images but not PDFs. */
+  attachPageImage: boolean;
   batchable: boolean;
   retryOnWeakOutput: boolean;
   attempt: TeachingGenerationAttempt;
@@ -294,28 +296,75 @@ export function teachingQualityProviderReadsPdf(config?: ModelApiConfig) {
   return providerSupportsPdfInput(teachingProviderForPlan(config, ref.providerId));
 }
 
+/**
+ * Models known to accept an image in the message. Mirrors the backend's
+ * IMAGE_INPUT_MODEL_PATTERN: DeepSeek flash reads images, v4-pro silently drops
+ * them (verified against api.deepseek.com), the OCR model only takes images.
+ */
+const IMAGE_INPUT_MODEL_PATTERN =
+  /deepseek-flash|deepseek-v4-flash|deepseek-ocr|gpt-4o|gpt-4\.1|gpt-5|gpt-6|gemini|claude|qwen[\w.-]*-vl|qwen-vl|glm-4\.?v|-vl-|(?:^|[-_/])vl(?:$|[-_/])|vision|-ocr(?:$|[-_/:])/i;
+
+/** Whether a rendering of the page reaches this model as an image. */
+export function providerModelReadsImages(provider: ModelApiProvider | undefined, model: string) {
+  if (!provider || !provider.enabled || !model) return false;
+  const features = (provider.apiFeatures ?? {}) as Record<string, unknown>;
+  const perModel = features.models && typeof features.models === "object" ? (features.models as Record<string, unknown>)[model] : undefined;
+  const modelFlag = perModel && typeof perModel === "object" ? (perModel as { imageInput?: unknown }).imageInput : undefined;
+  if (typeof modelFlag === "boolean") return modelFlag;
+  const visionModels = Array.isArray(features.visionModels) ? (features.visionModels as unknown[]) : [];
+  if (visionModels.some((token) => typeof token === "string" && token && model.toLowerCase().includes(token.toLowerCase()))) return true;
+  if (typeof features.imageInput === "boolean") return features.imageInput;
+  return IMAGE_INPUT_MODEL_PATTERN.test(model);
+}
+
+/** The quality model can see a rendering of the page, though not the PDF file. */
+export function teachingQualityModelReadsImages(config?: ModelApiConfig) {
+  const ref = teachingModelDefaults(config).quality;
+  return providerModelReadsImages(teachingProviderForPlan(config, ref.providerId), ref.model);
+}
+
+export type UnreadablePageInput = "pdf" | "image";
+
 export type UnreadableTextRoute =
-  | { mode: "attach" }
-  | { mode: "transcribe"; ref: ModelRef }
+  | { mode: "attach"; input: UnreadablePageInput }
+  | { mode: "ocr"; ref: ModelRef }
+  | { mode: "transcribe"; ref: ModelRef; input: UnreadablePageInput }
   | { mode: "none" };
 
+function modelRefInput(config: ModelApiConfig | undefined, ref: ModelRef): UnreadablePageInput | undefined {
+  const provider = teachingProviderForPlan(config, ref.providerId);
+  if (providerModelReadsImages(provider, ref.model)) return "image";
+  if (providerSupportsPdfInput(provider)) return "pdf";
+  return undefined;
+}
+
 /**
- * How a page whose text layer is noise reaches a model that can see it:
- * attach the PDF page to the teaching (and planning) request when the quality
- * model reads PDFs; otherwise transcribe the page once with a provider that
- * does (the configured transcription default, else the first enabled one);
- * otherwise nothing can see the page and the prompt says so.
+ * How a page whose text layer is noise reaches a model that can see it, in
+ * order of preference:
+ * 1. the quality model sees the page itself, as the PDF page or as an image,
+ *    in the teaching and planning requests;
+ * 2. a dedicated OCR model (defaults.ocr, e.g. DeepSeek-OCR) reads the page
+ *    image once and its Markdown replaces the noise;
+ * 3. a general model transcribes the page once (defaults.transcription, else
+ *    the first enabled model that reads images, else one that reads PDFs);
+ * 4. nothing can see the page and the prompt says so.
  */
 export function unreadableTextRoute(config?: ModelApiConfig): UnreadableTextRoute {
-  if (teachingQualityProviderReadsPdf(config)) return { mode: "attach" };
+  if (teachingQualityProviderReadsPdf(config)) return { mode: "attach", input: "pdf" };
+  if (teachingQualityModelReadsImages(config)) return { mode: "attach", input: "image" };
+  const ocr = config?.defaults.ocr;
+  if (ocr && teachingProviderForPlan(config, ocr.providerId)?.enabled) return { mode: "ocr", ref: ocr };
   const configured = config?.defaults.transcription;
-  if (configured && providerSupportsPdfInput(teachingProviderForPlan(config, configured.providerId))) {
-    return { mode: "transcribe", ref: configured };
+  const configuredInput = configured ? modelRefInput(config, configured) : undefined;
+  if (configured && configuredInput) return { mode: "transcribe", ref: configured, input: configuredInput };
+  for (const provider of config?.providers ?? []) {
+    const model = provider.models.find((item) => providerModelReadsImages(provider, item.trim()));
+    if (model) return { mode: "transcribe", ref: { providerId: provider.id, model }, input: "image" };
   }
   for (const provider of config?.providers ?? []) {
     if (!providerSupportsPdfInput(provider)) continue;
     const model = provider.models.find((item) => item.trim());
-    if (model) return { mode: "transcribe", ref: { providerId: provider.id, model } };
+    if (model) return { mode: "transcribe", ref: { providerId: provider.id, model }, input: "pdf" };
   }
   return { mode: "none" };
 }
@@ -402,10 +451,12 @@ export function teachingGenerationQualityPlan(
   // unreadable, and retrying on the same noise gains nothing.
   const garbledText = Boolean(page.source.text_garbled) && page.source.parser !== TRANSCRIPTION_PARSER;
   const garbledPageAttachable = garbledText && teachingQualityProviderReadsPdf(modelApiConfig);
+  const garbledPageImageable = garbledText && !garbledPageAttachable && teachingQualityModelReadsImages(modelApiConfig);
 
   let requestedReasoning: UiPreferences["modelReasoningEffort"] =
     sourceText.length <= TEACHING_TEXT_COMPACT_PAGE_MAX_CHARS ? "none" : "low";
   let attachPdf = false;
+  let attachPageImage = false;
   let batchable = true;
   let retryOnWeakOutput = true;
 
@@ -449,6 +500,12 @@ export function teachingGenerationQualityPlan(
     attachPdf = true;
     batchable = false;
     retryOnWeakOutput = true;
+  } else if (garbledPageImageable) {
+    reasons.push("garbled-source-text-image");
+    requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, "medium");
+    attachPageImage = true;
+    batchable = false;
+    retryOnWeakOutput = true;
   } else if (garbledText) {
     reasons.push("garbled-source-text-unreadable");
     retryOnWeakOutput = false;
@@ -481,12 +538,12 @@ export function teachingGenerationQualityPlan(
   // No model in this configuration can read the page: attaching the PDF for
   // it would only upload a file the adapter drops.
   if (garbledText && !garbledPageAttachable) attachPdf = false;
-  if (attachPdf) batchable = false;
+  if (attachPdf || attachPageImage) batchable = false;
 
   if (!reasons.length) reasons.push("text-fast-path");
   const modelDefaults = teachingModelDefaults(modelApiConfig);
   const selectedRef =
-    attachPdf || requestedReasoning === "high"
+    attachPdf || attachPageImage || requestedReasoning === "high"
       ? modelDefaults.quality
       : requestedReasoning === "medium"
         ? modelDefaults.balanced
@@ -517,6 +574,7 @@ export function teachingGenerationQualityPlan(
       : fallbackRef.model,
     reasoningEffort,
     attachPdf,
+    attachPageImage,
     batchable,
     retryOnWeakOutput,
     attempt,
@@ -561,7 +619,9 @@ export function planForRetry(
     : clampTeachingReasoningEffort(previousPlan.reasoningEffort, capabilities);
   // Transport failures must not grow the request; a truncated/invalid body keeps
   // whatever grounding the previous attempt had.
-  const attachPdf = kind === "invalid_json" || kind === "truncated" ? previousPlan.attachPdf : false;
+  const keepGrounding = kind === "invalid_json" || kind === "truncated";
+  const attachPdf = keepGrounding ? previousPlan.attachPdf : false;
+  const attachPageImage = keepGrounding ? previousPlan.attachPageImage : false;
   const reasons = [
     ...previousPlan.reasons.filter((reason) => !reason.startsWith("retry-kind:")),
     `retry-kind:${kind}`,
@@ -572,6 +632,7 @@ export function planForRetry(
     attempt: "initial",
     reasoningEffort,
     attachPdf,
+    attachPageImage,
     batchable: false,
     retryOnWeakOutput: false,
     reasons,
@@ -587,6 +648,7 @@ export function teachingQualityPlanPayload(plan: TeachingGenerationQualityPlan) 
     fallbackModel: plan.fallbackModel,
     reasoningEffort: plan.reasoningEffort,
     attachPdf: plan.attachPdf,
+    attachPageImage: plan.attachPageImage,
     batchable: plan.batchable,
     reasons: plan.reasons,
   };
@@ -909,7 +971,7 @@ function compactTeachingPages(pages: PageData[]) {
 }
 
 function teachingBatchSizeForPlan(plan: TeachingGenerationQualityPlan, pages: PageData[] = [], planned = false) {
-  if (plan.attachPdf) return 1;
+  if (plan.attachPdf || plan.attachPageImage) return 1;
   // A planned segment is taught in one request so the pages read as one stretch.
   if (planned) return LESSON_PLAN_SEGMENT_CHUNK_PAGES;
   // Without a plan only compact text pages are worth grouping, and never
@@ -935,6 +997,7 @@ function teachingPlansCanShareBatch(left: TeachingGenerationQualityPlan, right: 
     left.model === right.model &&
     left.reasoningEffort === right.reasoningEffort &&
     left.attachPdf === right.attachPdf &&
+    left.attachPageImage === right.attachPageImage &&
     left.batchable === right.batchable &&
     left.attempt === right.attempt
   );

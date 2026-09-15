@@ -852,6 +852,91 @@ test.describe("Teaching Generation (mocked)", () => {
     await expect(page.locator(".note-eyebrow .note-text-layer-unreadable")).toBeVisible();
   });
 
+  test("a quality model that reads images gets a rendering of the noisy page", async ({ page }) => {
+    // DeepSeek flash reads images but not PDF files; v4-pro reads neither.
+    const flash = { providerId: "deepseek", model: "deepseek-flash" };
+    const flashConfig = {
+      version: 1,
+      selectedProviderId: "deepseek",
+      providers: [{
+        id: "deepseek", name: "DeepSeek", type: "openai-compatible", apiHost: "https://api.deepseek.com",
+        apiKeyRequired: true, hasApiKey: true, enabled: true, models: ["deepseek-flash", "deepseek-v4-pro"],
+      }],
+      defaults: { assistant: flash, teachingFast: flash, teachingBalanced: flash, teachingQuality: flash },
+    };
+    await page.unroute("**/api/**");
+    const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/model-config")) {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(flashConfig) });
+        return;
+      }
+      const body = JSON.parse(route.request().postData() || "{}") as Record<string, unknown>;
+      if (url.includes("/api/generate/plan")) {
+        calls.push({ path: "plan", body });
+        await fulfilPlan(route, 2);
+        return;
+      }
+      if (url.includes("/api/generate/pages")) {
+        calls.push({ path: "pages", body });
+        const pages = (body.pages as Array<{ page_no: number }>).map((item) => ({
+          page_no: item.page_no,
+          teaching: { slide_title: `Image page ${item.page_no}`, speaker_notes_md: mockNotes("Image notes", item.page_no), confidence: 0.9, concepts: ["image"], output_language: "zh-CN" },
+          status: "completed",
+        }));
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ pages }) });
+        return;
+      }
+      if (url.includes("/api/generate/page")) {
+        calls.push({ path: "page", body });
+        const pageNo = (body.page as { page_no: number }).page_no;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            page: {
+              page_no: pageNo,
+              teaching: { slide_title: `Image page ${pageNo}`, speaker_notes_md: mockNotes("Image notes", pageNo), confidence: 0.9, concepts: ["image"], output_language: "zh-CN" },
+              status: "completed",
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+    // The model config is read once at start-up.
+    await page.reload();
+    await uploadPdfFromRail(page, "garbled-formula.pdf");
+    await expect(page.locator(".pdf-page-shell")).toHaveCount(2);
+
+    await page.locator(".generate-main-button").click();
+    await expect(page.locator(".notes-content")).toContainText(/Image notes/, { timeout: 20_000 });
+    await expect.poll(() => calls.filter((call) => call.path === "page" && (call.body.page as { page_no: number }).page_no === 2).length, { timeout: 20_000 }).toBe(1);
+
+    // The planner received a rendering of the noisy page, not the PDF file.
+    const planCall = calls.find((call) => call.path === "plan");
+    expect(planCall?.body.attachPages).toEqual([2]);
+    expect(planCall?.body.documentFile).toBeUndefined();
+    const planImages = planCall?.body.pageImages as Array<{ page_no: number; data_url: string; width: number; height: number }>;
+    expect(planImages.map((image) => image.page_no)).toEqual([2]);
+    expect(planImages[0].data_url.startsWith("data:image/png;base64,")).toBe(true);
+    expect(planImages[0].width).toBeGreaterThan(500);
+    // The noisy page is taught alone, with its image, by the quality model.
+    const noisyCall = calls.find((call) => call.path === "page" && (call.body.page as { page_no: number }).page_no === 2);
+    const plan = noisyCall?.body.qualityPlan as { attachPdf: boolean; attachPageImage: boolean; reasons: string[] };
+    expect(plan.attachPageImage).toBe(true);
+    expect(plan.attachPdf).toBe(false);
+    expect(plan.reasons).toContain("garbled-source-text-image");
+    expect(noisyCall?.body.model).toBe("deepseek-flash");
+    const noisyImages = noisyCall?.body.pageImages as Array<{ page_no: number }>;
+    expect(noisyImages.map((image) => image.page_no)).toEqual([2]);
+    // The readable page travels without an image.
+    const readableCall = calls.find((call) => call.path !== "plan" && call !== noisyCall);
+    expect(readableCall?.body.pageImages).toBeUndefined();
+  });
+
   test("structure and JSON tabs only appear in Debug mode", async ({ page }) => {
     await expect(page.locator(".tab-group")).toBeVisible();
     // 讲解 / 笔记 / 地图

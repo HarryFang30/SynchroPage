@@ -245,6 +245,7 @@ export type AppCopy = {
     pdfTextExtracting: (ready: number, total: number) => string;
     pdfTextExtractionFallback: string;
     generationTranscribing: (done: number, total: number) => string;
+    generationOcr: (done: number, total: number) => string;
     generationTranscriptionFailed: (count: number) => string;
     generationTextLayerUnreadable: (count: number) => string;
     checkingNote: (pageNo: number) => string;
@@ -855,6 +856,7 @@ const zhCN: AppCopy = {
     pdfTextExtracting: (ready, total) => `正在读取 PDF 文本层，已就绪 ${ready}/${total} 页`,
     pdfTextExtractionFallback: "PDF 文本层读取较慢，先使用已就绪内容继续生成",
     generationTranscribing: (done, total) => `有 ${total} 页的公式是嵌入字体，文字层读不出来，正在从页面图像转写（${done}/${total}）…`,
+    generationOcr: (done, total) => `有 ${total} 页的文字层读不出来，正在用 OCR 模型识别页面（${done}/${total}）…`,
     generationTranscriptionFailed: (count) => `有 ${count} 页转写没有成功，这些页按原有文字继续讲`,
     generationTextLayerUnreadable: (count) => `有 ${count} 页的文字层不可读（公式是嵌入字体），当前模型读不了 PDF 页面，这些页会照标题和上下文来讲并标为待复核`,
     checkingNote: (pageNo) => `正在检查你在 p.${pageNo} 的笔记`,
@@ -1493,6 +1495,7 @@ const enUS: AppCopy = {
     pdfTextExtracting: (ready, total) => `Reading PDF text layer: ${ready}/${total} pages ready`,
     pdfTextExtractionFallback: "PDF text extraction is slow, continuing with the text that is ready",
     generationTranscribing: (done, total) => `${total} pages draw their formulas with an embedded font, so their text layer is unreadable; transcribing them from the page images (${done}/${total})…`,
+    generationOcr: (done, total) => `${total} pages have an unreadable text layer; reading them with the OCR model (${done}/${total})…`,
     generationTranscriptionFailed: (count) => `${count} pages could not be transcribed; continuing with their extracted text`,
     generationTextLayerUnreadable: (count) => `${count} pages have an unreadable text layer (formulas in an embedded font) and the current model cannot read PDF pages; they will be taught from their titles and context and marked for review`,
     checkingNote: (pageNo) => `Checking your note on p.${pageNo}`,
