@@ -10,7 +10,6 @@ from pdf_agent.server.payload_builders import (
     _agent_answer_mode_effort,
     _build_responses_payload,
     _build_teaching_generation_payload,
-    _is_fast_teaching_generation,
     _reasoning_effort,
     _teaching_generation_candidate_bodies,
     _teaching_generation_page_numbers,
@@ -18,7 +17,6 @@ from pdf_agent.server.payload_builders import (
     _teaching_neighbor_lines,
     _teaching_output_language,
     _teaching_source_text_limit,
-    _teaching_structure_lines,
 )
 
 
@@ -99,27 +97,6 @@ class TeachingGenerationPagesTest(unittest.TestCase):
         self.assertEqual(result, [1, 3])
 
 
-class IsFastTeachingTest(unittest.TestCase):
-
-    def test_no_plan_returns_false(self) -> None:
-        self.assertFalse(_is_fast_teaching_generation({}))
-
-    def test_mini_with_low_effort_and_no_pdf_returns_true(self) -> None:
-        self.assertTrue(_is_fast_teaching_generation({
-            "qualityPlan": {"model": "gpt-5.5-mini", "reasoningEffort": "low", "attachPdf": False}
-        }))
-
-    def test_mini_with_pdf_returns_false(self) -> None:
-        self.assertFalse(_is_fast_teaching_generation({
-            "qualityPlan": {"model": "gpt-5.5-mini", "reasoningEffort": "low", "attachPdf": True}
-        }))
-
-    def test_non_mini_returns_false(self) -> None:
-        self.assertFalse(_is_fast_teaching_generation({
-            "qualityPlan": {"model": "gpt-5.5", "reasoningEffort": "low", "attachPdf": False}
-        }))
-
-
 class SourceTextLimitTest(unittest.TestCase):
 
     def test_no_plan_returns_quality(self) -> None:
@@ -130,9 +107,10 @@ class SourceTextLimitTest(unittest.TestCase):
         limit = _teaching_source_text_limit({"qualityPlan": {"attachPdf": True, "model": "gpt-5.5", "reasoningEffort": "medium"}})
         self.assertEqual(limit, 16_000)
 
-    def test_mini_low_returns_fast(self) -> None:
+    def test_mini_low_returns_balanced_too(self) -> None:
+        # The separate fast prompt is gone; small models get the balanced budget.
         limit = _teaching_source_text_limit({"qualityPlan": {"attachPdf": False, "model": "gpt-5.5-mini", "reasoningEffort": "low"}})
-        self.assertEqual(limit, 2_500)
+        self.assertEqual(limit, 8_000)
 
     def test_non_mini_low_returns_balanced(self) -> None:
         limit = _teaching_source_text_limit({"qualityPlan": {"attachPdf": False, "model": "gpt-5.5", "reasoningEffort": "low"}})
@@ -182,21 +160,7 @@ class BuildResponsesPayloadTest(unittest.TestCase):
         self.assertIn("page_no", text_parts[-1])
 
 
-class TeachingStructureLinesTest(unittest.TestCase):
-
-    def test_structure_block_carries_skeleton_and_guidance(self) -> None:
-        lines = _teaching_structure_lines("zh-CN", ["formula"])
-        block = "\n".join(lines)
-        self.assertIn("Section skeleton for speaker_notes_md", block)
-        self.assertIn("## 容易错的地方", block)
-        self.assertIn("Page-type guidance", block)
-        self.assertIn("formula:", block)
-        self.assertNotIn("classification as source.page_type", block)
-
-    def test_unknown_page_type_adds_the_self_classification_line(self) -> None:
-        block = "\n".join(_teaching_structure_lines("en-US", ["unknown"]))
-        self.assertIn("## Easy to get wrong", block)
-        self.assertIn("classify it yourself from its content", block)
+class TeachingNeighborLinesTest(unittest.TestCase):
 
     def test_neighbor_lines_use_adjacent_page_numbers_only(self) -> None:
         titles = {4: "Routh", 6: "Rules", 9: "Far away"}
@@ -209,18 +173,19 @@ class TeachingStructureLinesTest(unittest.TestCase):
 
 class TeachingPayloadPromptTest(unittest.TestCase):
 
-    def test_teaching_prompt_includes_structure_for_quality_path(self) -> None:
+    def test_teaching_prompt_carries_the_plan_row_for_the_page(self) -> None:
         payload = _build_teaching_generation_payload(
             {
                 "outputLanguage": "zh-CN",
+                "lessonPlan": {"pages": [{"page_no": 1, "role": "summary", "depth": "brief", "cue": "chapter recap"}]},
                 "page": {"page_no": 1, "source": {"text_md": "notes", "page_type": "summary"}},
             },
             default_model="gpt-6-astra",
         )
         prompt = payload["input"][0]["content"][-1]["text"]
-        self.assertIn("## 自测清单", prompt)
+        self.assertIn("- p1: role=summary depth=brief — chapter recap", prompt)
         self.assertIn("page_type: summary", prompt)
-        self.assertIn("summary: chapter summary or review page.", prompt)
+        self.assertNotIn("Section skeleton", prompt)
 
 
 class HarnessTeachingFieldsTest(unittest.TestCase):

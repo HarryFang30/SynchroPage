@@ -122,3 +122,21 @@ export function splitNoteSections(markdown: string): NoteSection[] {
   flush();
   return sections;
 }
+
+const ANSWER_QUOTE_LINE = /^>\s*(答案|Answer)\s*[:：]/;
+
+/**
+ * Make the answer of a self-check device its own paragraph inside the quote:
+ * "> **自测：** q\n> 答案：a" becomes "> **自测：** q\n>\n> 答案：a", so the
+ * renderer can fold the answer without splitting text nodes.
+ */
+export function prepareNoteMarkdown(markdown: string) {
+  const lines = String(markdown || "").replace(/\r\n?/g, "\n").split("\n");
+  const output: string[] = [];
+  for (const line of lines) {
+    const previous = output[output.length - 1] ?? "";
+    if (ANSWER_QUOTE_LINE.test(line) && /^>\s*\S/.test(previous)) output.push(">");
+    output.push(line);
+  }
+  return output.join("\n");
+}

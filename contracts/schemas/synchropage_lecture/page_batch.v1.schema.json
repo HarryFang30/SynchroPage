@@ -4,7 +4,12 @@
   "title": "SynchroPage Lecture Page Batch",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "document_id", "target_pages", "pages"],
+  "required": [
+    "schema",
+    "document_id",
+    "target_pages",
+    "pages"
+  ],
   "properties": {
     "schema": {
       "const": "synchropage.lecture.page_batch.v1"
@@ -32,7 +37,12 @@
     "page": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["page_no", "source", "teaching", "status"],
+      "required": [
+        "page_no",
+        "source",
+        "teaching",
+        "status"
+      ],
       "properties": {
         "page_no": {
           "type": "integer",
@@ -41,15 +51,41 @@
         "source": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["pdf_page_ref", "text_md", "ocr_used", "parser", "page_type"],
+          "required": [
+            "pdf_page_ref",
+            "text_md",
+            "ocr_used",
+            "parser",
+            "page_type"
+          ],
           "properties": {
-            "pdf_page_ref": { "type": "string" },
-            "text_md": { "type": "string" },
-            "ocr_used": { "type": "boolean" },
-            "parser": { "type": "string" },
+            "pdf_page_ref": {
+              "type": "string"
+            },
+            "text_md": {
+              "type": "string"
+            },
+            "ocr_used": {
+              "type": "boolean"
+            },
+            "parser": {
+              "type": "string"
+            },
             "page_type": {
               "type": "string",
-              "enum": ["title", "agenda", "concept", "example", "figure", "table", "formula", "exercise", "summary", "blank", "unknown"]
+              "enum": [
+                "title",
+                "agenda",
+                "concept",
+                "example",
+                "figure",
+                "table",
+                "formula",
+                "exercise",
+                "summary",
+                "blank",
+                "unknown"
+              ]
             }
           }
         },
@@ -70,47 +106,83 @@
             "needs_parser_fallback"
           ],
           "properties": {
-            "slide_title": { "type": "string" },
-            "speaker_notes_md": { "type": "string" },
+            "slide_title": {
+              "type": "string"
+            },
+            "speaker_notes_md": {
+              "type": "string"
+            },
             "concepts": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "prerequisites": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "contextual_bridge": {
               "type": "string"
             },
             "visual_explanations": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "formula_explanations": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "stuck_points": {
               "description": "Where a learner typically gets stuck on this page, each resolved in one line.",
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "exam_angles": {
               "description": "How an exam would test this page: question forms, traps, what graders look for.",
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "generation_error": {
               "description": "Why the last generation attempt for this page failed (transport or quality). Written by the reader; absent on successful pages.",
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "kind": { "type": "string", "enum": ["timeout", "rate_limit", "network", "invalid_json", "truncated", "server", "quality"] },
-                "attempts": { "type": "integer", "minimum": 0 },
-                "at": { "type": "number" }
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeout",
+                    "rate_limit",
+                    "network",
+                    "invalid_json",
+                    "truncated",
+                    "server",
+                    "quality"
+                  ]
+                },
+                "attempts": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "at": {
+                  "type": "number"
+                }
               },
-              "required": ["kind", "attempts", "at"]
+              "required": [
+                "kind",
+                "attempts",
+                "at"
+              ]
             },
             "evidence": {
               "type": "array",
@@ -118,13 +190,27 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["kind", "quote_or_reference"],
+                "required": [
+                  "kind",
+                  "quote_or_reference"
+                ],
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "enum": ["title", "keyword", "formula", "figure", "table", "caption", "layout", "other"]
+                    "enum": [
+                      "title",
+                      "keyword",
+                      "formula",
+                      "figure",
+                      "table",
+                      "caption",
+                      "layout",
+                      "other"
+                    ]
                   },
-                  "quote_or_reference": { "type": "string" }
+                  "quote_or_reference": {
+                    "type": "string"
+                  }
                 }
               }
             },
@@ -133,13 +219,27 @@
               "minimum": 0,
               "maximum": 1
             },
-            "needs_review": { "type": "boolean" },
-            "needs_parser_fallback": { "type": "boolean" }
+            "needs_review": {
+              "type": "boolean"
+            },
+            "needs_parser_fallback": {
+              "type": "boolean"
+            },
+            "handoff": {
+              "type": "string",
+              "description": "One or two sentences on what the student holds after this page; the next page's request receives it."
+            }
           }
         },
         "status": {
           "type": "string",
-          "enum": ["queued", "running", "ready", "needs_review", "failed"]
+          "enum": [
+            "queued",
+            "running",
+            "ready",
+            "needs_review",
+            "failed"
+          ]
         }
       }
     }

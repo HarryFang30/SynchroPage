@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { noteSectionKey, splitNoteSections } from "../src/lib/notes/noteSections";
+import { noteSectionKey, prepareNoteMarkdown, splitNoteSections } from "../src/lib/notes/noteSections";
 
 // Pure-function checks for the notes-pane section splitter.
 
@@ -44,5 +44,12 @@ test.describe("note sections", () => {
     const sections = splitNoteSections("## 举个例子\n### 步骤一\n做。\n### 步骤二\n再做。");
     expect(sections.length).toBe(1);
     expect(sections[0].body).toContain("### 步骤二");
+  });
+
+  test("the answer line of a self-check quote becomes its own paragraph", () => {
+    const prepared = prepareNoteMarkdown("> **自测：** 问题？\n> 答案：回答。\n\n正文。");
+    expect(prepared).toBe("> **自测：** 问题？\n>\n> 答案：回答。\n\n正文。");
+    expect(prepareNoteMarkdown("> **Check yourself:** q\n>\n> Answer: a")).toBe("> **Check yourself:** q\n>\n> Answer: a");
+    expect(prepareNoteMarkdown("plain\n答案：not a quote")).toBe("plain\n答案：not a quote");
   });
 });

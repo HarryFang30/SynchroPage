@@ -12,18 +12,17 @@ from typing import Any
 from pdf_agent.gateway import build_codex_responses_payload
 from pdf_agent.server.constants import (
     AGENT_INSTRUCTIONS,
+    LESSON_PLAN_PAGE_TEXT_CHARS,
     MAX_AGENT_PDF_SUBSET_PAGES,
     MAX_CONTEXT_CHARS,
     MAX_TEACHING_BALANCED_SOURCE_CHARS,
-    MAX_TEACHING_FAST_SOURCE_CHARS,
     MAX_TEACHING_QUALITY_SOURCE_CHARS,
-    SYNCHROPAGE_FAST_TEACHING_INSTRUCTIONS,
     SYNCHROPAGE_SHARED_INSTRUCTIONS,
-    TEACHING_GENERATOR_FAST_INSTRUCTIONS,
+    TEACHING_DEPTHS,
+    TEACHING_DEVICE_LABELS,
     TEACHING_GENERATOR_INSTRUCTIONS,
-    TEACHING_NOTES_SKELETON,
-    TEACHING_PAGE_TYPE_GUIDANCE,
-    TEACHING_SECTION_HEADINGS,
+    TEACHING_PAGE_ROLES,
+    TEACHING_PLANNER_INSTRUCTIONS,
 )
 from pdf_agent.server.document_context import (
     _append_page_number,
@@ -160,26 +159,13 @@ def _teaching_generation_page_numbers(body: Mapping[str, Any]) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def _is_fast_teaching_generation(body: Mapping[str, Any]) -> bool:
-    plan = body.get("qualityPlan")
-    if not isinstance(plan, Mapping):
-        return False
-    model = _string_value(plan.get("model") or body.get("model"), "")
-    reasoning_effort = _string_value(plan.get("reasoningEffort"), _reasoning_effort(body))
-    return "mini" in model and reasoning_effort in {"none", "low"} and not bool(plan.get("attachPdf"))
-
-
 def _teaching_source_text_limit(body: Mapping[str, Any]) -> int:
     plan = body.get("qualityPlan")
     if not isinstance(plan, Mapping):
         return MAX_TEACHING_QUALITY_SOURCE_CHARS
-    model = _string_value(plan.get("model") or body.get("model"), "")
     reasoning_effort = _string_value(plan.get("reasoningEffort"), _reasoning_effort(body))
-    attach_pdf = bool(plan.get("attachPdf"))
-    if attach_pdf or reasoning_effort in {"high", "xhigh"}:
+    if bool(plan.get("attachPdf")) or reasoning_effort in {"high", "xhigh"}:
         return MAX_TEACHING_QUALITY_SOURCE_CHARS
-    if "mini" in model and reasoning_effort in {"none", "low"}:
-        return MAX_TEACHING_FAST_SOURCE_CHARS
     return MAX_TEACHING_BALANCED_SOURCE_CHARS
 
 
@@ -187,8 +173,6 @@ def _teaching_quality_plan_lines(body: Mapping[str, Any]) -> list[str]:
     plan = body.get("qualityPlan")
     if not isinstance(plan, Mapping):
         return []
-    if _is_fast_teaching_generation(body):
-        return ["mode: fast text-page path; concise output preferred."]
     attempt = _string_value(plan.get("attempt"), "initial")
     mode = "quality retry" if attempt == "retry" else "pdf-grounded" if bool(plan.get("attachPdf")) else "balanced text"
     lines = [f"mode: {mode}; reasoning={_string_value(plan.get('reasoningEffort'), _reasoning_effort(body))}"]
@@ -197,13 +181,7 @@ def _teaching_quality_plan_lines(body: Mapping[str, Any]) -> list[str]:
         lines.append(f"reasons: {', '.join(reasons)}")
     if attempt == "retry":
         lines.append("This is a quality retry. Prefer more complete visual/source grounding over speed.")
-    elif bool(plan.get("batchable")):
-        lines.append("This path can be batched. Keep the output concise and do not over-expand.")
     return lines
-
-
-def _teaching_generator_instructions(body: Mapping[str, Any]) -> str:
-    return TEACHING_GENERATOR_FAST_INSTRUCTIONS if _is_fast_teaching_generation(body) else TEACHING_GENERATOR_INSTRUCTIONS
 
 
 # ---------------------------------------------------------------------------
@@ -221,10 +199,11 @@ def _teaching_page_output_contract(page_no: Any) -> dict[str, Any]:
         "source": {"page_type": "title|agenda|concept|example|figure|table|formula|exercise|summary|blank"},
         "teaching": {
             "output_language": "zh-CN|en-US",
-            "slide_title": "short page title in the output language",
-            "speaker_notes_md": "Markdown notes using the section skeleton headings; LaTeX and Markdown tables when they resolve a stuck point",
-            "stuck_points": ["misconception or breakpoint -> one-line fix; 1-3 items; empty for title, agenda, and blank pages"],
-            "exam_angles": ["question form -> trap -> what the grader wants; 1-4 items; empty for title, agenda, and blank pages"],
+            "slide_title": "the page's title in the source's own words",
+            "speaker_notes_md": "the lecture for this page in Markdown; labelled blockquotes are the only devices, no headings",
+            "handoff": "one or two sentences: what the student holds after this page, for the next page to pick up",
+            "stuck_points": ["mistakes people really make on this page; 0-3 one-liners; empty on skim pages"],
+            "exam_angles": ["only what is really examinable; 0-2 one-liners; empty on skim pages"],
             "confidence": 0.82,
             "needs_review": False,
             "needs_parser_fallback": False,
@@ -232,29 +211,20 @@ def _teaching_page_output_contract(page_no: Any) -> dict[str, Any]:
     }
 
 
-def _teaching_fast_page_output_contract(page_no: Any) -> dict[str, Any]:
-    return {
-        "page_no": page_no,
-        "teaching": {
-            "slide_title": "short page title",
-            "speaker_notes_md": "concise Markdown teaching notes",
-            "confidence": 0.72,
-            "needs_review": False,
-        },
-    }
-
-
 # ---------------------------------------------------------------------------
-# Teaching note structure (section headings, skeleton, page-type guidance)
+# Lesson plan helpers (page roles, depths, segment context)
 # ---------------------------------------------------------------------------
 
-
-def _teaching_section_headings(output_language_code: str) -> dict[str, str]:
-    return TEACHING_SECTION_HEADINGS.get(output_language_code, TEACHING_SECTION_HEADINGS["zh-CN"])
-
-
-def _teaching_notes_skeleton(output_language_code: str) -> str:
-    return TEACHING_NOTES_SKELETON.get(output_language_code, TEACHING_NOTES_SKELETON["zh-CN"])
+_DEPTH_BY_PAGE_TYPE: dict[str, str] = {"title": "skim", "agenda": "skim", "blank": "skim", "summary": "brief"}
+_ROLE_BY_PAGE_TYPE: dict[str, str] = {
+    "title": "title",
+    "agenda": "agenda",
+    "blank": "blank",
+    "summary": "summary",
+    "example": "example",
+    "exercise": "exercise",
+    "formula": "derivation",
+}
 
 
 def _teaching_page_type(page: Mapping[str, Any]) -> str:
@@ -262,29 +232,79 @@ def _teaching_page_type(page: Mapping[str, Any]) -> str:
     return _page_type_value(source.get("page_type"))
 
 
-def _teaching_page_type_guidance_lines(page_types: Sequence[str]) -> list[str]:
-    ordered: list[str] = []
-    for page_type in page_types:
-        if page_type in TEACHING_PAGE_TYPE_GUIDANCE and page_type not in ordered:
-            ordered.append(page_type)
-    if "unknown" in ordered or not ordered:
-        ordered = list(TEACHING_PAGE_TYPE_GUIDANCE)
-    return [TEACHING_PAGE_TYPE_GUIDANCE[page_type] for page_type in ordered]
+def _teaching_device_labels(output_language_code: str) -> dict[str, str]:
+    return TEACHING_DEVICE_LABELS.get(output_language_code, TEACHING_DEVICE_LABELS["zh-CN"])
 
 
-def _teaching_structure_lines(output_language_code: str, page_types: Sequence[str]) -> list[str]:
-    lines = [
-        "",
-        "Section skeleton for speaker_notes_md; use these exact headings, in this order, and omit sections that do not apply to the page type:",
-        _teaching_notes_skeleton(output_language_code),
-        "",
-        "Page-type guidance for the target page(s):",
-        *_teaching_page_type_guidance_lines(page_types),
-    ]
-    if any(page_type == "unknown" for page_type in page_types):
+def _teaching_lesson_plan(body: Mapping[str, Any]) -> Mapping[str, Any]:
+    plan = body.get("lessonPlan")
+    return plan if isinstance(plan, Mapping) else {}
+
+
+def _teaching_plan_rows(body: Mapping[str, Any], target_pages: Sequence[Mapping[str, Any]]) -> dict[int, dict[str, Any]]:
+    """One plan row per target page, in request order.
+
+    Rows come from ``body["lessonPlan"]["pages"]``; a page the plan does not
+    cover (older clients, a failed planning pass) gets a default derived from
+    its page_type so the teaching prompt always has a depth to follow.
+    """
+    provided: dict[int, Mapping[str, Any]] = {}
+    for item in _iter_mapping_items(_teaching_lesson_plan(body).get("pages")):
+        page_no = _int_value(item.get("page_no"), 0)
+        if page_no > 0:
+            provided[page_no] = item
+    rows: dict[int, dict[str, Any]] = {}
+    for index, page in enumerate(target_pages, start=1):
+        page_no = _int_value(page.get("page_no"), index)
+        page_type = _teaching_page_type(page)
+        item = provided.get(page_no, {})
+        role = _string_value(item.get("role"), "")
+        depth = _string_value(item.get("depth"), "")
+        rows[page_no] = {
+            "role": role if role in TEACHING_PAGE_ROLES else _ROLE_BY_PAGE_TYPE.get(page_type, "concept"),
+            "depth": depth if depth in TEACHING_DEPTHS else _DEPTH_BY_PAGE_TYPE.get(page_type, "full"),
+            "key": bool(item.get("key")),
+            "cue": _string_value(item.get("cue"), ""),
+            "planned": bool(item),
+        }
+    return rows
+
+
+def _teaching_lesson_plan_lines(body: Mapping[str, Any], target_pages: Sequence[Mapping[str, Any]]) -> list[str]:
+    plan = _teaching_lesson_plan(body)
+    rows = _teaching_plan_rows(body, target_pages)
+    lines = ["Lesson plan for this request:"]
+    summary = _string_value(plan.get("document_summary"), "")
+    if summary:
+        lines.append(f"document_summary: {summary}")
+    segment = plan.get("segment") if isinstance(plan.get("segment"), Mapping) else {}
+    if segment:
+        pages = segment.get("pages") if isinstance(segment.get("pages"), Sequence) and not isinstance(segment.get("pages"), str) else []
+        span = ""
+        if len(pages) >= 2:
+            span = f" (pages {_int_value(pages[0], 0)}-{_int_value(pages[1], 0)})"
+        lines.append(f"segment: {_string_value(segment.get('title'), 'untitled')}{span}")
+        goal = _string_value(segment.get("goal"), "")
+        if goal:
+            lines.append(f"segment_goal: {goal}")
+    if not any(row["planned"] for row in rows.values()):
         lines.append(
-            "- At least one target page has page_type unknown: classify it yourself from its content, "
-            "return your classification as source.page_type, and follow the matching guidance."
+            "No lesson plan was computed for this document. Judge each page's depth yourself with the same tiers: "
+            "skim for covers, agendas, blank and title-only pages; brief for a page that only continues the previous one; "
+            "full for anything that teaches something new."
+        )
+    lines.append("pages:")
+    for page_no, row in rows.items():
+        cue = f" — {row['cue']}" if row["cue"] else ""
+        key = " key=true" if row["key"] else ""
+        lines.append(f"- p{page_no}: role={row['role']} depth={row['depth']}{key}{cue}")
+    handoff = _string_value(plan.get("handoff"), "")
+    if handoff:
+        lines.append(f"handoff_from_previous_page: {handoff}")
+    else:
+        lines.append(
+            "handoff_from_previous_page: none (this is the first page you teach in this run; "
+            "open naturally, without recapping pages you were not shown)."
         )
     return lines
 
@@ -339,241 +359,139 @@ def _teaching_prompt_rules(body: Mapping[str, Any], *, batch: bool) -> list[str]
         "- If source text is empty but the original PDF is attached, inspect that exact PDF page. "
         "If no PDF is attached, do not hallucinate; set needs_parser_fallback=true, needs_review=true, confidence<=0.35."
     )
-    if _is_fast_teaching_generation(body):
-        return [
-            "Rules:",
-            "- Return JSON only, no Markdown fences or prose outside JSON.",
-            r"- Escape LaTeX backslashes in JSON strings: write \\frac, \\to, and \\cdots, not \frac, \to, or \cdots.",
-            page_rule,
-            "- Do not copy source text into the response; omit source unless setting source.pdf_page_ref.",
-            "- Keep speaker_notes_md concise: 4-7 focused bullets or short sections, explaining rather than transcribing.",
-            "- Use Markdown tables or LaTeX only when the page source clearly needs them.",
-            empty_source_rule,
-        ]
     output_language_code, _output_language_label = _teaching_output_language(body)
-    headings = _teaching_section_headings(output_language_code)
-    lead, symbols, keep, stuck, exam, check, bridge = (
-        headings[key].removeprefix("## ")
-        for key in ("lead", "symbols", "keep", "stuck", "exam", "check", "bridge")
-    )
-    exam_labels = (
-        "题型 / 示例题干 / 失分点"
-        if output_language_code == "zh-CN"
-        else "Question form / Sample stem / Where marks go"
-    )
-    answer_prefix = "答案：" if output_language_code == "zh-CN" else "Answer:"
+    labels = _teaching_device_labels(output_language_code)
+    colon = "：" if output_language_code == "zh-CN" else ":"
+    label_list = " / ".join(f"**{labels[key]}{colon}**" for key in ("remember", "example", "trap", "exam", "check"))
     return [
         "Rules:",
         "- Return JSON only, no Markdown fences or prose outside JSON.",
         r"- Escape LaTeX backslashes in JSON strings: write \\frac, \\to, and \\cdots, not \frac, \to, or \cdots.",
+        "- Quote words or sentences inside prose with curly quotes (“ ”) or 「」, never with straight double quotes.",
         page_rule,
         "- Always return source.page_type: echo the page_type given for the page, or your own classification when it was unknown. Do not copy source text; omit every other source field except source.pdf_page_ref.",
-        "- Write to the reader in the second person. Explain the page in plainer words than the page uses, decode its notation, and give a concrete instance; do not copy the page's own sentences and never write about students in the third person or about what the page establishes.",
-        f"- {lead}: 1-2 plain sentences that someone who has not yet understood the page can follow; always present on content pages.",
-        f"- {symbols}: a table of at most 8 rows covering the symbols and terms the page uses without explaining, including what it assumes the reader already knows; omit the section when the page has none.",
-        f"- {keep}: one sentence the reader can repeat from memory.",
-        f"- {stuck}: 0-3 bullets shaped as **you might think X, but actually Y** followed by the fix; only mistakes a real first-time reader would make on this page; omit the section rather than invent one.",
-        f"- {exam}: write it only when the page carries something an exam plausibly asks about (a definition, formula, method, result, or distinction); omit it on transitional, motivational, or purely illustrative pages. When present, 1-2 bullets labelled exactly {exam_labels}, the stem written from this page's material with no answer. Never claim knowledge of a specific real exam or past paper.",
-        f"- {check}: one question answerable without the notes, then the answer on the next line starting with {answer_prefix}",
-        f"- {bridge}: write it only when neighbour page titles or document context are given; cite pages as p.N and never invent content for pages you were not shown; this is the only place for remarks about the page's role in the course.",
-        "- Use exactly the section headings of the skeleton above, in that order, omitting the sections that do not apply; do not invent other top-level headings.",
-        "- Follow the page-type guidance for each target page. Title, agenda, and blank pages get 1-2 plain lines, no headings, and empty stuck_points and exam_angles.",
-        "- Exercise pages: give the solution entry point and the usual way to lose marks; do not give final answers unless the page itself shows them.",
-        "- Ground every claim in the target page text, the attached PDF page, or the document context; cite other pages by number when you use them and never invent numbers, definitions, or figure conclusions.",
-        f"- Mirror the sections into the arrays: teaching.stuck_points holds the {stuck} items as one-liners (0-3, empty when the section is omitted) and teaching.exam_angles holds the {exam} items as one-liners (0-3, empty when the section is omitted), adding nothing the notes do not contain; both stay empty for title, agenda, and blank pages.",
-        "- Also fill concepts with 2-5 short terms named on this page (chips of at most 12 characters, not sentences), contextual_bridge with a one-sentence version of the neighbouring-pages section whenever you wrote that section, visual_explanations on figure and table pages, formula_explanations on formula pages, prerequisites with what the page silently assumes, and evidence with 1-4 short fragments actually visible on this page. Leave an array empty only when the page type does not call for it; never pad it.",
-        "- Use headings, short paragraphs, bullets, bold for the wrong-idea label, a Markdown table for the symbol section and otherwise only when a table is what explains something, and LaTeX math.",
+        f"- Device labels, exactly: {label_list}. The answer of the {labels['check']} device starts the next line of the same blockquote with {labels['answer']}{colon}. No other blockquotes, no headings.",
+        "- Follow the depth the lesson plan gives each page: skim is one sentence, brief one short paragraph, full a proper explanation; a key page may run longer. Never pad a skim or brief page.",
+        "- Fill teaching.handoff with one or two sentences on what the student holds after this page; the request for the next page receives it.",
+        "- Fill teaching.concepts with 2-5 short terms named on this page (at most 12 characters each), teaching.stuck_points with 0-3 mistakes people really make on this page, and teaching.exam_angles with 0-2 angles only when the page is really examinable. All three stay empty on skim pages and are never repeated in the prose.",
+        "- Also fill visual_explanations on figure and table pages, formula_explanations on formula pages, prerequisites with what the page silently assumes, and evidence with 1-4 short fragments visible on this page; leave an array empty when the page does not call for it.",
+        "- Ground every claim in the target page text, the attached PDF page, or the document context; cite other pages as p.N and never invent numbers, definitions, or figure conclusions.",
         "- Put display math delimiters $$ on their own lines; keep prose outside math delimiters when possible.",
         "- Never escape digits or binary strings in LaTeX; use 2^n, 000, and 111.",
-        "- Length follows how much explaining the page needs, not a quota: an easy page gets a few lines, a dense page more; usually 300-600 Chinese characters (200-400 English words) in total and never above about 1000 Chinese characters. Delete any sentence that only repeats the page in its own words or pads a section.",
         "- Set confidence by grounding quality, not by length: 0.85-0.95 when the page text is clear and complete, 0.6-0.8 when figure content had to be inferred or the extraction looks partial; set needs_review=true whenever confidence is below 0.78.",
-        "- Treat any existing notes as a draft to surpass rather than to copy: keep what is correct, replace commentary about the page's role with plain explanation of its content, and fix grounding or formula errors.",
+        "- Treat any existing notes as a draft to surpass rather than to copy.",
         empty_source_rule,
     ]
 
 
 # ---------------------------------------------------------------------------
-# Fast teaching prompt
-# ---------------------------------------------------------------------------
-
-
-def _teaching_fast_output_shape(page_numbers: Sequence[int], *, batch: bool) -> str:
-    if batch:
-        return _teaching_contract_json({"pages": [_teaching_fast_page_output_contract("<requested_page_no>")]})
-    page_no = page_numbers[0] if page_numbers else 1
-    return _teaching_contract_json({"page": _teaching_fast_page_output_contract(page_no)})
-
-
-def _teaching_fast_page_jsonl(page: Mapping[str, Any], source_text_limit: int) -> str:
-    source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
-    page_no = _int_value(page.get("page_no"), 1)
-    source_text = str(source.get("text_md") or "").strip()
-    return _json_dumps_utf8_safe(
-        {
-            "page_no": page_no,
-            "pdf_page_ref": _string_value(source.get("pdf_page_ref"), f"#page={page_no}"),
-            "source_text": _truncate(source_text, source_text_limit)
-            if source_text
-            else "[No embedded text extracted for this page.]",
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def _build_fast_teaching_generation_prompt(body: Mapping[str, Any], target_pages: list[Mapping[str, Any]]) -> str:
-    output_language_code, output_language_label = _teaching_output_language(body)
-    target_page_numbers = [_int_value(page.get("page_no"), index + 1) for index, page in enumerate(target_pages)]
-    source_text_limit = _teaching_source_text_limit(body)
-    batch = len(target_pages) > 1
-    sections = [
-        f"Generate concise SynchroPage teaching JSON for PDF page(s): {_format_page_ranges(target_page_numbers)}.",
-        f"Output shape: {_teaching_fast_output_shape(target_page_numbers, batch=batch)}",
-        f"Language: {output_language_label} ({output_language_code}); write all prose in this language and preserve technical tokens.",
-        "Rules: JSON only; no Markdown fences; escape LaTeX backslashes as \\\\frac and \\\\to; do not copy source text; use 3-5 focused bullets/short sections.",
-        "Set teaching.confidence between 0 and 1. If the page seems underspecified or notes may be incomplete, set teaching.needs_review=true and confidence<=0.55.",
-        "If source_text is empty, keep notes brief; the server will mark parser fallback when needed.",
-        "Pages JSONL:",
-    ]
-    sections.extend(_teaching_fast_page_jsonl(page, source_text_limit) for page in target_pages)
-    return "\n".join(sections)
-
-
-# ---------------------------------------------------------------------------
-# Regular teaching prompts (single + batch)
+# Teaching prompt (one page or a segment of pages)
 # ---------------------------------------------------------------------------
 
 
 def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
     target_pages = _teaching_generation_pages(body)
-    if _is_fast_teaching_generation(body):
-        return _build_fast_teaching_generation_prompt(body, target_pages)
-    if len(target_pages) > 1:
-        return _build_teaching_batch_generation_prompt(body, target_pages)
-
-    document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
-    page = target_pages[0] if target_pages else {}
-    source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
-    teaching = page.get("teaching") if isinstance(page.get("teaching"), Mapping) else {}
-    previous_page = body.get("previousPage") if isinstance(body.get("previousPage"), Mapping) else {}
-    next_page = body.get("nextPage") if isinstance(body.get("nextPage"), Mapping) else {}
-    page_no = _int_value(page.get("page_no"), 1)
-    page_count = _int_value(body.get("pageCount"), _int_value(document.get("page_count"), 0))
-    output_language_code, output_language_label = _teaching_output_language(body)
-    source_text = str(source.get("text_md") or "").strip()
-    source_text_limit = _teaching_source_text_limit(body)
-    existing_notes = str(teaching.get("speaker_notes_md") or "").strip()
-    quality_plan_lines = _teaching_quality_plan_lines(body)
-    page_type = _teaching_page_type(page)
-    neighbor_titles = _teaching_page_titles(body, target_pages)
-
-    sections = [
-        "Task-specific instructions:",
-        _teaching_generator_instructions(body),
-        "",
-        "Generate one SynchroPage teaching page JSON for the given PDF page.",
-        "",
-        "Output shape:",
-        _teaching_contract_json(_teaching_page_output_contract(page_no)),
-        "",
-        "Output language:",
-        f"code: {output_language_code}",
-        f"name: {output_language_label}",
-        f"- Write every heading, paragraph, bullet, table heading, and explanatory sentence in {output_language_label}.",
-        "- Do not mix Chinese and English prose unless quoting source text or preserving a technical term from the PDF.",
-        "- Keep source code identifiers, Verilog keywords, signal names, module names, and formulas exactly as technical tokens.",
-        "- Set teaching.output_language to the exact language code above.",
-        *_teaching_structure_lines(output_language_code, [page_type]),
-        "",
-        *_teaching_prompt_rules(body, batch=False),
-    ]
-    if quality_plan_lines:
-        sections.extend(["", "Generation quality plan:", *quality_plan_lines])
-    sections.extend([
-        "",
-        "Document:",
-        f"title: {_string_value(document.get('title'), 'Untitled PDF')}",
-        f"page_count: {page_count}",
-        "",
-        "Target page:",
-        f"page_no: {page_no}",
-        f"pdf_page_ref: {_string_value(source.get('pdf_page_ref'), f'#page={page_no}')}",
-        f"page_type: {page_type}",
-    ])
-    neighbor_lines = []
-    previous_title = _string_value(previous_page.get("title"), "") or neighbor_titles.get(page_no - 1, "")
-    next_title = _string_value(next_page.get("title"), "") or neighbor_titles.get(page_no + 1, "")
-    if previous_title:
-        neighbor_lines.append(f"previous_page_title: {previous_title}")
-    if next_title:
-        neighbor_lines.append(f"next_page_title: {next_title}")
-    if neighbor_lines:
-        sections.extend(["", "Neighbor context:", *neighbor_lines])
-    if existing_notes:
-        sections.extend(["", "Existing notes, if regenerating:", _truncate(existing_notes, 1200)])
-    sections.extend([
-        "",
-        "Extracted source text for this exact PDF page:",
-        _truncate(source_text, source_text_limit) if source_text else "[No embedded text extracted for this page.]",
-    ])
-    return "\n".join(sections)
-
-
-def _build_teaching_batch_generation_prompt(body: Mapping[str, Any], target_pages: list[Mapping[str, Any]]) -> str:
+    batch = len(target_pages) > 1
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
     page_count = _int_value(body.get("pageCount"), _int_value(document.get("page_count"), 0))
     output_language_code, output_language_label = _teaching_output_language(body)
     target_page_numbers = [_int_value(page.get("page_no"), index + 1) for index, page in enumerate(target_pages)]
-    quality_plan_lines = _teaching_quality_plan_lines(body)
     source_text_limit = _teaching_source_text_limit(body)
-    page_types = [_teaching_page_type(page) for page in target_pages]
+    quality_plan_lines = _teaching_quality_plan_lines(body)
     neighbor_titles = _teaching_page_titles(body, target_pages)
+    first_page_no = target_page_numbers[0] if target_page_numbers else 1
+
+    if batch:
+        task_lines = [
+            f"Generate SynchroPage teaching page JSON for {len(target_pages)} PDF pages in one batch.",
+            "Return one page object for every target page. Do not skip pages. Do not merge pages.",
+            f"Target page numbers: {_format_page_ranges(target_page_numbers)}",
+            "",
+            "Output shape; repeat the single page object once per target page:",
+            _teaching_contract_json({"pages": [_teaching_page_output_contract("<target_page_no>")]}),
+        ]
+    else:
+        task_lines = [
+            "Generate one SynchroPage teaching page JSON for the given PDF page.",
+            "",
+            "Output shape:",
+            _teaching_contract_json(_teaching_page_output_contract(first_page_no)),
+        ]
+
     sections = [
         "Task-specific instructions:",
-        _teaching_generator_instructions(body),
+        TEACHING_GENERATOR_INSTRUCTIONS,
         "",
-        f"Generate SynchroPage teaching page JSON for {len(target_pages)} PDF pages in one batch.",
-        "Return one page object for every target page. Do not skip pages. Do not merge pages.",
-        f"Target page numbers: {_format_page_ranges(target_page_numbers)}",
-        "",
-        "Output shape; repeat the single page object once per target page:",
-        _teaching_contract_json({"pages": [_teaching_page_output_contract("<target_page_no>")]}),
+        *task_lines,
         "",
         "Output language:",
         f"code: {output_language_code}",
         f"name: {output_language_label}",
-        f"- Write every heading, paragraph, bullet, table heading, and explanatory sentence in {output_language_label}.",
-        "- Set every teaching.output_language to the exact language code above.",
-        *_teaching_structure_lines(output_language_code, page_types),
+        f"- Write every paragraph, bullet, device label, and explanatory sentence in {output_language_label}.",
+        "- Do not mix Chinese and English prose unless quoting source text or preserving a technical term from the PDF.",
+        "- Keep source code identifiers, signal names, module names, and formulas exactly as technical tokens.",
+        "- Set teaching.output_language to the exact language code above.",
         "",
-        *_teaching_prompt_rules(body, batch=True),
+        *_teaching_prompt_rules(body, batch=batch),
     ]
     if quality_plan_lines:
         sections.extend(["", "Generation quality plan:", *quality_plan_lines])
+    sections.extend(["", *_teaching_lesson_plan_lines(body, target_pages)])
     sections.extend([
         "",
         "Document:",
         f"title: {_string_value(document.get('title'), 'Untitled PDF')}",
         f"page_count: {page_count}",
-        "",
-        "Target pages:",
     ])
+
+    if not batch:
+        page = target_pages[0] if target_pages else {}
+        source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
+        teaching = page.get("teaching") if isinstance(page.get("teaching"), Mapping) else {}
+        previous_page = body.get("previousPage") if isinstance(body.get("previousPage"), Mapping) else {}
+        next_page = body.get("nextPage") if isinstance(body.get("nextPage"), Mapping) else {}
+        source_text = str(source.get("text_md") or "").strip()
+        existing_notes = str(teaching.get("speaker_notes_md") or "").strip()
+        sections.extend([
+            "",
+            "Target page:",
+            f"page_no: {first_page_no}",
+            f"pdf_page_ref: {_string_value(source.get('pdf_page_ref'), f'#page={first_page_no}')}",
+            f"page_type: {_teaching_page_type(page)}",
+        ])
+        neighbor_lines = []
+        previous_title = _string_value(previous_page.get("title"), "") or neighbor_titles.get(first_page_no - 1, "")
+        next_title = _string_value(next_page.get("title"), "") or neighbor_titles.get(first_page_no + 1, "")
+        if previous_title:
+            neighbor_lines.append(f"previous_page_title: {previous_title}")
+        if next_title:
+            neighbor_lines.append(f"next_page_title: {next_title}")
+        if neighbor_lines:
+            sections.extend(["", "Neighbor context:", *neighbor_lines])
+        if existing_notes:
+            sections.extend(["", "Existing notes, if regenerating:", _truncate(existing_notes, 1200)])
+        sections.extend([
+            "",
+            "Extracted source text for this exact PDF page:",
+            _truncate(source_text, source_text_limit) if source_text else "[No embedded text extracted for this page.]",
+        ])
+        return "\n".join(sections)
+
+    sections.extend(["", "Target pages:"])
     for page in target_pages:
         source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
         teaching = page.get("teaching") if isinstance(page.get("teaching"), Mapping) else {}
         page_no = _int_value(page.get("page_no"), 1)
         source_text = str(source.get("text_md") or "").strip()
         existing_notes = str(teaching.get("speaker_notes_md") or "").strip()
-        sections.extend(
-            [
-                "",
-                f"--- Target page {page_no} ---",
-                f"page_no: {page_no}",
-                f"pdf_page_ref: {_string_value(source.get('pdf_page_ref'), f'#page={page_no}')}",
-                f"page_type: {_teaching_page_type(page)}",
-                *_teaching_neighbor_lines(page_no, neighbor_titles),
-            ]
-        )
+        sections.extend([
+            "",
+            f"--- Target page {page_no} ---",
+            f"page_no: {page_no}",
+            f"pdf_page_ref: {_string_value(source.get('pdf_page_ref'), f'#page={page_no}')}",
+            f"page_type: {_teaching_page_type(page)}",
+            *_teaching_neighbor_lines(page_no, neighbor_titles),
+        ])
         if existing_notes:
             sections.extend(["existing_notes:", _truncate(existing_notes, 1000)])
         sections.extend([
@@ -581,6 +499,76 @@ def _build_teaching_batch_generation_prompt(body: Mapping[str, Any], target_page
             _truncate(source_text, source_text_limit) if source_text else "[No embedded text extracted for this page.]",
         ])
     return "\n".join(sections)
+
+
+# ---------------------------------------------------------------------------
+# Lesson plan prompt (one call over the whole document, chunked when long)
+# ---------------------------------------------------------------------------
+
+
+def _lesson_plan_pages(body: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """The pages a planning request covers, deduplicated and in page order."""
+    seen: set[int] = set()
+    pages: list[tuple[int, Mapping[str, Any]]] = []
+    for index, item in enumerate(_iter_mapping_items(body.get("pages")), start=1):
+        page_no = _int_value(item.get("page_no"), index)
+        if page_no <= 0 or page_no in seen:
+            continue
+        seen.add(page_no)
+        pages.append((page_no, item))
+    pages.sort(key=lambda entry: entry[0])
+    return [item for _page_no, item in pages]
+
+
+def _lesson_plan_page_text(item: Mapping[str, Any]) -> str:
+    source = item.get("source") if isinstance(item.get("source"), Mapping) else {}
+    text = str(item.get("text_md") or source.get("text_md") or "").strip()
+    return _truncate(" ".join(text.split()), LESSON_PLAN_PAGE_TEXT_CHARS) if text else ""
+
+
+def _build_lesson_plan_prompt(body: Mapping[str, Any]) -> str:
+    document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
+    pages = _lesson_plan_pages(body)
+    page_count = _int_value(body.get("pageCount"), _int_value(document.get("page_count"), len(pages)))
+    _output_language_code, output_language_label = _teaching_output_language(body)
+    chunk = body.get("chunk") if isinstance(body.get("chunk"), Mapping) else {}
+    previous_summary = _string_value(body.get("previousSummary"), "")
+    sections = [
+        "Task-specific instructions:",
+        TEACHING_PLANNER_INSTRUCTIONS.replace("{language}", output_language_label),
+        "",
+        "Document:",
+        f"title: {_string_value(document.get('title'), 'Untitled PDF')}",
+        f"page_count: {page_count}",
+    ]
+    if pages and (chunk or len(pages) < page_count):
+        first = _int_value(pages[0].get("page_no"), 1)
+        last = _int_value(pages[-1].get("page_no"), first)
+        index = _int_value(chunk.get("index"), 1)
+        count = _int_value(chunk.get("count"), 1)
+        sections.append(
+            f"This request covers pages {first}-{last} of {page_count} (part {index} of {count}). "
+            "Plan only these pages, number the segments from 1, and do not let a segment run past the last page shown. "
+            "document_summary must describe everything read so far, refining the running summary below."
+        )
+        sections.append(f"running_summary: {previous_summary or 'none yet'}")
+    sections.extend(["", "Pages:"])
+    for item in pages:
+        page_no = _int_value(item.get("page_no"), 0)
+        sections.append(f"--- p{page_no} ---")
+        sections.append(_lesson_plan_page_text(item) or "(no extractable text on this page)")
+    sections.extend(["", "Return the lesson plan JSON for exactly these pages."])
+    return "\n".join(sections)
+
+
+def _build_lesson_plan_payload(body: Mapping[str, Any], *, default_model: str) -> dict[str, Any]:
+    model = _clean_model(body.get("model")) or default_model
+    return {
+        "model": model,
+        "instructions": SYNCHROPAGE_SHARED_INSTRUCTIONS,
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": _build_lesson_plan_prompt(body)}]}],
+        "reasoning": {"effort": _reasoning_effort(body)},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -835,7 +823,8 @@ def _build_teaching_generation_payload(
 
 
 def _teaching_payload_instructions(body: Mapping[str, Any]) -> str:
-    return SYNCHROPAGE_FAST_TEACHING_INSTRUCTIONS if _is_fast_teaching_generation(body) else SYNCHROPAGE_SHARED_INSTRUCTIONS
+    del body  # every teaching request shares the same top-level instructions
+    return SYNCHROPAGE_SHARED_INSTRUCTIONS
 
 
 def _build_teaching_codex_responses_payload(

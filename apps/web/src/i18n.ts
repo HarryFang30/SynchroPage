@@ -217,6 +217,8 @@ export type AppCopy = {
     layoutReset: string;
     generationQueued: string;
     generationPreparingCache: (total: number) => string;
+    generationPlanning: (total: number) => string;
+    generationPlanFailed: string;
     generationStarted: (total: number) => string;
     generationPage: (current: number, total: number, pageNo: number) => string;
     generationPageRetrying: (pageNo: number, attempt: number, total: number) => string;
@@ -380,6 +382,10 @@ export type AppCopy = {
     hideAnswer: string;
     conceptsLabel: string;
     pageTypes: Record<string, string>;
+    roles: Record<string, string>;
+    depths: Record<string, string>;
+    keyPage: string;
+    segmentStartsAt: (pageNo: number) => string;
     tabNotes: string;
     tabStructure: string;
     tabJson: string;
@@ -798,6 +804,8 @@ const zhCN: AppCopy = {
     layoutReset: "工作区布局已重置",
     generationQueued: "生成任务已交给后端 harness",
     generationPreparingCache: (total) => `正在准备 ${total} 页 PDF 缓存上下文`,
+    generationPlanning: (total) => `正在通读全文备课（${total} 页）…`,
+    generationPlanFailed: "备课没有成功，这次按每页自行判断详略继续生成",
     generationStarted: (total) => `开始生成 ${total} 页讲解`,
     generationPage: (current, total, pageNo) => `正在生成第 ${pageNo} 页讲解（${current}/${total}）`,
     generationPageRetrying: (pageNo, attempt, total) => `第 ${pageNo} 页无响应，正在第 ${attempt}/${total} 次重试`,
@@ -890,7 +898,7 @@ const zhCN: AppCopy = {
     stopGeneration: "停止",
     generateScopeLabel: "生成范围",
     generateScopeAll: "全部页面",
-    generateScopeAllDescription: "检查整份 PDF，已生成页会自动跳过",
+    generateScopeAllDescription: "重新备课，并重写整份 PDF 的讲解",
     generateScopeMissing: "未生成页",
     generateScopeMissingDescription: "只补齐还没有讲解的页面",
     generateScopeCurrent: (pageNo) => `当前页 p.${pageNo}`,
@@ -960,6 +968,21 @@ const zhCN: AppCopy = {
     showAnswer: "看答案",
     hideAnswer: "收起答案",
     conceptsLabel: "本页概念",
+    roles: {
+      title: "封面",
+      agenda: "目录",
+      transition: "过渡页",
+      concept: "概念",
+      derivation: "推导",
+      example: "例子",
+      exercise: "习题",
+      recap: "回顾",
+      summary: "总结",
+      blank: "空白页",
+    },
+    depths: { skim: "略讲", brief: "简讲", full: "详讲" },
+    keyPage: "重点页",
+    segmentStartsAt: (pageNo) => `这一段从 p.${pageNo} 讲起`,
     pageTypes: {
       title: "封面",
       agenda: "目录",
@@ -1396,6 +1419,8 @@ const enUS: AppCopy = {
     layoutReset: "Workspace layout reset",
     generationQueued: "Generation task sent to the backend harness",
     generationPreparingCache: (total) => `Preparing cacheable PDF context for ${total} pages`,
+    generationPlanning: (total) => `Reading the whole deck to plan the lesson (${total} pages)…`,
+    generationPlanFailed: "Lesson planning failed; continuing with per-page judgement",
     generationStarted: (total) => `Generating notes for ${total} pages`,
     generationPage: (current, total, pageNo) => `Generating notes for page ${pageNo} (${current}/${total})`,
     generationPageRetrying: (pageNo, attempt, total) => `Page ${pageNo} did not respond, retrying ${attempt}/${total}`,
@@ -1488,7 +1513,7 @@ const enUS: AppCopy = {
     stopGeneration: "Stop",
     generateScopeLabel: "Generate range",
     generateScopeAll: "All pages",
-    generateScopeAllDescription: "Check the whole PDF and skip completed pages",
+    generateScopeAllDescription: "Re-plan the lesson and rewrite every page's notes",
     generateScopeMissing: "Missing pages",
     generateScopeMissingDescription: "Only fill pages without generated notes",
     generateScopeCurrent: (pageNo) => `Current page p.${pageNo}`,
@@ -1558,6 +1583,21 @@ const enUS: AppCopy = {
     showAnswer: "Show answer",
     hideAnswer: "Hide answer",
     conceptsLabel: "Concepts on this page",
+    roles: {
+      title: "Title page",
+      agenda: "Outline",
+      transition: "Transition",
+      concept: "Concept",
+      derivation: "Derivation",
+      example: "Example",
+      exercise: "Exercise",
+      recap: "Recap",
+      summary: "Summary",
+      blank: "Blank page",
+    },
+    depths: { skim: "Skim", brief: "Brief", full: "In depth" },
+    keyPage: "Key page",
+    segmentStartsAt: (pageNo) => `This section starts on p.${pageNo}`,
     pageTypes: {
       title: "Title page",
       agenda: "Outline",

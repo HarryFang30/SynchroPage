@@ -235,15 +235,58 @@ def repair_json_string_backslashes(text: str) -> str:
     return "".join(output)
 
 
+_JSON_OPENERS = "{[:,"
+_JSON_CLOSERS = ",:}]"
+
+
+def repair_json_prose_quotes(text: str) -> str:
+    """Turn straight double quotes used *inside* prose into curly quotes.
+
+    Models writing Chinese prose sometimes quote a phrase with ASCII ``"``
+    (``常考"单点梯度"的简答``), which terminates the JSON string early.  A
+    quote is kept as JSON syntax when the previous non-blank character opens
+    a value (``{ [ : ,``) or the next one closes it (``, : } ]``); every other
+    unescaped quote is inside prose and becomes ``“`` / ``”`` alternately.
+    Valid JSON passes through unchanged.
+    """
+    output: list[str] = []
+    length = len(text)
+    prose_open = False
+    for index, char in enumerate(text):
+        if char != '"' or (index > 0 and text[index - 1] == "\\"):
+            output.append(char)
+            continue
+        previous = index - 1
+        while previous >= 0 and text[previous] in " \t\r\n":
+            previous -= 1
+        following = index + 1
+        while following < length and text[following] in " \t\r\n":
+            following += 1
+        prev_char = text[previous] if previous >= 0 else ""
+        next_char = text[following] if following < length else ""
+        if not prose_open and (prev_char in _JSON_OPENERS or not prev_char or next_char in _JSON_CLOSERS or not next_char):
+            output.append(char)
+            continue
+        output.append("\u201d" if prose_open else "\u201c")
+        prose_open = not prose_open
+    return "".join(output)
+
+
 def json_loads_with_latex_repair(text: str) -> Any:
     """``json.loads`` with automatic repair of unescaped LaTeX backslashes.
 
-    The repair runs *before* parsing — not only on ``JSONDecodeError`` —
-    because many LaTeX commands (``\\text``, ``\\times``, ``\\frac``,
-    ``\\theta``, ``\\tau``, ``\\nabla``, …) are syntactically valid JSON
-    escapes and would be silently corrupted by ``json.loads`` alone.
+    The backslash repair runs *before* parsing — not only on
+    ``JSONDecodeError`` — because many LaTeX commands (``\\text``,
+    ``\\times``, ``\\frac``, ``\\theta``, ``\\tau``, ``\\nabla``, …) are
+    syntactically valid JSON escapes and would be silently corrupted by
+    ``json.loads`` alone.  Straight quotes inside prose are repaired only when
+    the first parse fails, since valid JSON never needs that pass.
     """
-    return json.loads(repair_json_string_backslashes(text))
+    repaired = repair_json_string_backslashes(text)
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        return json.loads(repair_json_string_backslashes(repair_json_prose_quotes(text)))
 
 
 # ---------------------------------------------------------------------------

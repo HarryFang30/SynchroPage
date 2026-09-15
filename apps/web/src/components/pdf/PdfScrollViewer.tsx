@@ -53,6 +53,8 @@ export type PdfScrollViewerProps = {
   onPdfContextReady: (context: PdfContextPayload) => void;
   onPdfPagesTextReady: (pages: PdfContextPage[]) => void;
   onViewerScroll?: () => void;
+  /** Pages the lesson plan marked as key; their labels carry a star. */
+  keyPageNumbers?: ReadonlySet<number>;
   /** Extra layer drawn between the canvas and the text layer (highlights). */
   renderPageOverlay?: (pageNo: number) => ReactNode;
   /** Content shown directly under a page (margin notes). */
@@ -325,6 +327,7 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
   onPdfContextReady,
   onPdfPagesTextReady,
   onViewerScroll,
+  keyPageNumbers,
   renderPageOverlay,
   renderPageFooter,
   onPageClick,
@@ -750,7 +753,7 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
                 role="listitem"
                 style={{ "--pdf-page-width": `${Math.round(pageMetrics.width)}px` } as CSSProperties}
               >
-                <div className="pdf-page-label">PDF · p.{pageNo}</div>
+                <div className="pdf-page-label">PDF · p.{pageNo}{keyPageNumbers?.has(pageNo) ? " ★" : ""}</div>
                 {shouldRenderPage ? (
                   <PdfPageLayer
                     pdfDocument={pdfDocument}

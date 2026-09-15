@@ -1,5 +1,12 @@
 import type { ModelApiConfig, ModelApiProvider, ModelRef, UiPreferences } from "../../settings";
 import type { PdfContextPage, PdfContextPayload } from "../pdf/textExtraction";
+import {
+  LESSON_PLAN_SEGMENT_CHUNK_PAGES,
+  lessonPlanRow,
+  lessonPlanSegmentIndex,
+  type LessonPlan,
+  type LessonPlanDepth,
+} from "./lessonPlan";
 
 export type TeachingOutputLanguage = "zh-CN" | "en-US";
 
@@ -30,6 +37,8 @@ export type PagePack = {
     title: string;
     source_pdf_url: string;
     page_count: number;
+    /** Written once per document by the planning pass; drives depth and segments. */
+    lesson_plan?: LessonPlan;
   };
   pages: PageData[];
 };
@@ -47,6 +56,8 @@ export type PageData = {
     output_language?: TeachingOutputLanguage;
     slide_title: string;
     speaker_notes_md: string;
+    /** One or two sentences on what the student holds after this page; the next page's request receives it. */
+    handoff?: string;
     concepts: string[];
     visual_explanations: string[];
     prerequisites: string[];
@@ -81,8 +92,6 @@ export type TeachingGenerationQualityPlan = {
   retryOnWeakOutput: boolean;
   attempt: TeachingGenerationAttempt;
   reasons: string[];
-  /** Model-derived: this plan can use the compact "fast text" prompt/context. */
-  fastPath: boolean;
   /** Model-derived upper bound on pages per /api/generate/pages request. */
   maxBatchSize: number;
 };
@@ -90,6 +99,8 @@ export type TeachingGenerationQualityPlan = {
 export type TeachingGenerationBatch = {
   pages: PageData[];
   plan: TeachingGenerationQualityPlan;
+  /** Lesson-plan segment these pages belong to; batches of one segment run in order. */
+  segmentId?: number;
 };
 
 export type GeneratedTeachingPageResponse = {
@@ -111,17 +122,12 @@ const TEACHING_QUALITY_MODEL = "gpt-5.5";
 const TEACHING_BALANCED_MODEL = "gpt-5.4";
 const TEACHING_FAST_MODEL = "gpt-5.4-mini";
 const TEACHING_TEXT_PAGE_BATCH_SIZE = 12;
-const TEACHING_TEXT_COMPACT_PAGE_BATCH_SIZE = 18;
-const TEACHING_TEXT_TINY_PAGE_BATCH_SIZE = 24;
-const TEACHING_TEXT_FIRST_BATCH_SIZE = 3;
 const TEACHING_BALANCED_PAGE_BATCH_SIZE = 2;
 const TEACHING_BALANCED_TEXT_PAGE_BATCH_SIZE = 4;
 export const TEACHING_BATCH_FALLBACK_CONCURRENCY = 2;
 export const TEACHING_PROJECT_MODEL_REQUEST_CONCURRENCY = 6;
 export const TEACHING_PROJECT_WARMUP_PAGE_COUNT = 16;
 const TEACHING_CONTEXT_PAGE_CHARS = 600;
-const TEACHING_FAST_CONTEXT_PAGE_CHARS = 180;
-const TEACHING_FAST_SOURCE_REQUEST_CHARS = 2_500;
 const TEACHING_BALANCED_SOURCE_REQUEST_CHARS = 8_000;
 const TEACHING_QUALITY_SOURCE_REQUEST_CHARS = 16_000;
 const TEACHING_FILE_INPUT_MIN_TEXT_CHARS = 32;
@@ -133,10 +139,11 @@ const TEACHING_LOW_QUALITY_CONFIDENCE = 0.58;
 const TEACHING_LOW_QUALITY_NOTE_CHARS = 180;
 const TEACHING_RETRY_CONFIDENCE = 0.42;
 const TEACHING_RETRY_NOTE_CHARS = 90;
+/** A brief page is one short paragraph; anything under this is a failed answer, not a short one. */
+const TEACHING_BRIEF_RETRY_NOTE_CHARS = 30;
+const TEACHING_BRIEF_LOW_QUALITY_NOTE_CHARS = 60;
 export const PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY = 8;
-const TEACHING_TEXT_TINY_PAGE_MAX_CHARS = 700;
 const TEACHING_TEXT_COMPACT_PAGE_MAX_CHARS = 1_500;
-const TEACHING_TEXT_TINY_AVG_CHARS = 520;
 const TEACHING_TEXT_COMPACT_AVG_CHARS = 1_000;
 const TEACHING_CONTEXT_NEIGHBOR_PAGES = 2;
 const TEACHING_CONTEXT_EDGE_PAGES = 2;
@@ -446,7 +453,6 @@ export function teachingGenerationQualityPlan(
     retryOnWeakOutput,
     attempt,
     reasons,
-    fastPath: capabilities.fastPath && (reasoningEffort === "none" || reasoningEffort === "low"),
     maxBatchSize: capabilities.recommendedBatchSize,
   };
 }
@@ -500,7 +506,6 @@ export function planForRetry(
     attachPdf,
     batchable: false,
     retryOnWeakOutput: false,
-    fastPath: previousPlan.fastPath && (reasoningEffort === "none" || reasoningEffort === "low"),
     reasons,
   };
 }
@@ -540,12 +545,6 @@ export function teachingRequestPage(page: PageData, plan: TeachingGenerationQual
     pdf_page_ref: page.source.pdf_page_ref,
     text_md: truncateGenerationRequestText(page.source.text_md, sourceTextLimit),
   };
-  if (isFastTextTeachingPlan(plan)) {
-    return {
-      page_no: page.page_no,
-      source,
-    };
-  }
   return {
     page_no: page.page_no,
     source: {
@@ -564,15 +563,6 @@ export function teachingRequestPage(page: PageData, plan: TeachingGenerationQual
     },
     status: page.status,
   };
-}
-
-export function teachingDocumentContextForPlan(
-  plan: TeachingGenerationQualityPlan,
-  context: PdfContextPayload,
-  fastContext: PdfContextPayload,
-): PdfContextPayload | null {
-  if (isFastTextTeachingPlan(plan)) return fastContext.pages.length ? fastContext : context;
-  return context;
 }
 
 export function prioritizeTeachingPages(pages: PageData[], priorityPageNo: number) {
@@ -631,9 +621,20 @@ export function isLowContentTeachingPageType(page: PageData) {
   return pageType === "title" || pageType === "agenda" || pageType === "blank" || pageType === "summary";
 }
 
-export function generatedTeachingNeedsRetry(page: PageData) {
+/**
+ * How short the notes may legitimately be. The lesson plan's depth wins; a page
+ * without a plan row falls back to its page_type (structural pages are short).
+ */
+function teachingNoteFloors(page: PageData, depth?: LessonPlanDepth) {
+  if (depth === "skim" || (!depth && isLowContentTeachingPageType(page))) return { retry: 0, weak: 0 };
+  if (depth === "brief") return { retry: TEACHING_BRIEF_RETRY_NOTE_CHARS, weak: TEACHING_BRIEF_LOW_QUALITY_NOTE_CHARS };
+  return { retry: TEACHING_RETRY_NOTE_CHARS, weak: TEACHING_LOW_QUALITY_NOTE_CHARS };
+}
+
+export function generatedTeachingNeedsRetry(page: PageData, depth?: LessonPlanDepth) {
   const notes = page.teaching.speaker_notes_md.trim();
-  if (isLowContentTeachingPageType(page)) {
+  const floors = teachingNoteFloors(page, depth);
+  if (floors.retry === 0) {
     return page.status === "failed" || (Boolean(page.teaching.needs_parser_fallback) && !notes.length);
   }
   return (
@@ -641,12 +642,12 @@ export function generatedTeachingNeedsRetry(page: PageData) {
     Boolean(page.teaching.needs_parser_fallback) ||
     (Boolean(page.teaching.needs_review) && page.teaching.confidence < TEACHING_LOW_QUALITY_CONFIDENCE) ||
     page.teaching.confidence < TEACHING_RETRY_CONFIDENCE ||
-    notes.length < TEACHING_RETRY_NOTE_CHARS
+    notes.length < floors.retry
   );
 }
 
-export function shouldPreferTeachingCandidate(candidate: PageData, current: PageData) {
-  if (generatedTeachingLooksWeak(current) && !generatedTeachingLooksWeak(candidate)) return true;
+export function shouldPreferTeachingCandidate(candidate: PageData, current: PageData, depth?: LessonPlanDepth) {
+  if (generatedTeachingLooksWeak(current, depth) && !generatedTeachingLooksWeak(candidate, depth)) return true;
   return teachingPageQualityScore(candidate) >= teachingPageQualityScore(current) + 25;
 }
 
@@ -694,89 +695,95 @@ export function fullPdfContextForTeachingGeneration(
   };
 }
 
-export function lightPdfContextForFastTeachingGeneration(
-  pack: PagePack,
-  pageCount: number,
-  extractedPages: PdfContextPage[],
-): PdfContextPayload {
-  const extractedTextByPage = new Map(extractedPages.map((page) => [page.page_no, page.text_md]));
-  const packPagesByNumber = new Map(pack.pages.map((page) => [page.page_no, page]));
-  const extractedPageCount = extractedPages.reduce((maxPage, page) => Math.max(maxPage, page.page_no), 0);
-  const safePageCount = Math.max(pageCount, pack.pages.length, extractedPageCount, 1);
-  const includedPageNumbers = Array.from({ length: safePageCount }, (_, index) => index + 1);
-  const pages = includedPageNumbers.map((pageNo) => {
-    const packPage = packPagesByNumber.get(pageNo);
-    const title = packPage?.teaching.slide_title || `PDF p.${pageNo}`;
-    const text = extractedTextByPage.get(pageNo) || packPage?.source.text_md || title;
-    return {
-      page_no: pageNo,
-      title,
-      text_md: compactFastTeachingContextText(text),
-    };
-  });
-  return {
-    documentId: pack.document.id,
-    documentTitle: pack.document.title,
-    pageCount: safePageCount,
-    truncated: false,
-    truncationPolicy: "all-pages",
-    fullPageLimit: safePageCount,
-    edgePageCount: 0,
-    includedPageNumbers,
-    pages,
-  };
-}
+export type TeachingBatchOptions = {
+  /** When set, batches follow the plan's segments and never cross one. */
+  lessonPlan?: LessonPlan;
+  /** The reader's page: its segment is taught first, then outward. */
+  currentPageNo?: number;
+};
 
+/**
+ * Group pages into requests. With a lesson plan every batch is a run of
+ * consecutive pages of ONE segment (so the model can teach them as one
+ * stretch), ordered so the reader's segment comes first; without a plan the
+ * legacy grouping by shared quality plan applies.
+ */
 export function batchTeachingPages(
   pages: PageData[],
   preference: UiPreferences["modelReasoningEffort"],
   modelApiConfig?: ModelApiConfig,
+  options: TeachingBatchOptions = {},
 ) {
+  const lessonPlan = options.lessonPlan;
+  const ordered = lessonPlan ? orderPagesForLessonPlan(pages, lessonPlan, options.currentPageNo) : pages;
   const batches: TeachingGenerationBatch[] = [];
   let currentBatch: PageData[] = [];
   let currentPlan: TeachingGenerationQualityPlan | null = null;
-  let emittedFastWarmupBatch = false;
+  let currentSegment: number | undefined;
 
   const flushCurrentBatch = () => {
     if (!currentBatch.length) return;
     const plan = currentPlan || teachingGenerationQualityPlan(currentBatch[0], preference, "initial", modelApiConfig);
-    if (!emittedFastWarmupBatch && isFastTextTeachingPlan(plan) && currentBatch.length > TEACHING_TEXT_FIRST_BATCH_SIZE) {
-      batches.push({ pages: currentBatch.slice(0, TEACHING_TEXT_FIRST_BATCH_SIZE), plan });
-      batches.push({ pages: currentBatch.slice(TEACHING_TEXT_FIRST_BATCH_SIZE), plan });
-      emittedFastWarmupBatch = true;
-    } else {
-      batches.push({ pages: currentBatch, plan });
-    }
+    batches.push({ pages: currentBatch, plan, segmentId: currentSegment });
     currentBatch = [];
     currentPlan = null;
   };
 
-  for (const page of pages) {
+  for (const page of ordered) {
     const plan = teachingGenerationQualityPlan(page, preference, "initial", modelApiConfig);
+    const segmentId = lessonPlan ? lessonPlanRow(lessonPlan, page.page_no)?.segment : undefined;
     if (!plan.batchable) {
       flushCurrentBatch();
-      batches.push({ pages: [page], plan });
+      batches.push({ pages: [page], plan, segmentId });
       continue;
     }
-
-    if (currentPlan && !teachingPlansCanShareBatch(currentPlan, plan)) {
-      flushCurrentBatch();
-    }
+    const previous = currentBatch[currentBatch.length - 1];
+    const breaksBatch =
+      Boolean(currentPlan) &&
+      (!teachingPlansCanShareBatch(currentPlan as TeachingGenerationQualityPlan, plan) ||
+        currentSegment !== segmentId ||
+        (Boolean(lessonPlan) && Boolean(previous) && page.page_no !== previous.page_no + 1) ||
+        currentBatch.length >= teachingBatchSizeForPlan(currentPlan as TeachingGenerationQualityPlan, currentBatch, Boolean(lessonPlan)));
+    if (breaksBatch) flushCurrentBatch();
     currentPlan ??= plan;
-    if (currentBatch.length) {
-      const candidateBatch = [...currentBatch, page];
-      if (candidateBatch.length > teachingBatchSizeForPlan(currentPlan, candidateBatch)) {
-        flushCurrentBatch();
-        currentPlan = plan;
-      }
-    }
-    currentPlan ??= plan;
+    currentSegment = segmentId;
     currentBatch.push(page);
-    if (currentBatch.length >= teachingBatchSizeForPlan(currentPlan, currentBatch)) flushCurrentBatch();
   }
 
   flushCurrentBatch();
   return batches;
+}
+
+/**
+ * Batches that belong to one segment run one after another so each carries the
+ * previous page's handoff; different segments run concurrently.
+ */
+export function groupTeachingBatchesBySegment(batches: TeachingGenerationBatch[]): TeachingGenerationBatch[][] {
+  const groups: TeachingGenerationBatch[][] = [];
+  for (const batch of batches) {
+    const last = groups[groups.length - 1];
+    if (batch.segmentId !== undefined && last && last[0].segmentId === batch.segmentId) {
+      last.push(batch);
+    } else {
+      groups.push([batch]);
+    }
+  }
+  return groups;
+}
+
+function orderPagesForLessonPlan(pages: PageData[], plan: LessonPlan, currentPageNo?: number) {
+  const currentIndex = lessonPlanSegmentIndex(plan, currentPageNo ?? pages[0]?.page_no ?? 1);
+  return pages.slice().sort((left, right) => {
+    const leftIndex = lessonPlanSegmentIndex(plan, left.page_no);
+    const rightIndex = lessonPlanSegmentIndex(plan, right.page_no);
+    const leftOffset = leftIndex - currentIndex;
+    const rightOffset = rightIndex - currentIndex;
+    const distance = Math.abs(leftOffset) - Math.abs(rightOffset);
+    if (distance) return distance;
+    // Same distance: the segment ahead of the reader before the one behind.
+    const direction = Number(leftOffset < 0) - Number(rightOffset < 0);
+    return direction || left.page_no - right.page_no;
+  });
 }
 
 function maxTeachingReasoningEffort(
@@ -832,36 +839,20 @@ function compactTeachingPages(pages: PageData[]) {
   return maxChars <= TEACHING_TEXT_COMPACT_PAGE_MAX_CHARS && avgChars <= TEACHING_TEXT_COMPACT_AVG_CHARS;
 }
 
-function teachingBatchSizeForPlan(plan: TeachingGenerationQualityPlan, pages: PageData[] = []) {
+function teachingBatchSizeForPlan(plan: TeachingGenerationQualityPlan, pages: PageData[] = [], planned = false) {
   if (plan.attachPdf) return 1;
-  if (isFastTextTeachingPlan(plan)) {
-    if (!pages.length) return TEACHING_TEXT_PAGE_BATCH_SIZE;
-    const sourceLengths = pages.map((page) => page.source.text_md.trim().length);
-    const maxChars = Math.max(...sourceLengths);
-    const avgChars = sourceLengths.reduce((sum, length) => sum + length, 0) / sourceLengths.length;
-    if (maxChars <= TEACHING_TEXT_TINY_PAGE_MAX_CHARS && avgChars <= TEACHING_TEXT_TINY_AVG_CHARS) {
-      return TEACHING_TEXT_TINY_PAGE_BATCH_SIZE;
-    }
-    if (maxChars <= TEACHING_TEXT_COMPACT_PAGE_MAX_CHARS && avgChars <= TEACHING_TEXT_COMPACT_AVG_CHARS) {
-      return TEACHING_TEXT_COMPACT_PAGE_BATCH_SIZE;
-    }
-    return TEACHING_TEXT_PAGE_BATCH_SIZE;
-  }
-  // Reasoning models: only compact text pages are worth grouping, and never
+  // A planned segment is taught in one request so the pages read as one stretch.
+  if (planned) return LESSON_PLAN_SEGMENT_CHUNK_PAGES;
+  // Without a plan only compact text pages are worth grouping, and never
   // beyond the model's recommended batch size.
   const limit = Math.max(1, plan.maxBatchSize || TEACHING_BALANCED_TEXT_PAGE_BATCH_SIZE);
   return compactTeachingPages(pages) ? limit : Math.min(limit, TEACHING_BALANCED_PAGE_BATCH_SIZE);
-}
-
-function isFastTextTeachingPlan(plan: TeachingGenerationQualityPlan) {
-  return plan.fastPath && !plan.attachPdf;
 }
 
 function teachingSourceRequestLimitForPlan(plan: TeachingGenerationQualityPlan) {
   if (plan.attachPdf || plan.reasoningEffort === "high" || plan.reasoningEffort === "xhigh" || plan.reasoningEffort === "max") {
     return TEACHING_QUALITY_SOURCE_REQUEST_CHARS;
   }
-  if (isFastTextTeachingPlan(plan)) return TEACHING_FAST_SOURCE_REQUEST_CHARS;
   return TEACHING_BALANCED_SOURCE_REQUEST_CHARS;
 }
 
@@ -880,17 +871,18 @@ function teachingPlansCanShareBatch(left: TeachingGenerationQualityPlan, right: 
   );
 }
 
-function generatedTeachingLooksWeak(page: PageData) {
+function generatedTeachingLooksWeak(page: PageData, depth?: LessonPlanDepth) {
   const notes = page.teaching.speaker_notes_md.trim();
   const modelReportedWeak =
     page.status === "failed" ||
     Boolean(page.teaching.needs_review) ||
     Boolean(page.teaching.needs_parser_fallback);
-  if (isLowContentTeachingPageType(page)) return modelReportedWeak || !notes.length;
+  const floors = teachingNoteFloors(page, depth);
+  if (floors.weak === 0) return modelReportedWeak || !notes.length;
   return (
     modelReportedWeak ||
     page.teaching.confidence < TEACHING_LOW_QUALITY_CONFIDENCE ||
-    notes.length < TEACHING_LOW_QUALITY_NOTE_CHARS
+    notes.length < floors.weak
   );
 }
 
@@ -905,10 +897,6 @@ function teachingPageQualityScore(page: PageData) {
 
 function compactTeachingContextText(text: string) {
   return truncatePromptContext(text, TEACHING_CONTEXT_PAGE_CHARS);
-}
-
-function compactFastTeachingContextText(text: string) {
-  return truncatePromptContext(text, TEACHING_FAST_CONTEXT_PAGE_CHARS);
 }
 
 function teachingContextPageNumbers(pageCount: number, targetPageNumbers: number[] = []) {

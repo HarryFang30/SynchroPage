@@ -9,14 +9,16 @@ import type {
 } from "../lib/generation/teachingGeneration";
 import {
   batchTeachingPages,
+  clampTeachingReasoningEffort,
   fullPdfContextForTeachingGeneration,
   generatedTeachingNeedsRetry,
-  lightPdfContextForFastTeachingGeneration,
+  groupTeachingBatchesBySegment,
   PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
   planForRetry,
   prioritizeTeachingPages,
   shouldPreferTeachingCandidate,
-  teachingDocumentContextForPlan,
+  teachingModelCapabilities,
+  teachingProviderForPlan,
   TEACHING_BATCH_FALLBACK_CONCURRENCY,
   TEACHING_DOCUMENT_GENERATION_CONCURRENCY,
   TEACHING_GENERATION_CONCURRENCY,
@@ -29,7 +31,17 @@ import {
   teachingWarmupPageNumbers,
   type GeneratedTeachingPageResponse,
   type GeneratedTeachingPagesResponse,
+  type TeachingGenerationBatch,
 } from "../lib/generation/teachingGeneration";
+import {
+  lessonPlanDepthForPage,
+  lessonPlanMatchesLanguage,
+  lessonPlanRequestPages,
+  lessonPlanRequestSlice,
+  normalizeLessonPlan,
+  type LessonPlan,
+  type LessonPlanDepth,
+} from "../lib/generation/lessonPlan";
 import {
   classifyGenerationFailure,
   createAsyncLimiter,
@@ -65,6 +77,7 @@ import {
 import {
   loadDocumentGenerationBundle,
   saveGeneratedPagesFromPack,
+  saveLessonPlan,
   type DocumentSidebarItem,
 } from "../lib/persistence";
 import { hasCompletedTeaching } from "../lib/generation/generationRuntime";
@@ -193,10 +206,18 @@ export function useGenerationEngine(p: GenerationEngineParams) {
     let workingPagesByNumber = new Map(workingPack.pages.map((item) => [item.page_no, item]));
     const targetPageSet = new Set(targetPageNumbers);
     let scopedPages = workingPack.pages.filter((item) => targetPageSet.has(item.page_no));
-    let pagesToGenerate = prioritizeTeachingPages(
-      scopedPages.filter((item) => !hasCompletedTeaching(item, pageOutputLanguage)),
-      p.currentPdfPageNo,
-    );
+    // "All" re-plans the lesson and rewrites every page; the other scopes only
+    // fill what is missing.
+    const forceRegenerate = p.generatePageMode === "all";
+    const generatedThisRun = new Set<number>();
+    // Pages this run gave up on; excluded from later passes of the same run
+    // only, so a page that failed in an earlier session is still retried.
+    const failedThisRun = new Set<number>();
+    const needsWork = (item: PageData) =>
+      !generatedThisRun.has(item.page_no) &&
+      !failedThisRun.has(item.page_no) &&
+      (forceRegenerate || !hasCompletedTeaching(item, pageOutputLanguage));
+    let pagesToGenerate = prioritizeTeachingPages(scopedPages.filter(needsWork), p.currentPdfPageNo);
     // Pages already complete before this run; a pre-run fact, never recomputed
     // after a pass has finished pages (F07).
     const skippedPages = scopedPages.length - pagesToGenerate.length;
@@ -219,9 +240,6 @@ export function useGenerationEngine(p: GenerationEngineParams) {
 
     void (async () => {
       let completed = 0;
-      // Pages this run gave up on; excluded from later passes of the same run
-      // only, so a page that failed in an earlier session is still retried.
-      const failedThisRun = new Set<number>();
       const runtimeLimits: GenerationRuntimeLimits = {};
       const runTeachingModelRequest = createTeachingRequestLimiter({
         modelRef: p.modelApiConfig.defaults.teachingBalanced,
@@ -248,9 +266,61 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           if (generationSignal.aborted) return;
           workingPack = mergePageIntoPack(workingPack, generatedPage);
           workingPagesByNumber.set(generatedPage.page_no, generatedPage);
+          generatedThisRun.add(generatedPage.page_no);
           p.setPack(workingPack);
           completed += 1;
           persistQueue.enqueue(generatedPage);
+        };
+
+        // One planning call over the whole deck: segments, per-page role and
+        // depth. Failure is not fatal; the backend then judges depth per page.
+        const ensureLessonPlan = async () => {
+          if (generationSignal.aborted) return;
+          const planRef = p.modelApiConfig.defaults.teachingQuality;
+          const reasoningEffort = clampTeachingReasoningEffort(
+            "medium",
+            teachingModelCapabilities(teachingProviderForPlan(p.modelApiConfig, planRef.providerId), planRef.model),
+          );
+          p.setJobStatus(p.copy.status.generationPlanning(totalPages));
+          const timeoutMs = teachingRequestTimeoutMs(reasoningEffort, totalPages, runtimeLimits.deadlines);
+          try {
+            const response = await runGenerationRequestWithTimeout(generationSignal, timeoutMs, (requestSignal) =>
+              requestJson<{ plan?: unknown }>(
+                "/api/generate/plan",
+                {
+                  method: "POST",
+                  body: JSON.stringify({
+                    modelProviderId: planRef.providerId,
+                    model: planRef.model,
+                    reasoningEffort,
+                    document: { id: workingPack.document.id, title: workingPack.document.title, page_count: totalPages },
+                    pageCount: totalPages,
+                    outputLanguage: pageOutputLanguage,
+                    outputLanguageLabel: pageOutputLanguageLabel,
+                    uiLanguage: p.uiPreferences.language,
+                    pages: lessonPlanRequestPages(workingPack.pages),
+                  }),
+                  signal: requestSignal,
+                },
+                p.copy.errors.accountNotFound,
+              ),
+            {
+              timeoutMessage: p.copy.errors.generationRequestTimedOut(timeoutSeconds(timeoutMs)),
+              slowMs: generationSlowNoticeIntervalMs(),
+              onSlow: () => p.setJobStatus(p.copy.status.generationPlanning(totalPages)),
+            });
+            const rawPlan = response.plan && typeof response.plan === "object" ? (response.plan as Record<string, unknown>) : {};
+            const lessonPlan = normalizeLessonPlan({ ...rawPlan, output_language: pageOutputLanguage });
+            if (!lessonPlan) throw new Error("empty lesson plan");
+            workingPack = { ...workingPack, document: { ...workingPack.document, lesson_plan: lessonPlan } };
+            p.setPack(workingPack);
+            if (p.workspaceId && p.documentId && workingPack.document.id === p.documentId) {
+              await saveLessonPlan(p.documentId, lessonPlan).catch(() => undefined);
+            }
+          } catch (error) {
+            if (generationSignal.aborted || isAbortError(error)) throw error;
+            p.setJobStatus(p.copy.status.generationPlanFailed);
+          }
         };
 
         const mergeExtractedPages = (pages: PdfContextPage[]) => {
@@ -266,10 +336,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           };
           workingPagesByNumber = new Map(workingPack.pages.map((item) => [item.page_no, item]));
           scopedPages = workingPack.pages.filter((item) => targetPageSet.has(item.page_no));
-          pagesToGenerate = prioritizeTeachingPages(
-            scopedPages.filter((item) => !hasCompletedTeaching(item, pageOutputLanguage)),
-            p.currentPdfPageNo,
-          );
+          pagesToGenerate = prioritizeTeachingPages(scopedPages.filter(needsWork), p.currentPdfPageNo);
           p.setPack(workingPack);
         };
 
@@ -281,11 +348,11 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             contextPages,
             passPagesToGenerate.map((page) => page.page_no),
           );
-          const fastDocumentContext = lightPdfContextForFastTeachingGeneration(
-            workingPack,
-            totalPages,
-            contextPages,
-          );
+          const lessonPlan = workingPack.document.lesson_plan;
+          const handoffFor = (pageNo: number) => {
+            const previous = workingPagesByNumber.get(pageNo - 1);
+            return previous && hasCompletedTeaching(previous, pageOutputLanguage) ? previous.teaching.handoff || "" : "";
+          };
           p.setJobStatus(p.copy.status.generationStarted(passPagesToGenerate.length));
           const generationInputPagesByNumber = new Map(workingPagesByNumber);
           let started = 0;
@@ -321,13 +388,14 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                       ...buildSinglePageRequestBody({
                         plan,
                         document: workingPack.document,
-                        documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
+                        documentContext,
                         documentFile,
                         outputLanguage: pageOutputLanguage,
                         outputLanguageLabel: pageOutputLanguageLabel,
                         uiLanguage: p.uiPreferences.language,
                         runningPage,
                         pageCount: totalPages,
+                        lessonPlan: lessonPlanRequestSlice(lessonPlan, [pageNo], handoffFor(pageNo)),
                         previousPage: previousPage
                           ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
                           : null,
@@ -358,6 +426,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             await generatePageWithAutoRetry({
               runningPage,
               initialPlan: plan,
+              depth: lessonPlanDepthForPage(lessonPlan, pageNo),
               preference: p.uiPreferences.modelReasoningEffort,
               modelApiConfig: p.modelApiConfig,
               outputLanguage: pageOutputLanguage,
@@ -388,8 +457,11 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             });
           };
 
-          const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort, p.modelApiConfig);
-          await runWithConcurrencyLimit(pageBatches, TEACHING_BATCH_DISPATCH_CONCURRENCY, async (pageBatch) => {
+          const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort, p.modelApiConfig, {
+            lessonPlan,
+            currentPageNo: p.currentPdfPageNo,
+          });
+          const runPageBatch = async (pageBatch: TeachingGenerationBatch) => {
             if (generationSignal.aborted) return;
             const runningPages = pageBatch.pages.map(markRunningPage);
             if (runningPages.length === 1) {
@@ -417,13 +489,18 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                         ...buildBatchPagesRequestBody({
                           plan: pageBatch.plan,
                           document: workingPack.document,
-                          documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
+                          documentContext,
                           documentFile,
                           outputLanguage: pageOutputLanguage,
                           outputLanguageLabel: pageOutputLanguageLabel,
                           uiLanguage: p.uiPreferences.language,
                           runningPages,
                           pageCount: totalPages,
+                          lessonPlan: lessonPlanRequestSlice(
+                            lessonPlan,
+                            runningPages.map((page) => page.page_no),
+                            handoffFor(runningPages[0].page_no),
+                          ),
                         }),
                         signal: requestSignal,
                       },
@@ -440,6 +517,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 response,
                 runningPages,
                 plan: pageBatch.plan,
+                lessonPlan,
                 outputLanguage: pageOutputLanguage,
                 preference: p.uiPreferences.modelReasoningEffort,
                 modelApiConfig: p.modelApiConfig,
@@ -447,6 +525,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 commitGeneratedPage: (generatedPage) => {
                   workingPack = mergePageIntoPack(workingPack, generatedPage);
                   workingPagesByNumber.set(generatedPage.page_no, generatedPage);
+                  generatedThisRun.add(generatedPage.page_no);
                   completed += 1;
                   persistQueue.enqueue(generatedPage);
                 },
@@ -473,13 +552,49 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 );
               });
             }
+          };
+          // Batches of one segment run in order (each carries the previous
+          // page's handoff); different segments run side by side.
+          await runWithConcurrencyLimit(groupTeachingBatchesBySegment(pageBatches), TEACHING_BATCH_DISPATCH_CONCURRENCY, async (segmentBatches) => {
+            for (const pageBatch of segmentBatches) {
+              if (generationSignal.aborted) return;
+              await runPageBatch(pageBatch);
+            }
           }, { signal: generationSignal });
         };
 
-        if (p.pdfUrl && missingTargetSourceText.length) {
+        const allPageNumbers = workingPack.pages.map((page) => page.page_no);
+        const needsPlan = forceRegenerate || !lessonPlanMatchesLanguage(workingPack.document.lesson_plan, pageOutputLanguage);
+        const missingAllSourceText = missingSourceTextPageNumbers(allPageNumbers, sourceTextByPage);
+        const currentPagesToGenerate = () =>
+          prioritizeTeachingPages(
+            workingPack.pages.filter((page) => targetPageSet.has(page.page_no) && needsWork(page)),
+            p.currentPdfPageNo,
+          );
+
+        if (p.pdfUrl && (missingTargetSourceText.length || (needsPlan && missingAllSourceText.length))) {
           p.setJobStatus(p.copy.status.pdfTextExtracting(targetPageNumbers.length - missingTargetSourceText.length, targetPageNumbers.length));
           const pdfBlob = await fetchPdfBlobForGeneration(p.pdfUrl, generationSignal, p.copy).catch(() => null);
-          if (pdfBlob && missingTargetSourceText.length > TEACHING_PROJECT_WARMUP_PAGE_COUNT) {
+          if (pdfBlob && needsPlan) {
+            // Planning reads the whole deck, so every page's text comes first.
+            const extractionPageNumbers = allPageNumbers.filter((pageNo) => !sourceTextByPage.has(pageNo));
+            const extracted = extractionPageNumbers.length
+              ? await extractPdfPagesForGeneration(pdfBlob, {
+                  priorityPageNumbers: [p.currentPdfPageNo, ...targetPageNumbers],
+                  pageNumbers: extractionPageNumbers,
+                  shouldCancel: () => generationSignal.aborted,
+                  concurrency: PDF_PROJECT_TEXT_EXTRACTION_CONCURRENCY,
+                }, generationSignal).catch(() => {
+                  if (!generationSignal.aborted) p.setJobStatus(p.copy.status.pdfTextExtractionFallback);
+                  return null;
+                })
+              : null;
+            if (extracted?.pages.length) mergeExtractedPages(extracted.pages);
+            if (generationSignal.aborted) return;
+            await ensureLessonPlan();
+            if (generationSignal.aborted) return;
+            await runGenerationPass(currentPagesToGenerate(), extractedPagesForGeneration);
+          } else if (pdfBlob && missingTargetSourceText.length > TEACHING_PROJECT_WARMUP_PAGE_COUNT) {
             const warmupPageNumbers = teachingWarmupPageNumbers(totalPages, p.currentPdfPageNo, targetPageNumbers);
             const warmupPageSet = new Set(warmupPageNumbers);
             const warmupExtractionPageNumbers = teachingExtractionPageNumbers(totalPages, warmupPageNumbers)
@@ -524,11 +639,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             // Always recompute from the live workingPack: scopedPages is a
             // pre-run snapshot and would re-select pages the warm-up pass just
             // finished (F14).
-            const remainingPagesToGenerate = prioritizeTeachingPages(
-              workingPack.pages.filter((page) => targetPageSet.has(page.page_no) && needsGenerationPass(page, pageOutputLanguage, failedThisRun)),
-              p.currentPdfPageNo,
-            );
-            await runGenerationPass(remainingPagesToGenerate, extractedPagesForGeneration);
+            await runGenerationPass(currentPagesToGenerate(), extractedPagesForGeneration);
           } else if (pdfBlob) {
             const extracted = await extractPdfPagesForGeneration(pdfBlob, {
               priorityPageNumbers: targetPageNumbers,
@@ -547,7 +658,9 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           }
         } else {
           if (generationSignal.aborted) return;
-          await runGenerationPass(pagesToGenerate, extractedPagesForGeneration);
+          if (needsPlan) await ensureLessonPlan();
+          if (generationSignal.aborted) return;
+          await runGenerationPass(currentPagesToGenerate(), extractedPagesForGeneration);
         }
         // A stopped run must not write its half-marked working pack or claim
         // completion; the app already reverted the in-flight pages to drafts.
@@ -784,11 +897,11 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               contextPages,
               passPagesToGenerate.map((page) => page.page_no),
             );
-            const fastDocumentContext = lightPdfContextForFastTeachingGeneration(
-              workingPack,
-              totalPages,
-              contextPages,
-            );
+            const lessonPlan = workingPack.document.lesson_plan;
+            const handoffFor = (pageNo: number) => {
+              const previous = workingPagesByNumber.get(pageNo - 1);
+              return previous && hasCompletedTeaching(previous, p.teachingOutputLanguage) ? previous.teaching.handoff || "" : "";
+            };
             const generationInputPagesByNumber = new Map(workingPagesByNumber);
             let started = 0;
             const markRunningPage = (pageToGenerate: PageData) => {
@@ -824,13 +937,14 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                         ...buildSinglePageRequestBody({
                           plan,
                           document: workingPack.document,
-                          documentContext: teachingDocumentContextForPlan(plan, documentContext, fastDocumentContext),
+                          documentContext,
                           documentFile,
                           outputLanguage: p.teachingOutputLanguage,
                           outputLanguageLabel: teachingOutputLanguageName(p.teachingOutputLanguage),
                           uiLanguage: p.uiPreferences.language,
                           runningPage,
                           pageCount: totalPages,
+                          lessonPlan: lessonPlanRequestSlice(lessonPlan, [pageNo], handoffFor(pageNo)),
                           previousPage: previousPage
                             ? { page_no: previousPage.page_no, title: previousPage.teaching.slide_title }
                             : null,
@@ -868,6 +982,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               await generatePageWithAutoRetry({
                 runningPage,
                 initialPlan: plan,
+                depth: lessonPlanDepthForPage(lessonPlan, pageNo),
                 preference: p.uiPreferences.modelReasoningEffort,
                 modelApiConfig: p.modelApiConfig,
                 outputLanguage: p.teachingOutputLanguage,
@@ -896,8 +1011,11 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               });
             };
 
-            const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort, p.modelApiConfig);
-            await runWithConcurrencyLimit(pageBatches, TEACHING_BATCH_DISPATCH_CONCURRENCY, async (pageBatch) => {
+            const pageBatches = batchTeachingPages(passPagesToGenerate, p.uiPreferences.modelReasoningEffort, p.modelApiConfig, {
+              lessonPlan,
+              currentPageNo: documentPriorityPage,
+            });
+            const runPageBatch = async (pageBatch: TeachingGenerationBatch) => {
               if (generationSignal.aborted) return;
               const runningPages = pageBatch.pages.map(markRunningPage);
               if (runningPages.length === 1) {
@@ -927,13 +1045,18 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                           ...buildBatchPagesRequestBody({
                             plan: pageBatch.plan,
                             document: workingPack.document,
-                            documentContext: teachingDocumentContextForPlan(pageBatch.plan, documentContext, fastDocumentContext),
+                            documentContext,
                             documentFile,
                             outputLanguage: p.teachingOutputLanguage,
                             outputLanguageLabel: teachingOutputLanguageName(p.teachingOutputLanguage),
                             uiLanguage: p.uiPreferences.language,
                             runningPages,
                             pageCount: totalPages,
+                            lessonPlan: lessonPlanRequestSlice(
+                              lessonPlan,
+                              runningPages.map((page) => page.page_no),
+                              handoffFor(runningPages[0].page_no),
+                            ),
                           }),
                           signal: requestSignal,
                         },
@@ -950,6 +1073,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                   response,
                   runningPages,
                   plan: pageBatch.plan,
+                  lessonPlan,
                   outputLanguage: p.teachingOutputLanguage,
                   preference: p.uiPreferences.modelReasoningEffort,
                   modelApiConfig: p.modelApiConfig,
@@ -980,6 +1104,12 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                     batchFailureFallbackPlan(classification, pageBatch.plan, runningPage, p.uiPreferences.modelReasoningEffort, p.modelApiConfig),
                   );
                 });
+              }
+            };
+            await runWithConcurrencyLimit(groupTeachingBatchesBySegment(pageBatches), TEACHING_BATCH_DISPATCH_CONCURRENCY, async (segmentBatches) => {
+              for (const pageBatch of segmentBatches) {
+                if (generationSignal.aborted) return;
+                await runPageBatch(pageBatch);
               }
             }, { signal: generationSignal });
           };
@@ -1072,6 +1202,8 @@ export function useGenerationEngine(p: GenerationEngineParams) {
 type GeneratePageWithAutoRetryOptions = {
   runningPage: PageData;
   initialPlan: TeachingGenerationQualityPlan;
+  /** Depth the lesson plan assigned; relaxes the weak-output floor for skim and brief pages. */
+  depth?: LessonPlanDepth;
   preference: UiPreferences["modelReasoningEffort"];
   modelApiConfig: ModelApiConfig;
   outputLanguage: TeachingOutputLanguage;
@@ -1097,6 +1229,7 @@ type GeneratePageWithAutoRetryOptions = {
 async function generatePageWithAutoRetry({
   runningPage,
   initialPlan,
+  depth,
   preference,
   modelApiConfig,
   outputLanguage,
@@ -1125,12 +1258,12 @@ async function generatePageWithAutoRetry({
       const generatedPage = await requestGeneratedPage(runningPage, plan);
       const shouldRetryWeakOutput =
         plan.retryOnWeakOutput &&
-        generatedTeachingNeedsRetry(generatedPage) &&
+        generatedTeachingNeedsRetry(generatedPage, depth) &&
         !transportFailureSeen &&
         qualityEscalations < 1 &&
         attempt < TEACHING_PAGE_MAX_ATTEMPTS;
       if (shouldRetryWeakOutput) {
-        bestFallback = bestFallback && shouldPreferTeachingCandidate(bestFallback, generatedPage)
+        bestFallback = bestFallback && shouldPreferTeachingCandidate(bestFallback, generatedPage, depth)
           ? bestFallback
           : generatedPage;
         qualityEscalations += 1;
@@ -1141,7 +1274,7 @@ async function generatePageWithAutoRetry({
         continue;
       }
 
-      const finalPage = bestFallback && shouldPreferTeachingCandidate(bestFallback, generatedPage)
+      const finalPage = bestFallback && shouldPreferTeachingCandidate(bestFallback, generatedPage, depth)
         ? bestFallback
         : generatedPage;
       await commitGeneratedPage(finalPage);
@@ -1261,6 +1394,7 @@ function resolveBatchResponse(params: {
   response: BatchGenerationResponse;
   runningPages: PageData[];
   plan: TeachingGenerationQualityPlan;
+  lessonPlan?: LessonPlan;
   outputLanguage: TeachingOutputLanguage;
   preference: UiPreferences["modelReasoningEffort"];
   modelApiConfig: ModelApiConfig;
@@ -1268,7 +1402,7 @@ function resolveBatchResponse(params: {
   commitGeneratedPage: (page: PageData) => void;
   onHandled: (pageNo: number) => void;
 }): BatchResponseOutcome {
-  const { response, runningPages, plan, outputLanguage, preference, modelApiConfig } = params;
+  const { response, runningPages, plan, lessonPlan, outputLanguage, preference, modelApiConfig } = params;
   const generatedPagesByNumber = new Map(
     (Array.isArray(response.pages) ? response.pages : []).map((page) => [Number(page.page_no || 0), page]),
   );
@@ -1294,7 +1428,7 @@ function resolveBatchResponse(params: {
         output_language: outputLanguage,
       },
     };
-    if (plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage)) {
+    if (plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage, lessonPlanDepthForPage(lessonPlan, runningPage.page_no))) {
       outcome.weakPages.push({
         runningPage,
         retryPlan: teachingGenerationQualityPlan(runningPage, preference, "retry", modelApiConfig),

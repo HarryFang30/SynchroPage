@@ -1,7 +1,7 @@
 import "katex/dist/katex.min.css";
 import type { ReactNode } from "react";
 import rehypeKatex from "rehype-katex";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
@@ -39,13 +39,25 @@ const latexCommandNames = new Set([
   "xi", "zeta",
 ]);
 
-export default function MarkdownRenderer({ className, text, inline = false }: { className: string; text: string; inline?: boolean }) {
+export default function MarkdownRenderer({
+  className,
+  text,
+  inline = false,
+  components,
+}: {
+  className: string;
+  text: string;
+  inline?: boolean;
+  /** Extra element renderers (for example a blockquote that styles teaching devices). */
+  components?: Components;
+}) {
   const renderedText = inline ? displayMathAsInline(preprocessMathMarkdown(text)) : preprocessMathMarkdown(text);
+  const mergedComponents = inline ? { ...inlineMarkdownComponents, ...components } : components;
   const content = (
       <ReactMarkdown
         remarkPlugins={markdownRemarkPlugins as never}
         rehypePlugins={markdownRehypePlugins as never}
-        components={inline ? inlineMarkdownComponents as never : undefined}
+        components={mergedComponents as never}
       >
         {renderedText}
       </ReactMarkdown>
@@ -158,6 +170,26 @@ function hasSameLineTextAround(source: string, start: number, end: number) {
 }
 
 function normalizeDisplayMathBlocks(text: string) {
+  // Blockquote runs are normalised on their own so the inserted blank lines
+  // and $$ lines keep the "> " prefix; otherwise a display formula would end
+  // the quote (and a teaching device) halfway through.
+  const lines = text.split("\n");
+  const output: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const quoted = /^>/.test(lines[index]);
+    const run: string[] = [];
+    while (index < lines.length && /^>/.test(lines[index]) === quoted) {
+      run.push(quoted ? lines[index].replace(/^>\s?/, "") : lines[index]);
+      index += 1;
+    }
+    const normalized = normalizeDisplayMathText(run.join("\n")).split("\n");
+    output.push(...(quoted ? normalized.map((line) => (line ? `> ${line}` : ">")) : normalized));
+  }
+  return output.join("\n");
+}
+
+function normalizeDisplayMathText(text: string) {
   return text.replace(/\$\$([\s\S]*?)\$\$/g, (_match, body: string) => {
     const normalized = body.trim();
     if (!normalized) return "$$$$";
