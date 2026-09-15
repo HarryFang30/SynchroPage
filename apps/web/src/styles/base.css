@@ -1,27 +1,7 @@
-@import "@fontsource/geist-sans/latin.css";
+@import "./fonts.css";
 @import "@fontsource-variable/source-serif-4/opsz.css";
 @import "@fontsource-variable/jetbrains-mono/wght.css";
 @import "./tokens.css";
-
-/* Anthropic Sans for Latin text. The files live in public/fonts, copied in by
-   scripts/install-local-fonts.sh and never committed (proprietary). When they
-   are missing the browser moves on to the next family in --font-ui; CJK
-   glyphs always come from the CJK families later in the stack. */
-@font-face {
-  font-family: "Anthropic Sans";
-  src: local("Anthropic Sans"), url("/fonts/AnthropicSans-Roman.woff2") format("woff2");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Anthropic Sans";
-  src: local("Anthropic Sans Italic"), url("/fonts/AnthropicSans-Italic.woff2") format("woff2");
-  font-weight: 100 900;
-  font-style: italic;
-  font-display: swap;
-}
 
 :root {
   color-scheme: light;

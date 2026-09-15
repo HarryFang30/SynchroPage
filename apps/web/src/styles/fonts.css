@@ -1,0 +1,112 @@
+/* Latin faces.
+
+   Both Latin families are pinned to non-CJK code points. The Geist files
+   from @fontsource ship without a unicode-range and carry narrow glyphs for
+   the full-width comma, colon and stop (U+FF0C, U+FF1A, U+3002), so Chinese
+   sentences were being punctuated with Latin-width marks; with the range in
+   place those characters fall through to PingFang / Noto Sans SC like the
+   ideographs around them. General punctuation (quotes, dashes, ellipsis,
+   U+2000-206F) stays with the Latin face so English prose keeps its own.
+
+   Anthropic Sans lives in public/fonts, copied in by
+   scripts/install-local-fonts.sh and never committed (proprietary). When the
+   files are missing the browser moves on to Geist. */
+
+@font-face {
+  font-family: "Anthropic Sans";
+  src: local("Anthropic Sans"), url("/fonts/AnthropicSans-Roman.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-2BFF, U+FB00-FB4F, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Anthropic Sans";
+  src: local("Anthropic Sans Italic"), url("/fonts/AnthropicSans-Italic.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+  unicode-range: U+0000-2BFF, U+FB00-FB4F, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-100-normal.woff2") format("woff2");
+  font-weight: 100;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-2BFF, U+FB00-FB4F, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-200-normal.woff2") format("woff2");
+  font-weight: 200;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-2BFF, U+FB00-FB4F, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-300-normal.woff2") format("woff2");
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-2BFF, U+FB00-FB4F, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-2BFF, U+FB00-FB4F, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-500-normal.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-2BFF, U+FB00-FB4F, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-600-normal.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-2BFF, U+FB00-FB4F, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-700-normal.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-2BFF, U+FB00-FB4F, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-800-normal.woff2") format("woff2");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-2BFF, U+FB00-FB4F, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("../../node_modules/@fontsource/geist-sans/files/geist-sans-latin-900-normal.woff2") format("woff2");
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-2BFF, U+FB00-FB4F, U+FEFF, U+FFFD;
+}

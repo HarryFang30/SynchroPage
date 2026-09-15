@@ -584,38 +584,10 @@ body {
   padding: 28px clamp(22px, 4cqi, 40px) 34px;
 }
 
+/* Notes typography and section styling live in notes.css (token-based, so it
+   already follows both themes). Only the reading width is pinned here. */
 .note-markdown {
   max-width: 62ch;
-}
-
-.note-markdown h2,
-.note-section-title {
-  color: var(--pp-text-muted);
-  border-bottom-color: var(--pp-border-subtle);
-}
-
-.note-markdown .markdown-body th,
-.note-markdown .markdown-body td,
-.note-answer {
-  border-color: var(--pp-border-subtle);
-}
-
-.note-section-lead .note-markdown-content {
-  background: color-mix(in oklch, var(--annot-yellow, oklch(0.9 0.17 96)) 18%, var(--pp-bg-panel));
-}
-
-.note-section-lead .note-markdown-content p,
-.note-section-keep .note-markdown-content p {
-  color: var(--pp-text-primary);
-}
-
-.note-markdown h3 {
-  color: color-mix(in oklch, var(--pp-text-primary) 86%, var(--pp-text-muted));
-  font-size: 15px;
-}
-
-.note-markdown p {
-  color: var(--pp-text-secondary);
 }
 
 .tab-group {

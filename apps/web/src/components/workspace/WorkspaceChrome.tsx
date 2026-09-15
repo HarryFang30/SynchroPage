@@ -1,14 +1,31 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  ArrowLeftRight,
+  BookA,
+  ChevronLeft,
+  ChevronRight,
+  CircleHelp,
+  Compass,
+  FlaskConical,
+  GraduationCap,
+  Image as ImageIcon,
+  Lightbulb,
+  ListChecks,
+  Pin,
+  SquareFunction,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
 import {
   lazy,
   Suspense,
   useMemo,
   type ChangeEvent,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import type { AppCopy } from "../../i18n";
 import { useAppCopy } from "../../lib/contexts";
-import { splitNoteSections } from "../../lib/notes/noteSections";
+import { splitNoteSections, type NoteSectionKey } from "../../lib/notes/noteSections";
 import type { PageData } from "../../lib/generation/teachingGeneration";
 import type { GenerationPageStatus } from "../../lib/generation/generationRuntime";
 import {
@@ -139,27 +156,100 @@ export function GenerationDetailsPopover({
   );
 }
 
-export function MarkdownBlock({ markdown, concepts }: { markdown: string; concepts: string[] }) {
+/** One icon per section kind, so the reader recognises the rhythm of a page at a glance. */
+const NOTE_SECTION_ICONS: Record<NoteSectionKey, LucideIcon> = {
+  lead: Lightbulb,
+  symbols: BookA,
+  example: FlaskConical,
+  keep: Pin,
+  stuck: TriangleAlert,
+  formula: SquareFunction,
+  visual: ImageIcon,
+  entry: Compass,
+  selfcheck: ListChecks,
+  exam: GraduationCap,
+  check: CircleHelp,
+  bridge: ArrowLeftRight,
+};
+
+function noteOrder(index: number): CSSProperties {
+  return { "--note-i": index } as CSSProperties;
+}
+
+export function MarkdownBlock({
+  markdown,
+  concepts,
+  title,
+  pageNo,
+  pageType,
+}: {
+  markdown: string;
+  concepts: string[];
+  title?: string;
+  pageNo?: number;
+  pageType?: string;
+}) {
   const copy = useAppCopy();
   const sections = useMemo(() => splitNoteSections(markdown), [markdown]);
+  const heading = (title || "").trim();
+  const typeLabel = pageType ? copy.notes.pageTypes[pageType.trim().toLowerCase()] : undefined;
+  const showHeader = Boolean(heading || concepts.length);
+  let order = 0;
   return (
-    <article className="note-markdown">
-      {sections.map((section, index) => (
-        <section
-          key={`${index}-${section.heading}`}
-          className={`note-section${section.key ? ` note-section-${section.key}` : ""}`}
-        >
-          {section.heading && <h2 className="note-section-title">{section.heading}</h2>}
-          {section.body && <ReaderMarkdown className="note-markdown-content markdown-body" text={section.body} />}
-          {section.answer !== undefined && (
-            <details className="note-answer">
-              <summary>{copy.notes.showAnswer}</summary>
-              <ReaderMarkdown className="note-markdown-content markdown-body" text={section.answer} />
-            </details>
+    // Keyed by page so a page change replays the entrance instead of morphing
+    // the previous page's sections in place.
+    <article className="note-markdown" key={pageNo ?? "notes"}>
+      {showHeader && (
+        <header className="note-header" style={noteOrder(order++)}>
+          {(pageNo !== undefined || typeLabel) && (
+            <p className="note-eyebrow">
+              {pageNo !== undefined && <span>{copy.common.pageLabel(pageNo)}</span>}
+              {typeLabel && <span>{typeLabel}</span>}
+            </p>
           )}
-        </section>
-      ))}
-      <div className="chips">{concepts.map((item) => <ReaderMarkdown className="chip" inline key={item} text={item} />)}</div>
+          {heading && (
+            <h1 className="note-title">
+              <ReaderMarkdown className="note-title-text" inline text={heading} />
+            </h1>
+          )}
+          {concepts.length > 0 && (
+            <ul className="note-concepts" aria-label={copy.notes.conceptsLabel}>
+              {concepts.map((item) => (
+                <li key={item}>
+                  <ReaderMarkdown className="note-concept" inline text={item} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </header>
+      )}
+      {sections.map((section, index) => {
+        const Icon = section.key ? NOTE_SECTION_ICONS[section.key] : null;
+        return (
+          <section
+            key={`${index}-${section.heading}`}
+            className={`note-section${section.key ? ` note-section-${section.key}` : ""}`}
+            style={noteOrder(order++)}
+          >
+            {section.heading && (
+              <h2 className="note-section-title">
+                {Icon && <Icon className="note-section-icon" aria-hidden="true" />}
+                <span>{section.heading}</span>
+              </h2>
+            )}
+            {section.body && <ReaderMarkdown className="note-markdown-content markdown-body" text={section.body} />}
+            {section.answer !== undefined && (
+              <details className="note-answer">
+                <summary>
+                  <span className="note-answer-show">{copy.notes.showAnswer}</span>
+                  <span className="note-answer-hide">{copy.notes.hideAnswer}</span>
+                </summary>
+                <ReaderMarkdown className="note-markdown-content markdown-body" text={section.answer} />
+              </details>
+            )}
+          </section>
+        );
+      })}
     </article>
   );
 }

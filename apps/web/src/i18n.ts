@@ -377,6 +377,9 @@ export type AppCopy = {
   notes: {
     title: string;
     showAnswer: string;
+    hideAnswer: string;
+    conceptsLabel: string;
+    pageTypes: Record<string, string>;
     tabNotes: string;
     tabStructure: string;
     tabJson: string;
@@ -955,6 +958,20 @@ const zhCN: AppCopy = {
   notes: {
     title: "讲解",
     showAnswer: "看答案",
+    hideAnswer: "收起答案",
+    conceptsLabel: "本页概念",
+    pageTypes: {
+      title: "封面",
+      agenda: "目录",
+      concept: "概念页",
+      example: "例题页",
+      figure: "图页",
+      table: "表格页",
+      formula: "公式页",
+      exercise: "习题页",
+      summary: "总结页",
+      blank: "空白页",
+    },
     tabNotes: "讲解",
     tabStructure: "结构",
     tabJson: "JSON",
@@ -1539,6 +1556,20 @@ const enUS: AppCopy = {
   notes: {
     title: "Notes",
     showAnswer: "Show answer",
+    hideAnswer: "Hide answer",
+    conceptsLabel: "Concepts on this page",
+    pageTypes: {
+      title: "Title page",
+      agenda: "Outline",
+      concept: "Concept",
+      example: "Worked example",
+      figure: "Figure",
+      table: "Table",
+      formula: "Formula",
+      exercise: "Exercise",
+      summary: "Summary",
+      blank: "Blank page",
+    },
     tabNotes: "Notes",
     tabStructure: "Structure",
     tabJson: "JSON",

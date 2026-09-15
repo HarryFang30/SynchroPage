@@ -120,6 +120,9 @@ test.describe("Teaching Generation (mocked)", () => {
 
     const notes = page.locator(".notes-content");
     await expect(notes).toContainText(/Mocked notes|mocked teaching notes/i, { timeout: 10_000 });
+    // The page header carries the slide title and the concept tags.
+    await expect(notes.locator(".note-title")).toContainText(/Mocked/);
+    await expect(notes.locator(".note-concept").first()).toBeVisible();
     await page.locator(".generation-progress-trigger").click();
     await expect(page.locator(".generation-details-popover")).toContainText(/1\/2|1\s*\/\s*2/, { timeout: 10_000 });
     await expect(page.locator(".generation-details-popover")).toContainText(/已生成|Generated/i);
@@ -565,10 +568,31 @@ test.describe("Teaching Generation (mocked)", () => {
     await expect(page.locator(".notes-content")).not.toContainText(/本页讲解生成失败|Page notes generation failed/i);
   });
 
-  test("structure panel tab exists", async ({ page }) => {
+  test("structure and JSON tabs only appear in Debug mode", async ({ page }) => {
     await expect(page.locator(".tab-group")).toBeVisible();
+    // 讲解 / 笔记
+    await expect(page.locator(".tab-button")).toHaveCount(2);
+
+    await page.locator(".rail-settings-button").click();
+    await page.locator(".settings-nav-item").filter({ hasText: /高级|Advanced/ }).click();
+    const debugRow = page.locator(".settings-row").filter({ hasText: /Debug 模式|Debug mode/ });
+    await debugRow.getByRole("switch").click();
+    await expect(debugRow.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".settings-dialog")).toHaveCount(0);
     // 讲解 / 笔记 / 结构 / JSON
     await expect(page.locator(".tab-button")).toHaveCount(4);
+    await page.locator(".tab-button").filter({ hasText: /结构|Struct/ }).click();
+    await expect(page.locator(".structure-grid")).toBeVisible();
+
+    // Leaving Debug mode takes the reader back to the notes.
+    await page.locator(".rail-settings-button").click();
+    await page.locator(".settings-nav-item").filter({ hasText: /高级|Advanced/ }).click();
+    await debugRow.getByRole("switch").click();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".tab-button")).toHaveCount(2);
+    await expect(page.locator(".tab-button.active")).toHaveText(/讲解|Notes/);
+    await expect(page.locator(".structure-grid")).toHaveCount(0);
   });
 
   test("generation details popover opens from the progress control", async ({ page }) => {
