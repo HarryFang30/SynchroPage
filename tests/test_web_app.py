@@ -948,7 +948,7 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("cache_version: synchropage.document-prefix.v1", prefix_a)
         self.assertLess(prefix_a.index("[p.1] First"), prefix_a.index("[p.2] Second"))
 
-    def test_generated_page_normalizes_mixed_language_latex_ranges(self) -> None:
+    def test_generated_page_keeps_notes_as_written_after_json_repair(self) -> None:
         bad_notes = (
             r"计数范围是 $0 到 \2^n-1$。"
             "\n"
@@ -978,12 +978,15 @@ class WebAppTest(unittest.TestCase):
             },
         )
 
-        self.assertIn("$0 \\text{到} 2^n-1$", page["teaching"]["speaker_notes_md"])
-        self.assertIn("$000 \\text{数到} 111\\text{，然后回到} 000$", page["teaching"]["speaker_notes_md"])
-        self.assertIn(
-            "$000 \\to 001 \\to 010 \\to \\cdots \\to 111 \\to 000$\n。表中的",
-            page["teaching"]["speaker_notes_md"],
-        )
+        # The backslash before a digit is JSON noise and goes; everything else
+        # is stored as the model wrote it. Chinese inside a formula and an
+        # unclosed `$` are the renderer's and the prompt's business, not a
+        # string repair's.
+        notes = page["teaching"]["speaker_notes_md"]
+        self.assertIn("$0 到 2^n-1$", notes)
+        self.assertIn("$000 数到 111，然后回到 000$", notes)
+        self.assertIn("$000 \\to 001 \\to 010 \\to \\cdots \\to 111 \\to 000\n。表中的", notes)
+        self.assertNotIn("\\text{", notes)
 
     def test_generated_page_repairs_unescaped_latex_backslashes_in_json(self) -> None:
         content = r'''
@@ -1020,7 +1023,7 @@ class WebAppTest(unittest.TestCase):
         self.assertNotIn("\t", notes)
         self.assertNotIn("\f", notes)
 
-    def test_generated_page_wraps_bare_latex_and_escaped_markdown_newlines(self) -> None:
+    def test_generated_page_turns_double_escaped_newlines_into_line_breaks(self) -> None:
         bad_notes = (
             r"本页延续上一页，重点仍是如何用 MATLAB 画出系统的冲激响应。\n"
             r"- tf(num,den) 是连续时间传递函数的标准构造方式。\n"
@@ -1051,10 +1054,10 @@ class WebAppTest(unittest.TestCase):
         notes = page["teaching"]["speaker_notes_md"]
         self.assertIn("\n- tf(num,den)", notes)
         self.assertNotIn(r"\n- tf(num,den)", notes)
-        self.assertIn(
-            "$\\frac{s^2 + 1.421e05}{s^2 + 2s + 1.421e05}$",
-            notes,
-        )
+        # A bare command is not wrapped in `$`: the prompt asks for delimiters
+        # and the renderer shows what the model wrote.
+        self.assertIn(r"写成 \frac{s^2 + 1.421e05}{s^2 + 2s + 1.421e05}。", notes)
+        self.assertNotIn("$\\frac", notes)
 
     def test_generated_pages_parse_batch_response_by_page_number(self) -> None:
         content = json.dumps(

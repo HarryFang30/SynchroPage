@@ -23,7 +23,7 @@ from pdf_agent.server.markdown_math import (
     json_loads_with_latex_repair as _json_loads_with_latex_repair,
 )
 from pdf_agent.server.markdown_math import (
-    normalize_markdown_math as _normalize_markdown_math,
+    repair_json_escape_artifacts as _repair_json_escape_artifacts,
 )
 from pdf_agent.server.payload_builders import (
     _lesson_plan_pages,
@@ -188,7 +188,7 @@ def _normalize_generated_page_candidate(
                 "## 当前页暂无法生成可靠讲解\n\n"
                 "这一页没有可提取的 PDF 文本层。本轮不会编造内容；请后续接入 OCR 或手动补充页面文本后再重新生成。"
             )
-    notes = _normalize_markdown_math(notes)
+    notes = _repair_json_escape_artifacts(notes)
 
     evidence = teaching.get("evidence")
     if not isinstance(evidence, list) or not evidence:
@@ -347,7 +347,7 @@ def _parse_transcription(content: str, body: Mapping[str, Any]) -> dict[str, Any
     pages: list[dict[str, Any]] = []
     for page_no in requested:
         item = by_page.get(page_no, {})
-        text = _normalize_markdown_math(str(item.get("text_md") or "").strip())
+        text = _repair_json_escape_artifacts(str(item.get("text_md") or "").strip())
         unreadable = bool(item.get("unreadable")) or not text
         pages.append(
             {
@@ -380,7 +380,7 @@ def clean_ocr_text(text: str) -> str:
 
 
 def _parse_ocr_page(content: str, page_no: int) -> dict[str, Any]:
-    text = _normalize_markdown_math(clean_ocr_text(content))
+    text = clean_ocr_text(content)
     unreadable = not text
     return {
         "page_no": page_no,

@@ -388,18 +388,21 @@ test.describe("Agent Panel", () => {
     await expect(page.locator(".assistant-message")).toContainText("Mock assistant reply from e2e.", { timeout: 10_000 });
   });
 
-  test("renders malformed inline math from model replies", async ({ page }) => {
+  test("renders well-formed math from model replies", async ({ page }) => {
     await page.unroute("**/api/**");
     await mockApi(page, {
       "/api/agent/chat": {
         content: [
-          "若系统只允许 $0, 1, 2, 3, 4$ 这些值,那么可选状态就是有限集合。",
-          "结果通常是近似值,例如 ((0.715)10 $\\to (0.10110$......)2,因为小数可能无法有限表示。",
-          "每一位的权值是 `16^0, 16^1, 16^2, ...`,和十进制一致。",
-          "例子 `E $\\times 16^2 + 3 \\times 16^1 +$ A $\\times 16^0$`。",
-          "$- \\text{组合电路可以看成}“\\text{当前输入} $$\\to$$$ 当前输出”的直接映射。",
-          "严格地说,应写作 T(n) $$\\in$$ O(f(n)),表示 $T(n)$ 属于这个集合。",
-        ].join("\\n"),
+          "若系统只允许 $0, 1, 2, 3, 4$ 这些值，那么可选状态就是有限集合。",
+          "严格地说，应写作 $T(n) \\in O(f(n))$，表示 $T(n)$ 属于这个集合。",
+          "梯度为零处取到最小值：",
+          "",
+          "$$",
+          "\\nabla R_n(\\theta) = 0",
+          "$$",
+          "",
+          "OpenAI 风格的 \\(\\varepsilon_0\\) 同样显示；金额 \\$5 不是公式。",
+        ].join("\n"),
       },
     });
 
@@ -409,30 +412,27 @@ test.describe("Agent Panel", () => {
     await page.keyboard.press("Enter");
 
     const assistant = page.locator(".assistant-message").last();
-    await expect.poll(async () => assistant.locator(".katex").count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(3);
+    await expect.poll(async () => assistant.locator(".katex").count(), { timeout: 10_000 }).toBe(5);
+    await expect(assistant.locator(".katex-display")).toHaveCount(1);
     await expect(assistant.locator(".katex-error")).toHaveCount(0);
-    await expect(assistant.locator("code")).toHaveCount(0);
-    await expect(assistant).not.toContainText("$0, 1, 2, 3, 4$");
-    await expect(assistant).not.toContainText("$\\to");
-    await expect(assistant).not.toContainText("$-");
-    await expect(assistant).not.toContainText("\\text{组合电路");
-    await expect(assistant).not.toContainText("$$\\to$$$");
-    await expect(assistant).not.toContainText("$$\\in$$");
+    const visibleText = await assistant.innerText();
+    expect(visibleText).toContain("金额 $5 不是公式");
+    expect(visibleText).not.toContain("$0, 1");
+    expect(visibleText).not.toContain("\\in");
+    expect(visibleText).not.toContain("\\(");
+    expect(visibleText).not.toContain("$$");
   });
 
-  test("repairs dielectric physics formula fragments from model replies", async ({ page }) => {
+  test("a stray delimiter in a model reply stays a local blemish", async ({ page }) => {
     await page.unroute("**/api/**");
     await mockApi(page, {
       "/api/agent/chat": {
         content: [
-          "- 关键结论:介质内部电场不再等于真空中的情形,\\text{介电常数从} $$\\varepsilon_{0}",
-          "\\text{介电常数从} \\(\\varepsilon_{0}$ \\text{变为} $\\varepsilon=\\varepsilon_$r$\\varepsilon_{0}",
-          "- \\varepsilon_r (relativepermittivity/dielectricconstant) 是**无量纲**材料参数,所以 $\\varepsilon=\\varepsilon_{0}",
-          "- 这里用“虚构偶极子”说明偶极矩的基本定义:两个等量异号电荷相距很小的位移时,",
-          "\\mathbf{p}=$q\\boldsymbol{$\\delta$$}. - **电子极化**: $外电场 $\\mathbf{E}_{\\text{ext}}$ 使电子云发生形变。",
-          "- 当 $\\mathbf{E}_{ext}=0$$ \\text{时,若原本中心重合,则净偶极矩为零。}",
-          "- 若孤立偶极子处在外场中,局域电场 $E_{loc}$ 可近似看作施加的宏观场 $E_{ext},\\text{并满足} $$p=\\alpha_$$e E_{loc}$。",
-        ].join("\\n"),
+          "这里少了结尾：$\\varepsilon_r 是无量纲的材料参数。",
+          "下一句照常：偶极矩 $\\mathbf{p} = q\\boldsymbol{\\delta}$，外电场 $\\mathbf{E}_{\\text{ext}}$ 使电子云发生形变。",
+          "",
+          "分子内部的 $\\mathbf{E}_{\\text{loc}}$ 也照常显示。",
+        ].join("\n"),
       },
     });
 
@@ -442,15 +442,14 @@ test.describe("Agent Panel", () => {
     await page.keyboard.press("Enter");
 
     const assistant = page.locator(".assistant-message").last();
-    await expect.poll(async () => assistant.locator(".katex").count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(7);
+    await expect.poll(async () => assistant.locator(".katex").count(), { timeout: 10_000 }).toBe(3);
     await expect(assistant.locator(".katex-error")).toHaveCount(0);
     const visibleText = await assistant.innerText();
-    expect(visibleText).toContain("介电常数从");
-    expect(visibleText).toContain("电子极化");
-    expect(visibleText).not.toContain("\\text{");
-    expect(visibleText).not.toContain("$$");
-    expect(visibleText).not.toContain("\\boldsymbol");
-    expect(visibleText).not.toContain("\\varepsilon");
+    // The unclosed `$` is shown as written; nothing after it is swallowed.
+    expect(visibleText).toContain("$\\varepsilon_r 是无量纲的材料参数。");
+    expect(visibleText).toContain("使电子云发生形变");
+    expect(visibleText).toContain("也照常显示");
+    expect(visibleText).not.toContain("\\mathbf");
   });
 
   test("renders table math with vertical bars without splitting columns", async ({ page }) => {
