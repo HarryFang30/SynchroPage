@@ -1,8 +1,11 @@
-"""Markdown math and JSON LaTeX repair utilities extracted from web_app.py.
+r"""JSON repair for model output that carries LaTeX.
 
-These functions handle LaTeX backslash escaping in JSON strings, normalize
-Markdown math delimiters, wrap bare LaTeX expressions, and repair common
-model output issues.
+Models routinely write ``\frac`` inside a JSON string where JSON needs
+``\\frac``; these helpers make such output parseable without touching the
+Markdown itself. Math delimiters are not normalised here: the web app's
+markdown tokenizer recognises ``$...$``, ``$$...$$``, ``\(...\)`` and
+``\[...\]`` directly, and a stored page is rendered exactly as the model
+wrote it.
 
 All functions are pure and stateless — safe to import anywhere.
 """
@@ -10,7 +13,6 @@ All functions are pure and stateless — safe to import anywhere.
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -146,15 +148,6 @@ _LATEX_COMMANDS_REQUIRING_JSON_ESCAPE: frozenset[str] = frozenset(
 )
 
 # ---------------------------------------------------------------------------
-# Regex constants (compiled once at import time)
-# ---------------------------------------------------------------------------
-
-_MARKDOWN_MATH_SPAN_RE = re.compile(r"(\$\$[\s\S]*?\$\$|\$(?!\$)(?:\\.|[^$])*\$)")
-_BARE_LATEX_TRIGGER_RE = re.compile(r"\\[A-Za-z]+")
-_BARE_LATEX_ENV_RE = re.compile(r"\\begin\{([A-Za-z*]+)\}[\s\S]*?\\end\{\1\}")
-
-
-# ---------------------------------------------------------------------------
 # JSON backslash repair for model-generated LaTeX
 # ---------------------------------------------------------------------------
 
@@ -229,8 +222,45 @@ def repair_json_string_backslashes(text: str) -> str:
             output.append(text[index : index + 2])
             index += 2
             continue
+        if next_char.isdigit():
+            # ``\2^n`` or ``\000``: not a JSON escape and not LaTeX either; the
+            # backslash is noise from the model.
+            index += 1
+            continue
 
         output.append("\\\\")
+        index += 1
+    return "".join(output)
+
+
+def repair_json_escape_artifacts(text: str) -> str:
+    """Undo two artifacts of a model escaping backslashes inside JSON strings.
+
+    - A literal backslash followed by ``n`` and then anything but an ASCII letter is a newline
+      the model escaped twice (``\\\\n``): it becomes a line break. ``\\nabla``,
+      ``\\neq`` and ``\\nu`` keep their backslash.
+    - A backslash before a digit (``\\2^n``, ``\\000``) means nothing in LaTeX
+      or Markdown and is dropped.
+
+    Nothing else is touched: delimiters and formulas are stored as written.
+    """
+    if "\\" not in text:
+        return text
+    output: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\":
+            following = text[index + 1 : index + 2]
+            after = text[index + 2 : index + 3]
+            if following == "n" and not (after.isascii() and after.isalpha()):
+                output.append("\n")
+                index += 2
+                continue
+            if following.isdigit():
+                index += 1
+                continue
+        output.append(char)
         index += 1
     return "".join(output)
 
@@ -287,277 +317,3 @@ def json_loads_with_latex_repair(text: str) -> Any:
         return json.loads(repaired)
     except json.JSONDecodeError:
         return json.loads(repair_json_string_backslashes(repair_json_prose_quotes(text)))
-
-
-# ---------------------------------------------------------------------------
-# Markdown math normalisation
-# ---------------------------------------------------------------------------
-
-
-def _split_code_fences(value: str) -> list[str]:
-    """Split *value* into segments, keeping fenced code blocks intact.
-
-    Uses a linear scan so large inputs with many code fences do not trigger
-    worst-case regex backtracking.
-    """
-    segments: list[str] = []
-    cursor = 0
-    while cursor < len(value):
-        fence_start = value.find("```", cursor)
-        if fence_start == -1:
-            segments.append(value[cursor:])
-            break
-        # Include text before the fence as a non-code segment.
-        if fence_start > cursor:
-            segments.append(value[cursor:fence_start])
-        fence_end = value.find("```", fence_start + 3)
-        if fence_end == -1:
-            # Unclosed fence — treat the rest as a code segment.
-            segments.append(value[fence_start:])
-            break
-        fence_end += 3  # include the closing backticks
-        segments.append(value[fence_start:fence_end])
-        cursor = fence_end
-    return segments
-
-
-def normalize_markdown_math(value: str) -> str:
-    """Repair common Markdown/LaTeX issues in model-generated text.
-
-    Code-fence blocks (```...```) are left untouched.
-    """
-    if not value:
-        return value
-    segments = _split_code_fences(value)
-    return "".join(
-        segment if segment.startswith("```") else _normalize_markdown_math_segment(segment)
-        for segment in segments
-    )
-
-
-def _normalize_markdown_math_segment(value: str) -> str:
-    value = _normalize_escaped_markdown_newlines(value)
-    value = _repair_binary_transition_math_spillover(value)
-    value = _wrap_bare_latex_math(value)
-    return re.sub(
-        r"(\$\$[\s\S]*?\$\$|\$(?!\$)(?:\\.|[^$])*\$)",
-        _normalize_math_match,
-        value,
-    )
-
-
-def _normalize_escaped_markdown_newlines(value: str) -> str:
-    """Convert literal ``\\n`` that precedes Markdown list/heading syntax into real newlines."""
-    return re.sub(
-        r"\\n(?=(?:[ \t]*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s)|\s*$))",
-        "\n",
-        value,
-    )
-
-
-def _repair_binary_transition_math_spillover(value: str) -> str:
-    """Fix binary counting sequences where Chinese punctuation leaked inside ``$...$``."""
-    return re.sub(
-        r"\$((?:[01]{2,}|\\cdots)(?:\s*(?:\\to|\\rightarrow|→)\s*(?:[01]{2,}|\\cdots))+)(\s*)([。；，、](?=[㐀-鿿]))",
-        lambda match: f"${match.group(1)}${match.group(2)}{match.group(3)}",
-        value,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Bare LaTeX → $...$ / $$...$$ wrapping
-# ---------------------------------------------------------------------------
-
-
-def _wrap_bare_latex_math(value: str) -> str:
-    parts = _MARKDOWN_MATH_SPAN_RE.split(value)
-    return "".join(
-        part if part.startswith("$") else _wrap_bare_latex_math_text(part) for part in parts
-    )
-
-
-def _wrap_bare_latex_math_text(value: str) -> str:
-    value = _BARE_LATEX_ENV_RE.sub(
-        lambda match: f"\n\n$$\n{match.group(0).strip()}\n$$\n\n",
-        value,
-    )
-    parts = _MARKDOWN_MATH_SPAN_RE.split(value)
-    return "".join(
-        part if part.startswith("$") else _wrap_bare_latex_inline_math_text(part)
-        for part in parts
-    )
-
-
-def _wrap_bare_latex_inline_math_text(value: str) -> str:
-    output: list[str] = []
-    index = 0
-    while index < len(value):
-        match = _BARE_LATEX_TRIGGER_RE.search(value, index)
-        if not match:
-            output.append(value[index:])
-            break
-        slash_index = match.start()
-        command = match.group(0)[1:]
-        if command not in _LATEX_COMMANDS_REQUIRING_JSON_ESCAPE:
-            output.append(value[index : match.end()])
-            index = match.end()
-            continue
-        expression_start = _bare_latex_expression_start(value, slash_index)
-        expression_end = _bare_latex_expression_end(value, slash_index)
-        if expression_end <= slash_index:
-            output.append(value[index : match.end()])
-            index = match.end()
-            continue
-        output.append(value[index:expression_start])
-        expression = value[expression_start:expression_end].strip()
-        delimiter = "$$" if "\n" in expression else "$"
-        output.append(f"{delimiter}{_normalize_katex_body(expression)}{delimiter}")
-        index = expression_end
-    return "".join(output)
-
-
-def _bare_latex_expression_start(value: str, slash_index: int) -> int:
-    cursor = slash_index - 1
-    while cursor >= 0 and value[cursor] in " \t":
-        cursor -= 1
-    if cursor < 0 or value[cursor] not in "=+-*/(^_":
-        return slash_index
-    start = cursor
-    while start > 0 and value[start - 1] not in "\n\r，。；：！？、":
-        if value[start - 1] in "$`":
-            break
-        start -= 1
-    return start
-
-
-def _bare_latex_expression_end(value: str, slash_index: int) -> int:
-    cursor = slash_index
-    while cursor < len(value):
-        token_end = _consume_latex_math_token(value, cursor)
-        if token_end <= cursor:
-            break
-        cursor = token_end
-        space_start = cursor
-        while cursor < len(value) and value[cursor] in " \t":
-            cursor += 1
-        if not _starts_latex_math_continuation(value, cursor):
-            cursor = space_start
-            break
-    while cursor > slash_index and value[cursor - 1] in " \t.,;:":
-        cursor -= 1
-    return cursor
-
-
-def _starts_latex_math_continuation(value: str, index: int) -> bool:
-    if index >= len(value):
-        return False
-    if value[index] == "\\":
-        command_match = _BARE_LATEX_TRIGGER_RE.match(value, index)
-        return bool(
-            command_match and command_match.group(0)[1:] in _LATEX_COMMANDS_REQUIRING_JSON_ESCAPE
-        )
-    return value[index] in "{}()+-*/=^_[]<>|,." or value[index].isdigit()
-
-
-def _consume_latex_math_token(value: str, index: int) -> int:
-    if index >= len(value) or value[index] in "\n\r，。；：！？、$`":
-        return index
-    if value[index] == "\\":
-        command_match = _BARE_LATEX_TRIGGER_RE.match(value, index)
-        if (
-            not command_match
-            or command_match.group(0)[1:] not in _LATEX_COMMANDS_REQUIRING_JSON_ESCAPE
-        ):
-            return index
-        cursor = command_match.end()
-        if command_match.group(0)[1:] in {"left", "right"}:
-            while cursor < len(value) and value[cursor] in " \t":
-                cursor += 1
-            if cursor < len(value) and value[cursor] not in "\n\r":
-                cursor += 1
-        while True:
-            group_end = _consume_braced_group(value, cursor)
-            if group_end <= cursor:
-                break
-            cursor = group_end
-        return cursor
-    if value[index] == "{":
-        return _consume_braced_group(value, index)
-    if value[index].isdigit():
-        cursor = index + 1
-        while cursor < len(value) and re.match(r"[0-9.eE+-]", value[cursor]):
-            cursor += 1
-        return cursor
-    if value[index] in "()+-*/=^_[]<>|,.":
-        return index + 1
-    return index
-
-
-def _consume_braced_group(value: str, index: int) -> int:
-    if index >= len(value) or value[index] != "{":
-        return index
-    depth = 0
-    cursor = index
-    while cursor < len(value):
-        char = value[cursor]
-        if char == "\\":
-            cursor += 2
-            continue
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return cursor + 1
-        cursor += 1
-    return index
-
-
-def _normalize_math_match(match: re.Match[str]) -> str:
-    segment = match.group(0)
-    delimiter = "$$" if segment.startswith("$$") else "$"
-    if not segment.endswith(delimiter):
-        return segment
-    body = segment[len(delimiter) : -len(delimiter)]
-    return f"{delimiter}{_normalize_katex_body(body)}{delimiter}"
-
-
-def _normalize_katex_body(value: str) -> str:
-    normalized = _normalize_math_vertical_bars(re.sub(r"\\(?=\d)", "", value))
-    if not re.search(r"\\(?:text|mathrm|operatorname)\s*\{", normalized):
-        normalized = re.sub(
-            r"([㐀-鿿，。、；：！？、]+)", r"\\text{\1}", normalized
-        )
-    return normalized
-
-
-def _normalize_math_vertical_bars(value: str) -> str:
-    positions = [
-        index
-        for index, char in enumerate(value)
-        if char == "|" and not _is_escaped_at(value, index)
-    ]
-    if not positions:
-        return value
-    paired = len(positions) % 2 == 0
-    output: list[str] = []
-    bar_index = 0
-    for index, char in enumerate(value):
-        if char == "|" and not _is_escaped_at(value, index):
-            if paired:
-                output.append(r"\lvert{}" if bar_index % 2 == 0 else r"\rvert{}")
-            else:
-                output.append(r"\vert{}")
-            bar_index += 1
-        else:
-            output.append(char)
-    return "".join(output)
-
-
-def _is_escaped_at(value: str, index: int) -> bool:
-    slash_count = 0
-    cursor = index - 1
-    while cursor >= 0 and value[cursor] == "\\":
-        slash_count += 1
-        cursor -= 1
-    return slash_count % 2 == 1

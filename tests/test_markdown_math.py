@@ -7,9 +7,8 @@ import unittest
 
 from pdf_agent.server.json_utils import repair_unicode_surrogates_text
 from pdf_agent.server.markdown_math import (
-    _split_code_fences,
     json_loads_with_latex_repair,
-    normalize_markdown_math,
+    repair_json_escape_artifacts,
     repair_json_string_backslashes,
 )
 
@@ -174,64 +173,29 @@ class JsonLatexRepairTest(unittest.TestCase):
         value = json_loads_with_latex_repair(text)
         self.assertEqual(value["notes"], r"$$\in$$")
 
-    # -- empty / non-string edge cases --------------------------------------
 
-    def test_normalize_markdown_math_empty_and_non_string(self) -> None:
-        self.assertEqual(normalize_markdown_math(""), "")
-        self.assertEqual(
-            normalize_markdown_math("plain text no math"), "plain text no math"
-        )
+class JsonEscapeArtifactsTest(unittest.TestCase):
+    """Post-parse cleanup of what a model's JSON escaping leaves behind."""
 
-    # -- code fence preservation --------------------------------------------
+    def test_double_escaped_newline_becomes_a_line_break(self) -> None:
+        text = r"第一行。\n- 第二项\n\n结尾"
+        self.assertEqual(repair_json_escape_artifacts(text), "第一行。\n- 第二项\n\n结尾")
 
-    def test_normalize_markdown_math_preserves_code_fences(self) -> None:
-        value = "```\n$not math$\n```\nreal $math$ here"
-        result = normalize_markdown_math(value)
-        self.assertIn("```\n$not math$\n```", result)
-        self.assertIn("$math$", result)
+    def test_latex_commands_starting_with_n_keep_their_backslash(self) -> None:
+        text = r"$\nabla f \neq 0$ 且 $\nu > 0$ \nolimits"
+        self.assertEqual(repair_json_escape_artifacts(text), text)
 
-    def test_normalize_markdown_math_protects_vertical_bar_math_in_tables(self) -> None:
-        value = (
-            "| 比较项 | T = 3 | T = 7 |\n"
-            "| --- | --- | --- |\n"
-            r"| 能量密度 | $|X(\omega)|^2$ | $|Y(\omega)|^2$ |"
-        )
-        result = normalize_markdown_math(value)
-        self.assertIn(r"$\lvert{}X(\omega)\rvert{}^2$", result)
-        self.assertIn(r"$\lvert{}Y(\omega)\rvert{}^2$", result)
-        self.assertNotIn(r"$|X(\omega)|^2$", result)
-        self.assertEqual(result.splitlines()[-1].count("|"), 4)
+    def test_backslash_before_a_digit_is_dropped(self) -> None:
+        self.assertEqual(repair_json_escape_artifacts(r"$0 到 \2^n-1$ 和 \000"), "$0 到 2^n-1$ 和 000")
 
-    # -- code fence splitter -------------------------------------------------
+    def test_delimiters_and_formulas_are_left_alone(self) -> None:
+        text = r"写成 \frac{a}{b}，\(x\) 与 \[y\]，金额 \$5，$$z$$"
+        self.assertEqual(repair_json_escape_artifacts(text), text)
+        self.assertEqual(repair_json_escape_artifacts("no backslashes"), "no backslashes")
 
-    def test_split_code_fences_keeps_fenced_block_intact(self) -> None:
-        segments = _split_code_fences("before\n```\n$not math$\n```\nafter")
-        self.assertEqual(segments, ["before\n", "```\n$not math$\n```", "\nafter"])
-
-    def test_split_code_fences_handles_multiple_blocks(self) -> None:
-        segments = _split_code_fences("a\n```\n1\n```\nb\n```\n2\n```\nc")
-        self.assertEqual(len(segments), 5)
-        self.assertEqual(segments[1], "```\n1\n```")
-        self.assertEqual(segments[3], "```\n2\n```")
-
-    def test_split_code_fences_handles_unclosed_fence(self) -> None:
-        segments = _split_code_fences("text\n```\nunclosed block")
-        self.assertEqual(len(segments), 2)
-        self.assertEqual(segments[0], "text\n")
-        self.assertTrue(segments[1].startswith("```"))
-
-    def test_split_code_fences_no_fences_returns_single_segment(self) -> None:
-        segments = _split_code_fences("plain text $math$ here")
-        self.assertEqual(segments, ["plain text $math$ here"])
-
-    def test_split_code_fences_empty_string(self) -> None:
-        self.assertEqual(_split_code_fences(""), [])
-
-    def test_large_text_with_many_fences_is_handled(self) -> None:
-        value = "\n".join(["text"] + ["```\ncode\n```"] * 100 + ["end"])
-        result = normalize_markdown_math(value)
-        self.assertTrue(result.startswith("text\n"))
-        self.assertIn("end", result)
+    def test_idempotent(self) -> None:
+        once = repair_json_escape_artifacts(r"a\n- b \2")
+        self.assertEqual(repair_json_escape_artifacts(once), once)
 
 
 if __name__ == "__main__":
