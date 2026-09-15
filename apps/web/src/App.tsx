@@ -382,6 +382,11 @@ export default function App() {
   const [currentPageNo, setCurrentPageNo] = useState(1);
   const [pdfUrl, setPdfUrl] = useState("");
   const [activeTab, setActiveTab] = useState<ActiveTab>("notes");
+  // Structure and JSON are inspection views; they only exist while Debug mode is on.
+  const notesTabs: ActiveTab[] = uiPreferences.debugMode ? ["notes", "annotations", "structure", "json"] : ["notes", "annotations"];
+  useEffect(() => {
+    if (!uiPreferences.debugMode && (activeTab === "structure" || activeTab === "json")) setActiveTab("notes");
+  }, [activeTab, uiPreferences.debugMode]);
   const [panels, setPanels] = useState<PanelVisibility>(defaultPanelVisibility);
   const [query, setQuery] = useState("");
   const [jobStatus, setJobStatus] = useState(copy.status.localPrototype);
@@ -2715,7 +2720,7 @@ export default function App() {
                       )}
                     </div>
                     <div className="tab-group">
-                      {(["notes", "annotations", "structure", "json"] as const).map((tab) => {
+                      {notesTabs.map((tab) => {
                         const fullLabel = tab === "notes" ? copy.notes.tabNotes : tab === "annotations" ? copy.notes.tabAnnotations : tab === "structure" ? copy.notes.tabStructure : copy.notes.tabJson;
                         const shortLabel = tab === "notes" ? copy.notes.tabNotesShort : tab === "annotations" ? copy.notes.tabAnnotationsShort : tab === "structure" ? copy.notes.tabStructureShort : copy.notes.tabJsonShort;
                         return (
@@ -2739,7 +2744,13 @@ export default function App() {
                 }
               />
               <div className="notes-content">
-                {activeTab === "notes" && <MarkdownBlock markdown={page.teaching.speaker_notes_md} concepts={page.teaching.concepts} />}
+                {activeTab === "notes" && <MarkdownBlock
+                    markdown={page.teaching.speaker_notes_md}
+                    concepts={page.teaching.concepts}
+                    title={page.teaching.slide_title}
+                    pageNo={page.page_no}
+                    pageType={page.source.page_type}
+                  />}
                 {activeTab === "annotations" && (
                   <AnnotationsPanel
                     documentTitle={pack.document.title}
