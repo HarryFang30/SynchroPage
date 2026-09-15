@@ -29,6 +29,7 @@ import {
   TEACHING_PROJECT_MODEL_REQUEST_CONCURRENCY,
   TEACHING_PROJECT_WARMUP_PAGE_COUNT,
   teachingWarmupPageNumbers,
+  unreadableTextRoute,
   type GeneratedTeachingPageResponse,
   type GeneratedTeachingPagesResponse,
   type TeachingGenerationBatch,
@@ -54,13 +55,22 @@ import {
   mergePageIntoPack,
   missingSourceTextPageNumbers,
   normalizeGeneratedPage,
+  pageIsTranscribed,
+  pageTextLayerIsUnreadable,
   pageWithSourceText,
+  pageWithTranscribedText,
   runWithConcurrencyLimit,
   type AsyncLimiter,
   type GenerationFailureClassification,
 } from "../lib/generation/generationRuntime";
 import type { AsyncLimiterPriority } from "../lib/generation/teachingGeneration";
 import { requestJson } from "../lib/http/requestJson";
+import {
+  cachedPdfDirectFileInputFromBlob,
+  cachedPdfDirectFileInputFromUrl,
+  pdfDirectFileCacheKey,
+  type PdfDirectFileInput,
+} from "../lib/pdf/directFile";
 import {
   extractPdfPagesFromBlob,
   mergePdfContextPages,
@@ -81,7 +91,7 @@ import {
   type DocumentSidebarItem,
 } from "../lib/persistence";
 import { hasCompletedTeaching } from "../lib/generation/generationRuntime";
-import type { ModelApiConfig, UiPreferences } from "../settings";
+import type { ModelApiConfig, ModelRef, UiPreferences } from "../settings";
 import type { PanelVisibility } from "../lib/workspace/synchroPageState";
 import {
   buildRunningPageData,
@@ -126,6 +136,11 @@ const TEACHING_RETRY_JITTER_RATIO = 0.3;
 /** Dispatch bound only; the adaptive limiter is the real concurrency knob. */
 const TEACHING_BATCH_DISPATCH_CONCURRENCY = 6;
 const GENERATION_STATUS_REQUEST_TIMEOUT_MS = 5_000;
+/** Pages per transcription request; a page subset this small keeps the input_file light. */
+const TRANSCRIPTION_CHUNK_PAGES = 4;
+const TRANSCRIPTION_CONCURRENCY = 2;
+/** Characters of the noisy extraction handed to the transcriber as a hint for the prose. */
+const TRANSCRIPTION_HINT_CHARS = 600;
 
 type GenerationRequestWatchdogOptions = {
   timeoutMessage?: string;
@@ -174,8 +189,13 @@ export function useGenerationEngine(p: GenerationEngineParams) {
     const pageOutputLanguageLabel = teachingOutputLanguageName(pageOutputLanguage);
     const totalPages = Math.max(p.pdfPageCount || p.pack.document.page_count || p.pack.pages.length || p.pdfExtractedPages.length, 1);
     const sourceTextByPage = new Map<number, string>();
+    // A transcription made earlier outranks the viewer's raw extraction of the
+    // same page, which is the noise the transcription replaced.
+    for (const page of p.pack.pages) {
+      if (pageIsTranscribed(page)) sourceTextByPage.set(page.page_no, page.source.text_md);
+    }
     for (const page of p.pdfExtractedPages) {
-      sourceTextByPage.set(page.page_no, page.text_md);
+      if (!sourceTextByPage.has(page.page_no)) sourceTextByPage.set(page.page_no, page.text_md);
     }
     for (const page of p.pack.pages) {
       if (!sourceTextByPage.has(page.page_no) && page.source.text_md) {
@@ -274,9 +294,12 @@ export function useGenerationEngine(p: GenerationEngineParams) {
 
         // One planning call over the whole deck: segments, per-page role and
         // depth. Failure is not fatal; the backend then judges depth per page.
-        const ensureLessonPlan = async () => {
+        const ensureLessonPlan = async (attachPageNumbers: number[] = []) => {
           if (generationSignal.aborted) return;
           const planRef = p.modelApiConfig.defaults.teachingQuality;
+          // Pages whose text layer is noise travel as a PDF subset so the
+          // planner can see what they teach.
+          const documentFile = attachPageNumbers.length ? await getDocumentFile() : null;
           const reasoningEffort = clampTeachingReasoningEffort(
             "medium",
             teachingModelCapabilities(teachingProviderForPlan(p.modelApiConfig, planRef.providerId), planRef.model),
@@ -299,6 +322,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                     outputLanguageLabel: pageOutputLanguageLabel,
                     uiLanguage: p.uiPreferences.language,
                     pages: lessonPlanRequestPages(workingPack.pages),
+                    ...(documentFile ? { documentFile, attachPages: attachPageNumbers } : {}),
                   }),
                   signal: requestSignal,
                 },
@@ -338,6 +362,65 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           scopedPages = workingPack.pages.filter((item) => targetPageSet.has(item.page_no));
           pagesToGenerate = prioritizeTeachingPages(scopedPages.filter(needsWork), p.currentPdfPageNo);
           p.setPack(workingPack);
+        };
+
+        const getDocumentFile = () =>
+          cachedPdfDirectFileInputFromUrl(p.pdfUrl, workingPack.document.source_pdf_url || workingPack.document.title).catch(() => null);
+        const applyTranscribedPages = (texts: ReadonlyMap<number, string>) => {
+          for (const [pageNo, text] of texts) sourceTextByPage.set(pageNo, text);
+          extractedPagesForGeneration = mergePdfContextPages(
+            extractedPagesForGeneration,
+            [...texts].map(([page_no, text_md]) => ({ page_no, title: `PDF p.${page_no}`, text_md })),
+          );
+          p.setPdfExtractedPages(extractedPagesForGeneration);
+          workingPack = {
+            ...workingPack,
+            pages: workingPack.pages.map((page) =>
+              texts.has(page.page_no) ? pageWithTranscribedText(page, texts.get(page.page_no) || "") : page,
+            ),
+          };
+          workingPagesByNumber = new Map(workingPack.pages.map((item) => [item.page_no, item]));
+          scopedPages = workingPack.pages.filter((item) => targetPageSet.has(item.page_no));
+          pagesToGenerate = prioritizeTeachingPages(scopedPages.filter(needsWork), p.currentPdfPageNo);
+          p.setPack(workingPack);
+        };
+        const textRoute = unreadableTextRoute(p.modelApiConfig);
+        let unreadableNoticeShown = false;
+        // Pages whose text layer came out as noise (formulas drawn with an
+        // embedded font). Returns the page numbers the planner should receive
+        // as attached PDF pages; the rest were transcribed, or nothing here
+        // can read them and the prompt says so.
+        const prepareUnreadablePages = async (pageNumbers: number[]): Promise<number[]> => {
+          const unreadable = pageNumbers
+            .map((pageNo) => workingPagesByNumber.get(pageNo))
+            .filter((page): page is PageData => Boolean(page && pageTextLayerIsUnreadable(page)));
+          if (!unreadable.length || generationSignal.aborted) return [];
+          if (textRoute.mode === "transcribe" && p.pdfUrl) {
+            p.setJobStatus(p.copy.status.generationTranscribing(0, unreadable.length));
+            const transcribed = await transcribeUnreadablePages(unreadable, {
+              ref: textRoute.ref,
+              document: workingPack.document,
+              pageCount: totalPages,
+              outputLanguage: pageOutputLanguage,
+              uiLanguage: p.uiPreferences.language,
+              getDocumentFile,
+              signal: generationSignal,
+              copy: p.copy,
+              runtimeLimits,
+              onProgress: (done, total) => p.setJobStatus(p.copy.status.generationTranscribing(done, total)),
+            });
+            if (generationSignal.aborted) return [];
+            if (transcribed.size) applyTranscribedPages(transcribed);
+            const failed = unreadable.length - transcribed.size;
+            if (failed) p.setJobStatus(p.copy.status.generationTranscriptionFailed(failed));
+            return [];
+          }
+          if (textRoute.mode === "attach" && p.pdfUrl) return unreadable.map((page) => page.page_no);
+          if (!unreadableNoticeShown) {
+            unreadableNoticeShown = true;
+            p.setJobStatus(p.copy.status.generationTextLayerUnreadable(unreadable.length));
+          }
+          return [];
         };
 
         const runGenerationPass = async (passPagesToGenerate: PageData[], contextPages: PdfContextPage[]) => {
@@ -591,7 +674,9 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               : null;
             if (extracted?.pages.length) mergeExtractedPages(extracted.pages);
             if (generationSignal.aborted) return;
-            await ensureLessonPlan();
+            const attachPageNumbers = await prepareUnreadablePages(allPageNumbers);
+            if (generationSignal.aborted) return;
+            await ensureLessonPlan(attachPageNumbers);
             if (generationSignal.aborted) return;
             await runGenerationPass(currentPagesToGenerate(), extractedPagesForGeneration);
           } else if (pdfBlob && missingTargetSourceText.length > TEACHING_PROJECT_WARMUP_PAGE_COUNT) {
@@ -611,6 +696,8 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 })
               : null;
             if (warmupExtracted?.pages.length) mergeExtractedPages(warmupExtracted.pages);
+            if (generationSignal.aborted) return;
+            await prepareUnreadablePages(warmupPageNumbers);
             if (generationSignal.aborted) return;
 
             const remainingExtractionPageNumbers = teachingExtractionPageNumbers(totalPages, targetPageNumbers)
@@ -636,6 +723,8 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             const remainingExtracted = await remainingExtractionPromise;
             if (remainingExtracted?.pages.length) mergeExtractedPages(remainingExtracted.pages);
             if (generationSignal.aborted) return;
+            await prepareUnreadablePages(targetPageNumbers);
+            if (generationSignal.aborted) return;
             // Always recompute from the live workingPack: scopedPages is a
             // pre-run snapshot and would re-select pages the warm-up pass just
             // finished (F14).
@@ -652,13 +741,21 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             });
             if (extracted?.pages.length) mergeExtractedPages(extracted.pages);
             if (generationSignal.aborted) return;
+            await prepareUnreadablePages(targetPageNumbers);
+            if (generationSignal.aborted) return;
             await runGenerationPass(pagesToGenerate, extractedPagesForGeneration);
           } else {
             await runGenerationPass(pagesToGenerate, extractedPagesForGeneration);
           }
         } else {
           if (generationSignal.aborted) return;
-          if (needsPlan) await ensureLessonPlan();
+          if (needsPlan) {
+            const attachPageNumbers = await prepareUnreadablePages(allPageNumbers);
+            if (generationSignal.aborted) return;
+            await ensureLessonPlan(attachPageNumbers);
+          } else {
+            await prepareUnreadablePages(targetPageNumbers);
+          }
           if (generationSignal.aborted) return;
           await runGenerationPass(currentPagesToGenerate(), extractedPagesForGeneration);
         }
@@ -888,6 +985,43 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             if (item.documentId === _documentId) p.setPack(workingPack);
             persistQueue.enqueue(generatedPage);
           };
+
+          // Pages whose text layer is noise: transcribe them from the page
+          // image when a PDF-capable provider exists. The project flow never
+          // plans, so there is no planner to hand PDF pages to; the quality
+          // model attaches them itself when it can read PDFs.
+          const projectTextRoute = unreadableTextRoute(p.modelApiConfig);
+          const projectUnreadablePages = initialPagesToGenerate.filter((page) => pageTextLayerIsUnreadable(page));
+          if (projectUnreadablePages.length && projectTextRoute.mode === "transcribe" && !generationSignal.aborted) {
+            const transcribed = await transcribeUnreadablePages(projectUnreadablePages, {
+              ref: projectTextRoute.ref,
+              document: workingPack.document,
+              pageCount: totalPages,
+              outputLanguage: p.teachingOutputLanguage,
+              uiLanguage: p.uiPreferences.language,
+              getDocumentFile: () =>
+                cachedPdfDirectFileInputFromBlob(
+                  pdfBlob,
+                  bundle.document.fileName,
+                  pdfDirectFileCacheKey(_workspaceId, item.documentId),
+                ).catch(() => null),
+              signal: generationSignal,
+              copy: p.copy,
+              runtimeLimits,
+              onProgress: (done, total) => p.setJobStatus(p.copy.status.generationTranscribing(done, total)),
+            });
+            if (generationSignal.aborted) return;
+            if (transcribed.size) {
+              mergeExtractedPages([...transcribed].map(([page_no, text_md]) => ({ page_no, title: `PDF p.${page_no}`, text_md })));
+              workingPagesByNumber = new Map(
+                workingPack.pages.map((page) => [
+                  page.page_no,
+                  transcribed.has(page.page_no) ? pageWithTranscribedText(page, transcribed.get(page.page_no) || "") : page,
+                ]),
+              );
+              rebuildWorkingPack();
+            }
+          }
 
           const runGenerationPass = async (passPagesToGenerate: PageData[], contextPages: PdfContextPage[]) => {
             if (!passPagesToGenerate.length || generationSignal.aborted) return;
@@ -1197,6 +1331,86 @@ export function useGenerationEngine(p: GenerationEngineParams) {
   ]);
 
   return { handleGenerateNotes, handleGenerateProjectMissingNotes };
+}
+
+type TranscriptionResponse = {
+  pages?: Array<{ page_no?: number; text_md?: string; unreadable?: boolean }>;
+};
+
+type TranscribeUnreadablePagesOptions = {
+  ref: ModelRef;
+  document: PagePack["document"];
+  pageCount: number;
+  outputLanguage: TeachingOutputLanguage;
+  uiLanguage: string;
+  getDocumentFile: () => Promise<PdfDirectFileInput | null>;
+  signal: AbortSignal;
+  copy: AppCopy;
+  runtimeLimits: GenerationRuntimeLimits;
+  onProgress: (done: number, total: number) => void;
+};
+
+/**
+ * Transcribes pages whose text layer is noise from their PDF pages, a few
+ * pages per request, with a provider that accepts PDF input. Returns the text
+ * of every page that came back readable; a failed chunk only costs its own
+ * pages, which keep their extracted text (the caller reports how many).
+ */
+async function transcribeUnreadablePages(
+  pages: PageData[],
+  options: TranscribeUnreadablePagesOptions,
+): Promise<Map<number, string>> {
+  const results = new Map<number, string>();
+  const ordered = pages.slice().sort((left, right) => left.page_no - right.page_no);
+  const chunks: PageData[][] = [];
+  for (let index = 0; index < ordered.length; index += TRANSCRIPTION_CHUNK_PAGES) {
+    chunks.push(ordered.slice(index, index + TRANSCRIPTION_CHUNK_PAGES));
+  }
+  const documentFile = await options.getDocumentFile();
+  if (!documentFile || options.signal.aborted) return results;
+  let done = 0;
+  await runWithConcurrencyLimit(chunks, TRANSCRIPTION_CONCURRENCY, async (chunk) => {
+    if (options.signal.aborted) return;
+    const timeoutMs = teachingRequestTimeoutMs("medium", chunk.length, options.runtimeLimits.deadlines);
+    try {
+      const response = await runGenerationRequestWithTimeout(options.signal, timeoutMs, (requestSignal) =>
+        requestJson<TranscriptionResponse>(
+          "/api/generate/transcribe",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              modelProviderId: options.ref.providerId,
+              model: options.ref.model,
+              reasoningEffort: "low",
+              document: { id: options.document.id, title: options.document.title, page_count: options.pageCount },
+              pageCount: options.pageCount,
+              outputLanguage: options.outputLanguage,
+              uiLanguage: options.uiLanguage,
+              documentFile,
+              pages: chunk.map((page) => ({
+                page_no: page.page_no,
+                text_md: page.source.text_md.replace(/\s+/g, " ").trim().slice(0, TRANSCRIPTION_HINT_CHARS),
+              })),
+            }),
+            signal: requestSignal,
+          },
+          options.copy.errors.accountNotFound,
+        ),
+      { timeoutMessage: options.copy.errors.generationRequestTimedOut(timeoutSeconds(timeoutMs)) });
+      for (const item of response.pages ?? []) {
+        const pageNo = Number(item.page_no);
+        const text = typeof item.text_md === "string" ? item.text_md.trim() : "";
+        if (Number.isFinite(pageNo) && text && !item.unreadable) results.set(pageNo, text);
+      }
+    } catch (error) {
+      if (options.signal.aborted || isAbortError(error)) throw error;
+      // This chunk keeps its extracted text; the caller reports the count.
+    } finally {
+      done += chunk.length;
+      if (!options.signal.aborted) options.onProgress(Math.min(done, ordered.length), ordered.length);
+    }
+  }, { signal: options.signal });
+  return results;
 }
 
 type GeneratePageWithAutoRetryOptions = {

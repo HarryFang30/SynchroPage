@@ -61,6 +61,9 @@ def default_model_config_path() -> Path:
 # Backwards-compatible alias for callers that imported the old constant.
 DEFAULT_MODEL_CONFIG_PATH = default_model_config_path()
 MODEL_REF_KEYS = frozenset({"assistant", "teachingFast", "teachingBalanced", "teachingQuality"})
+#: Optional default: the model that transcribes pages whose text layer is
+#: unreadable. Absent means "pick a provider that accepts PDF input".
+OPTIONAL_MODEL_REF_KEYS = frozenset({"transcription"})
 LEGACY_PROVIDER_ID_ALIASES = {
     "openai_api": "openai",
     "siliconflow": "silicon",
@@ -449,6 +452,20 @@ def _normalize_defaults(value: Any, providers_by_id: Mapping[str, Mapping[str, A
             if isinstance(models, list) and models:
                 model = string_value(models[0], model)
         normalized[key] = {"providerId": provider_id, "model": model}
+    for key in OPTIONAL_MODEL_REF_KEYS:
+        raw_ref = raw_defaults.get(key)
+        if not isinstance(raw_ref, Mapping):
+            continue
+        provider_id = _canonical_provider_id(raw_ref.get("providerId"))
+        provider = providers_by_id.get(provider_id)
+        if provider is None:
+            continue
+        models = provider.get("models")
+        model = string_value(raw_ref.get("model"), "")
+        if not model and isinstance(models, list) and models:
+            model = string_value(models[0], "")
+        if model:
+            normalized[key] = {"providerId": provider_id, "model": model}
     return normalized
 
 

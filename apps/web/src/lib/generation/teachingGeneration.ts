@@ -1,5 +1,6 @@
 import type { ModelApiConfig, ModelApiProvider, ModelRef, UiPreferences } from "../../settings";
 import type { PdfContextPage, PdfContextPayload } from "../pdf/textExtraction";
+import { TRANSCRIPTION_PARSER } from "../pdf/textQuality";
 import {
   LESSON_PLAN_SEGMENT_CHUNK_PAGES,
   lessonPlanRow,
@@ -51,6 +52,8 @@ export type PageData = {
     ocr_used: boolean;
     parser: string;
     page_type?: string;
+    /** The extracted text is noise (formulas drawn with an embedded font); set by the extractor check. */
+    text_garbled?: boolean;
   };
   teaching: {
     output_language?: TeachingOutputLanguage;
@@ -272,6 +275,51 @@ export function teachingProviderForPlan(
   return config?.providers.find((provider) => provider.id === providerId);
 }
 
+/**
+ * Whether a provider's requests carry the PDF as an input_file. Only the
+ * Responses-style adapters (OpenAI Responses, the ChatGPT Codex backend, and
+ * gateways flagged pdfInputFile) pass it through; every Chat Completions
+ * adapter drops the file and leaves a note in its place.
+ */
+export function providerSupportsPdfInput(provider: ModelApiProvider | undefined) {
+  if (!provider || !provider.enabled) return false;
+  const flag = provider.apiFeatures?.pdfInputFile;
+  if (typeof flag === "boolean") return flag;
+  return provider.type === "openai-responses" || provider.type === "codex-oauth";
+}
+
+/** The quality model, which every attachPdf request goes to, can see the PDF page itself. */
+export function teachingQualityProviderReadsPdf(config?: ModelApiConfig) {
+  const ref = teachingModelDefaults(config).quality;
+  return providerSupportsPdfInput(teachingProviderForPlan(config, ref.providerId));
+}
+
+export type UnreadableTextRoute =
+  | { mode: "attach" }
+  | { mode: "transcribe"; ref: ModelRef }
+  | { mode: "none" };
+
+/**
+ * How a page whose text layer is noise reaches a model that can see it:
+ * attach the PDF page to the teaching (and planning) request when the quality
+ * model reads PDFs; otherwise transcribe the page once with a provider that
+ * does (the configured transcription default, else the first enabled one);
+ * otherwise nothing can see the page and the prompt says so.
+ */
+export function unreadableTextRoute(config?: ModelApiConfig): UnreadableTextRoute {
+  if (teachingQualityProviderReadsPdf(config)) return { mode: "attach" };
+  const configured = config?.defaults.transcription;
+  if (configured && providerSupportsPdfInput(teachingProviderForPlan(config, configured.providerId))) {
+    return { mode: "transcribe", ref: configured };
+  }
+  for (const provider of config?.providers ?? []) {
+    if (!providerSupportsPdfInput(provider)) continue;
+    const model = provider.models.find((item) => item.trim());
+    if (model) return { mode: "transcribe", ref: { providerId: provider.id, model } };
+  }
+  return { mode: "none" };
+}
+
 /** gpt-6 style models: content pages get a medium floor, tiny pages stay low. */
 function teachingModelEffortFloor(
   capabilities: TeachingModelCapabilities,
@@ -348,6 +396,12 @@ export function teachingGenerationQualityPlan(
   const previousWeak =
     Boolean(page.teaching.needs_review) ||
     Boolean(page.teaching.needs_parser_fallback);
+  // The extractor check flagged the text layer as noise (formulas drawn with
+  // an embedded font). The page itself must reach the model: attached, when
+  // the quality model reads PDFs; otherwise the prompt is told the text is
+  // unreadable, and retrying on the same noise gains nothing.
+  const garbledText = Boolean(page.source.text_garbled) && page.source.parser !== TRANSCRIPTION_PARSER;
+  const garbledPageAttachable = garbledText && teachingQualityProviderReadsPdf(modelApiConfig);
 
   let requestedReasoning: UiPreferences["modelReasoningEffort"] =
     sourceText.length <= TEACHING_TEXT_COMPACT_PAGE_MAX_CHARS ? "none" : "low";
@@ -389,6 +443,17 @@ export function teachingGenerationQualityPlan(
     retryOnWeakOutput = false;
   }
 
+  if (garbledPageAttachable) {
+    reasons.push("garbled-source-text");
+    requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, "medium");
+    attachPdf = true;
+    batchable = false;
+    retryOnWeakOutput = true;
+  } else if (garbledText) {
+    reasons.push("garbled-source-text-unreadable");
+    retryOnWeakOutput = false;
+  }
+
   if (visualLike && sourceText.length <= TEACHING_VISUAL_TEXT_MAX_CHARS) {
     reasons.push("visual-heavy");
     requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, "medium");
@@ -413,6 +478,9 @@ export function teachingGenerationQualityPlan(
     retryOnWeakOutput = false;
   }
 
+  // No model in this configuration can read the page: attaching the PDF for
+  // it would only upload a file the adapter drops.
+  if (garbledText && !garbledPageAttachable) attachPdf = false;
   if (attachPdf) batchable = false;
 
   if (!reasons.length) reasons.push("text-fast-path");
@@ -552,6 +620,7 @@ export function teachingRequestPage(page: PageData, plan: TeachingGenerationQual
       ocr_used: page.source.ocr_used,
       parser: page.source.parser,
       page_type: page.source.page_type,
+      ...(page.source.text_garbled ? { text_garbled: true } : {}),
     },
     teaching: {
       output_language: page.teaching.output_language,

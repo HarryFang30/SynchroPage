@@ -71,6 +71,10 @@
             "parser": {
               "type": "string"
             },
+            "text_garbled": {
+              "type": "boolean",
+              "description": "The extracted text layer is unreadable (formulas drawn with an embedded font came out as stray symbols)."
+            },
             "page_type": {
               "type": "string",
               "enum": [

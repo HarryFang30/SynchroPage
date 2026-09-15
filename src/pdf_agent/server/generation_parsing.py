@@ -10,7 +10,11 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from pdf_agent.server.constants import TEACHING_DEPTHS, TEACHING_PAGE_ROLES
+from pdf_agent.server.constants import (
+    TEACHING_DEPTHS,
+    TEACHING_PAGE_ROLES,
+    TRANSCRIPTION_PARSER,
+)
 from pdf_agent.server.document_context import _pdf_file_input
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.markdown_math import (
@@ -23,6 +27,7 @@ from pdf_agent.server.payload_builders import (
     _lesson_plan_pages,
     _teaching_generation_pages,
     _teaching_output_language,
+    _transcription_pages,
 )
 from pdf_agent.server.pdf_file_cache import PdfFileCache
 from pdf_agent.server.value_utils import (
@@ -204,6 +209,7 @@ def _normalize_generated_page_candidate(
             "ocr_used": bool(source.get("ocr_used") or source_input.get("ocr_used") or False),
             "parser": _string_value(source.get("parser") or source_input.get("parser"), "pdfjs"),
             "page_type": _page_type_value(source.get("page_type") or source_input.get("page_type")),
+            **({"text_garbled": True} if bool(source_input.get("text_garbled")) else {}),
         },
         "teaching": {
             "output_language": output_language_code,
@@ -314,6 +320,45 @@ def normalize_lesson_plan(value: Mapping[str, Any], page_numbers: list[int]) -> 
         "segments": segments,
         "pages": rows,
     }
+
+
+# ---------------------------------------------------------------------------
+# Page transcription parsing
+# ---------------------------------------------------------------------------
+
+
+def _parse_transcription(content: str, body: Mapping[str, Any]) -> dict[str, Any]:
+    """One row per requested page; a page the model skipped or could not read is ``unreadable``."""
+    requested = [page_no for page_no in (_int_value(item.get("page_no"), 0) for item in _transcription_pages(body)) if page_no > 0]
+    if not requested:
+        raise HttpError(400, "Transcription request did not contain pages", code="invalid_request")
+    value = _json_from_model_text(content)
+    rows = value.get("pages") if isinstance(value, Mapping) else value
+    if not isinstance(rows, list):
+        raise HttpError(502, "Transcription response did not contain pages", code="invalid_generation_json")
+    by_page: dict[int, Mapping[str, Any]] = {}
+    for item in rows:
+        if isinstance(item, Mapping):
+            page_no = _int_value(item.get("page_no"), 0)
+            if page_no in requested and page_no not in by_page:
+                by_page[page_no] = item
+    pages: list[dict[str, Any]] = []
+    for page_no in requested:
+        item = by_page.get(page_no, {})
+        text = _normalize_markdown_math(str(item.get("text_md") or "").strip())
+        unreadable = bool(item.get("unreadable")) or not text
+        pages.append(
+            {
+                "page_no": page_no,
+                "text_md": "" if unreadable else text,
+                "unreadable": unreadable,
+                "ocr_used": not unreadable,
+                "parser": TRANSCRIPTION_PARSER if not unreadable else "pdfjs",
+            }
+        )
+    if all(page["unreadable"] for page in pages):
+        raise HttpError(502, "Transcription response did not transcribe any page", code="invalid_generation_json")
+    return {"pages": pages}
 
 
 def _json_from_model_text(content: str) -> Any:

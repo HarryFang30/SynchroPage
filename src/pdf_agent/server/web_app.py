@@ -237,6 +237,9 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/generate/plan":
                 body = self._read_json()
                 self._send_json(self.server.runner.run(self.server.teaching_gateway.generate_plan(body)))
+            elif path == "/api/generate/transcribe":
+                body = self._read_json()
+                self._send_json(self.server.runner.run(self.server.teaching_gateway.generate_transcription(body)))
             else:
                 raise HttpError(404, f"Route not found: {path}", code="not_found")
         except Exception as exc:

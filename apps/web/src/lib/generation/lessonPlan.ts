@@ -5,6 +5,7 @@
  *
  * Pure module: no React, no DOM.
  */
+import { TRANSCRIPTION_PARSER } from "../pdf/textQuality";
 import type { PageData, TeachingOutputLanguage } from "./teachingGeneration";
 
 export type LessonPlanDepth = "skim" | "brief" | "full";
@@ -203,13 +204,19 @@ export function lessonPlanRequestSlice(
   return { document_summary: plan.document_summary, segment, pages, handoff };
 }
 
-/** Compact page texts for the planning request. */
+/**
+ * Compact page texts for the planning request. A page whose text layer is
+ * noise is flagged so the planner judges it from its title and neighbours (or
+ * from the attached PDF page); a transcribed page is marked as such.
+ */
 export function lessonPlanRequestPages(pages: PageData[]) {
   return pages.map((page) => {
     const text = page.source.text_md.replace(/\s+/g, " ").trim();
+    const transcribed = page.source.parser === TRANSCRIPTION_PARSER && Boolean(text);
     return {
       page_no: page.page_no,
       text_md: text.length > LESSON_PLAN_PAGE_TEXT_CHARS ? `${text.slice(0, LESSON_PLAN_PAGE_TEXT_CHARS - 1)}…` : text,
+      ...(transcribed ? { transcribed: true } : page.source.text_garbled ? { garbled: true } : {}),
     };
   });
 }

@@ -356,9 +356,9 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 
 1. 用上传按钮导入 PDF。
 2. 如果已有生成结果，用 JSON 按钮导入 `synchropage.lecture.v1` 文件。
-3. 通过左侧页列表或 PDF pane toolbar 切换页面。打开 / 关闭侧栏或缩放窗口时，PDF 视图会保持在同一页的同一位置。
+3. 通过 PDF pane toolbar、讲解区的「地图」或直接滚动切换页面。打开 / 关闭侧栏或缩放窗口时，PDF 视图会保持在同一页的同一位置。
 4. 中间区域查看原 PDF 页面；当前实现优先走 PDF.js canvas + transparent text layer，失败时回退原生 PDF 预览。
-5. 讲解区在「讲解 / 笔记」之间切换；打开 设置 → 高级 → Debug 模式 后会多出「结构 / JSON」两个检查用的标签页。生成菜单里「整份 PDF」会重新备课并重写所有页，「补齐缺失」只生成还没有讲解的页。
+5. 讲解区在「讲解 / 笔记 / 地图」之间切换：「地图」是课程地图，备课之后按段列出每段讲什么、每页的角色和详略、★ 重点页、每页讲解是否已生成，点任一页就跳到 PDF 的那一页。打开 设置 → 高级 → Debug 模式 后会多出「结构 / JSON」两个检查用的标签页。生成菜单里「整份 PDF」会重新备课并重写所有页，「补齐缺失」只生成还没有讲解的页。
 6. 在 PDF 页面真实可见文字上拖选文本，浮动工具条可「添加到对话 / 解释选中内容 / 总结选中内容」。
 7. 在 Agent 面板中加入当前页、PDF 选区、公式或图片。
 8. 在 composer 中提问，后端会带上当前 PDF context、选中文字、页码位置、上下文 chips、最近对话和图片附件。
@@ -383,8 +383,21 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 
 页面 JSON 里仍然有 `stuck_points` 和 `exam_angles` 两个数组，只给测验出题当干扰项素材，不再展示在讲解里。质量门槛按深度放宽：略讲页只要非空，简讲页 30 字以下才重试，详讲页沿用原来的 90 / 180 字阈值。讲解语言跟随界面语言（设置里也可以单独指定），换语言会重新备课。
 
-界面上：讲解顶部显示页码 · 角色 · 深度，重点页带 ★（PDF 页标签也带 ★）；略讲的承接页有「这一段从 p.N 讲起」的链接；五件教具渲染成各自颜色的引用块（`apps/web/src/components/workspace/WorkspaceChrome.tsx` 的 `NoteDeviceQuote`）。旧版带 `## ` 小标题的讲解仍按小节渲染（`apps/web/src/lib/notes/noteSections.ts`）。
+界面上：讲解顶部显示页码 · 角色 · 深度，重点页带 ★（PDF 页标签也带 ★）；「地图」标签页把整份备课计划摊开成课程地图（`apps/web/src/components/workspace/LessonMapPanel.tsx`）：文档摘要、重点页一排、每段的标题 / 页码范围 / 目标，段里每页一行——页码、一到三格的详略条、角色、★、备课备注和已讲解 / 生成中 / 失败的状态点，当前页高亮，点一行跳到 PDF 对应页；略讲的承接页有「这一段从 p.N 讲起」的链接；五件教具渲染成各自颜色的引用块（`apps/web/src/components/workspace/WorkspaceChrome.tsx` 的 `NoteDeviceQuote`）。旧版带 `## ` 小标题的讲解仍按小节渲染（`apps/web/src/lib/notes/noteSections.ts`）。
 Prompt 定义在 `src/pdf_agent/server/constants.py`（`TEACHING_PLANNER_INSTRUCTIONS`、`TEACHING_GENERATOR_INSTRUCTIONS`、`TEACHING_DEVICE_LABELS`）与 `payload_builders.py`，中文版契约见 [config/prompts/course_agent.prompt.yaml](config/prompts/course_agent.prompt.yaml)。模型在中文里用英文直引号把 JSON 截断时，服务端会把不挨着 JSON 结构的直引号转成弯引号再解析（`markdown_math.repair_json_prose_quotes`）。
+
+### 文字层不可读的页（公式是嵌入字体）
+
+有些课件（比如 EECS 445 的 Lecture 4）把公式画成嵌入字体、没有可用的 ToUnicode 映射，PDF.js 抽出来的文字里公式变成一串 `! = 0 , ̅ & (") = ' 0` 这样的乱码，而正文还在，所以"没有文字层"的判断不会触发，只走文字的讲解会对着噪声胡讲。现在的处理：
+
+1. **识别**：每页抽完文字后用 `apps/web/src/lib/pdf/textQuality.ts` 打分：没有字母、只由孤零零的引号 / 美元号 / 感叹号 / 组合字符 / 私用区字符 / `(cid:N)` 组成的 token 算噪声，噪声占比过线就把 `source.text_garbled` 记为 true（Lecture 4 的 28 页标出 10 页，普通课件、论文和代码页不会误报；纯函数，Playwright `e2e/textQuality.spec.ts` 有样例）。
+2. **路径**（`unreadableTextRoute`，按当前模型配置自动选）：
+   - 质量档模型的 provider 能读 PDF（OpenAI Responses、ChatGPT Codex，或 `apiFeatures.pdfInputFile: true` 的网关，比如 coproxy）：这些页在讲课请求里附上 PDF 页面（`qualityPlan.reasons` 带 `garbled-source-text`，单页请求），备课请求也把它们作为 PDF 子集附上（`attachPages`，每个分段最多 40 页），模型直接看页面。
+   - 质量档读不了 PDF（比如 DeepSeek 这类 Chat Completions 接口，后端会把文件丢掉），但配置里还有一个启用的、能读 PDF 的 provider：先调用 `POST /api/generate/transcribe`（每次最多 8 页、前端 4 页一组），让那个模型把页面图像**转写**成带 LaTeX 的 Markdown，替换掉乱码文字（`source.parser = "model-transcription"`、`ocr_used = true`），备课和讲课都用转写后的文字；转写后的页随文档持久化，重新打开也不会被 PDF.js 的乱码盖掉。转写用哪个模型可以在 `~/.pdf_agent/model_providers.json` 的 `defaults.transcription` 指定，不指定时取第一个启用且能读 PDF 的 provider 的第一个模型。
+   - 什么都读不了：状态栏提示有几页读不了，prompt 里明确告诉模型这页的文字是噪声，只按标题、备课备注和前后页来讲，说清楚哪条公式看不到，并标为待复核（`needs_review`）。
+3. **界面**：讲解头部和课程地图里，转写过的页带绿色的「页面转写」标签，仍不可读的页带琥珀色的「文字层不可读」标签。
+
+Prompt 在 `constants.py` 的 `TEACHING_TRANSCRIBER_INSTRUCTIONS`，`payload_builders._source_text_layer_lines` 负责讲课 / 备课 prompt 里的 `text_layer:` 说明。
 
 ### 字体
 
@@ -483,6 +496,8 @@ GET    /api/health
 POST   /api/agent/chat
 POST   /api/generate/page
 POST   /api/generate/pages      部分成功时返回 pages + missing
+POST   /api/generate/plan       备课：整份文档的段落 / 每页角色与详略 / 重点页（>100 页分段读；文字层不可读的页可随 documentFile + attachPages 附上 PDF 子集）
+POST   /api/generate/transcribe 把文字层不可读的页（≤8 页/次，必须带 documentFile）从 PDF 页面转写成带 LaTeX 的 Markdown
 GET    /api/generate/status     活跃 / 排队 / 冷却 / 截止时间
 GET    /api/model-config
 POST   /api/model-config

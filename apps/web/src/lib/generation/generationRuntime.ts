@@ -10,6 +10,7 @@ import {
   type TeachingOutputLanguage,
 } from "./teachingGeneration";
 import { HttpRequestError } from "../http/requestJson";
+import { sourceTextLooksGarbled, TRANSCRIPTION_PARSER } from "../pdf/textQuality";
 
 export type GenerationPageStatus = "done" | "running" | "retrying" | "failed" | "pending";
 
@@ -145,7 +146,9 @@ export function normalizeGeneratedPage(rawPage: GeneratedTeachingPageResponse["p
       pdf_page_ref: normalized.source.pdf_page_ref || fallback.source.pdf_page_ref || `#page=${fallback.page_no}`,
       text_md: fallback.source.text_md || normalized.source.text_md,
       ocr_used: Boolean(normalized.source.ocr_used || fallback.source.ocr_used),
-      parser: normalized.source.parser || fallback.source.parser || "pdfjs",
+      // A transcribed page keeps its provenance whatever the model echoed back.
+      parser: pageIsTranscribed(fallback) ? TRANSCRIPTION_PARSER : normalized.source.parser || fallback.source.parser || "pdfjs",
+      text_garbled: pageIsTranscribed(fallback) ? false : Boolean(fallback.source.text_garbled || rawSource.text_garbled),
       // The model only echoes page_type when asked; a missing value must not
       // erase a classification the page already carries.
       page_type: normalized.source.page_type || fallback.source.page_type,
@@ -207,12 +210,40 @@ export function mergePageIntoPack(pack: PagePack, page: PageData): PagePack {
 }
 
 export function pageWithSourceText(page: PageData, sourceText: string): PageData {
+  // A transcription replaced an unreadable text layer; the raw extraction
+  // (which is what the viewer re-extracts on every load) must not undo it.
+  if (pageIsTranscribed(page)) return page;
+  const text = sourceText || page.source.text_md;
   return {
     ...page,
     source: {
       ...page.source,
-      text_md: sourceText || page.source.text_md,
+      text_md: text,
       parser: page.source.parser || "pdfjs",
+      text_garbled: sourceTextLooksGarbled(text),
+    },
+  };
+}
+
+/** The page's text came from a model reading the page image, not from the PDF's text layer. */
+export function pageIsTranscribed(page: Pick<PageData, "source">) {
+  return page.source.parser === TRANSCRIPTION_PARSER && Boolean(page.source.text_md.trim());
+}
+
+/** Flagged as noise by the extractor check and not yet replaced by a transcription. */
+export function pageTextLayerIsUnreadable(page: Pick<PageData, "source">) {
+  return Boolean(page.source.text_garbled) && !pageIsTranscribed(page);
+}
+
+export function pageWithTranscribedText(page: PageData, text: string): PageData {
+  return {
+    ...page,
+    source: {
+      ...page.source,
+      text_md: text,
+      ocr_used: true,
+      parser: TRANSCRIPTION_PARSER,
+      text_garbled: false,
     },
   };
 }

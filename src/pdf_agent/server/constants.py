@@ -138,6 +138,31 @@ LESSON_PLAN_VERSION = "synchropage.lesson-plan.v1"
 LESSON_PLAN_CHUNK_PAGES = 100
 #: Characters of page text shown to the planner per page.
 LESSON_PLAN_PAGE_TEXT_CHARS = 400
+#: Pages of one planning chunk attached as a PDF subset when their text layer is unreadable.
+LESSON_PLAN_MAX_PDF_PAGES = 40
+
+#: ``source.parser`` of a page whose text a model transcribed from the page image.
+TRANSCRIPTION_PARSER = "model-transcription"
+#: Pages one transcription request may cover.
+TRANSCRIPTION_MAX_PAGES = 8
+#: Characters of the (noisy) extracted text handed to the transcriber as a hint.
+TRANSCRIPTION_HINT_CHARS = 600
+
+TEACHING_TRANSCRIBER_INSTRUCTIONS = r"""You are the SynchroPage page transcriber. The attached PDF pages come from a lecture slide deck whose text layer is unreadable: the formulas were drawn with an embedded font, so text extraction turned them into stray symbols. Write down what is on each page, faithfully and completely, so that a text-only model can teach it.
+
+For every page, return Markdown that reproduces the page:
+- headings and bullet text as written, in the page's own language, in reading order;
+- every formula, symbol and equation in LaTeX ($...$ inline, $$...$$ on its own line for a displayed equation), with vectors, bars, hats, transposes, subscripts, sums and dimensions exactly as drawn;
+- tables as Markdown tables;
+- a figure or diagram as one bracketed line, for example [Figure: scatter plot of y against x with a fitted line], naming any labelled quantities;
+- nothing else: no explanation, no commentary, no guessing at what a smudged symbol probably means (write [unreadable] instead).
+
+The extracted text handed over with each page is a hint for the prose only; the page image is the source of truth.
+
+Output JSON only:
+{"pages": [{"page_no": 1, "text_md": "..."}]}
+Return exactly one object per page you were given, with the same page_no values. If a page is not attached or cannot be read, return it with an empty text_md and "unreadable": true.
+Escape LaTeX backslashes inside JSON strings: write \\frac and \\bar, never \frac or \bar."""
 
 # ---------------------------------------------------------------------------
 # Gateway defaults

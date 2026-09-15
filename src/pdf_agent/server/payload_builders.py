@@ -12,6 +12,7 @@ from typing import Any
 from pdf_agent.gateway import build_codex_responses_payload
 from pdf_agent.server.constants import (
     AGENT_INSTRUCTIONS,
+    LESSON_PLAN_MAX_PDF_PAGES,
     LESSON_PLAN_PAGE_TEXT_CHARS,
     MAX_AGENT_PDF_SUBSET_PAGES,
     MAX_CONTEXT_CHARS,
@@ -23,6 +24,10 @@ from pdf_agent.server.constants import (
     TEACHING_GENERATOR_INSTRUCTIONS,
     TEACHING_PAGE_ROLES,
     TEACHING_PLANNER_INSTRUCTIONS,
+    TEACHING_TRANSCRIBER_INSTRUCTIONS,
+    TRANSCRIPTION_HINT_CHARS,
+    TRANSCRIPTION_MAX_PAGES,
+    TRANSCRIPTION_PARSER,
 )
 from pdf_agent.server.document_context import (
     _append_page_number,
@@ -42,6 +47,7 @@ from pdf_agent.server.document_context import (
     _text_from_parts,
     _transcript_messages,
 )
+from pdf_agent.server.errors import HttpError
 from pdf_agent.server.json_utils import json_dumps_utf8_safe as _json_dumps_utf8_safe
 from pdf_agent.server.pdf_file_cache import PdfFileCache
 from pdf_agent.server.prompt_cache import (
@@ -345,6 +351,49 @@ def _teaching_neighbor_lines(page_no: int, titles: Mapping[int, str]) -> list[st
 
 
 # ---------------------------------------------------------------------------
+# Text layer notes (unreadable or transcribed source text)
+# ---------------------------------------------------------------------------
+
+
+def _source_is_transcribed(source: Mapping[str, Any]) -> bool:
+    return _string_value(source.get("parser"), "") == TRANSCRIPTION_PARSER
+
+
+def _source_text_layer_lines(source: Mapping[str, Any], *, pdf_attached: bool) -> list[str]:
+    """Tell the model when the extracted text is not the page.
+
+    A slide whose formulas were drawn with an embedded font extracts as stray
+    symbols; the client flags such pages with ``source.text_garbled``. When
+    the PDF page travels with the request the model reads it there; when a
+    model already transcribed the page the text is trustworthy but unproofed;
+    otherwise the model must teach around the hole instead of decoding noise.
+    """
+    if _source_is_transcribed(source):
+        return [
+            (
+                "text_layer: transcribed from the page image by a model because the PDF's own text layer was unreadable; "
+                "treat its formulas as faithful but not proofread."
+            )
+        ]
+    if not bool(source.get("text_garbled")):
+        return []
+    if pdf_attached:
+        return [
+            (
+                "text_layer: unreadable (formulas drawn with an embedded font came out as stray symbols). "
+                "The PDF page is attached: read every formula there and ignore the noise in source_text."
+            )
+        ]
+    return [
+        (
+            "text_layer: unreadable (formulas drawn with an embedded font came out as stray symbols) and no PDF page is attached. "
+            "Teach from the title, the plan cue and the neighbouring pages; quote no formula you cannot see; say plainly which "
+            "formula the slide shows that you could not read; set needs_review=true and confidence at most 0.6."
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Teaching prompt rules
 # ---------------------------------------------------------------------------
 
@@ -380,6 +429,7 @@ def _teaching_prompt_rules(body: Mapping[str, Any], *, batch: bool) -> list[str]
         "- Never escape digits or binary strings in LaTeX; use 2^n, 000, and 111.",
         "- Set confidence by grounding quality, not by length: 0.85-0.95 when the page text is clear and complete, 0.6-0.8 when figure content had to be inferred or the extraction looks partial; set needs_review=true whenever confidence is below 0.78.",
         "- Treat any existing notes as a draft to surpass rather than to copy.",
+        "- When a page's text_layer is marked unreadable, the stray symbols in its source_text are not the formula: never transcribe, decode, or interpret them.",
         empty_source_rule,
     ]
 
@@ -389,7 +439,7 @@ def _teaching_prompt_rules(body: Mapping[str, Any], *, batch: bool) -> list[str]
 # ---------------------------------------------------------------------------
 
 
-def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
+def _build_teaching_generation_prompt(body: Mapping[str, Any], *, pdf_attached: bool = False) -> str:
     target_pages = _teaching_generation_pages(body)
     batch = len(target_pages) > 1
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
@@ -458,6 +508,7 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
             f"page_no: {first_page_no}",
             f"pdf_page_ref: {_string_value(source.get('pdf_page_ref'), f'#page={first_page_no}')}",
             f"page_type: {_teaching_page_type(page)}",
+            *_source_text_layer_lines(source, pdf_attached=pdf_attached),
         ])
         neighbor_lines = []
         previous_title = _string_value(previous_page.get("title"), "") or neighbor_titles.get(first_page_no - 1, "")
@@ -490,6 +541,7 @@ def _build_teaching_generation_prompt(body: Mapping[str, Any]) -> str:
             f"page_no: {page_no}",
             f"pdf_page_ref: {_string_value(source.get('pdf_page_ref'), f'#page={page_no}')}",
             f"page_type: {_teaching_page_type(page)}",
+            *_source_text_layer_lines(source, pdf_attached=pdf_attached),
             *_teaching_neighbor_lines(page_no, neighbor_titles),
         ])
         if existing_notes:
@@ -526,13 +578,44 @@ def _lesson_plan_page_text(item: Mapping[str, Any]) -> str:
     return _truncate(" ".join(text.split()), LESSON_PLAN_PAGE_TEXT_CHARS) if text else ""
 
 
-def _build_lesson_plan_prompt(body: Mapping[str, Any]) -> str:
+def _lesson_plan_page_garbled(item: Mapping[str, Any]) -> bool:
+    source = item.get("source") if isinstance(item.get("source"), Mapping) else {}
+    return bool(item.get("garbled")) or bool(source.get("text_garbled"))
+
+
+def _lesson_plan_page_transcribed(item: Mapping[str, Any]) -> bool:
+    source = item.get("source") if isinstance(item.get("source"), Mapping) else {}
+    return bool(item.get("transcribed")) or _source_is_transcribed(source)
+
+
+def _lesson_plan_attach_page_numbers(body: Mapping[str, Any]) -> list[int]:
+    """Pages of this planning request whose PDF page travels with it.
+
+    ``attachPages`` names them explicitly; without it every page flagged as
+    garbled is attached. Only pages of this chunk count, capped so a long
+    deck never attaches more than ``LESSON_PLAN_MAX_PDF_PAGES`` at once.
+    """
+    if not isinstance(body.get("documentFile"), Mapping):
+        return []
+    pages = _lesson_plan_pages(body)
+    in_request = {_int_value(item.get("page_no"), 0) for item in pages}
+    requested = body.get("attachPages")
+    if isinstance(requested, Sequence) and not isinstance(requested, str):
+        numbers = [_int_value(value, 0) for value in requested]
+    else:
+        numbers = [_int_value(item.get("page_no"), 0) for item in pages if _lesson_plan_page_garbled(item)]
+    ordered = sorted({page_no for page_no in numbers if page_no > 0 and page_no in in_request})
+    return ordered[:LESSON_PLAN_MAX_PDF_PAGES]
+
+
+def _build_lesson_plan_prompt(body: Mapping[str, Any], *, attached_pages: Sequence[int] = ()) -> str:
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
     pages = _lesson_plan_pages(body)
     page_count = _int_value(body.get("pageCount"), _int_value(document.get("page_count"), len(pages)))
     _output_language_code, output_language_label = _teaching_output_language(body)
     chunk = body.get("chunk") if isinstance(body.get("chunk"), Mapping) else {}
     previous_summary = _string_value(body.get("previousSummary"), "")
+    attached = set(attached_pages)
     sections = [
         "Task-specific instructions:",
         TEACHING_PLANNER_INSTRUCTIONS.replace("{language}", output_language_label),
@@ -541,6 +624,12 @@ def _build_lesson_plan_prompt(body: Mapping[str, Any]) -> str:
         f"title: {_string_value(document.get('title'), 'Untitled PDF')}",
         f"page_count: {page_count}",
     ]
+    if attached:
+        sections.append(
+            f"Attached PDF pages: {_format_page_ranges(sorted(attached))}. Their text layer is unreadable (formulas drawn "
+            "with an embedded font came out as stray symbols), so those pages are attached as an input_file: read them "
+            "there to judge what they teach. The other pages are text only."
+        )
     if pages and (chunk or len(pages) < page_count):
         first = _int_value(pages[0].get("page_no"), 1)
         last = _int_value(pages[-1].get("page_no"), first)
@@ -556,17 +645,119 @@ def _build_lesson_plan_prompt(body: Mapping[str, Any]) -> str:
     for item in pages:
         page_no = _int_value(item.get("page_no"), 0)
         sections.append(f"--- p{page_no} ---")
+        if page_no in attached:
+            sections.append("(text layer unreadable; read the attached PDF page)")
+        elif _lesson_plan_page_garbled(item):
+            sections.append(
+                "(text layer unreadable: the formulas came out as stray symbols and no PDF page is attached; "
+                "judge this page's role from its title and its neighbours)"
+            )
+        elif _lesson_plan_page_transcribed(item):
+            sections.append("(text transcribed from the page image by a model)")
         sections.append(_lesson_plan_page_text(item) or "(no extractable text on this page)")
     sections.extend(["", "Return the lesson plan JSON for exactly these pages."])
     return "\n".join(sections)
 
 
-def _build_lesson_plan_payload(body: Mapping[str, Any], *, default_model: str) -> dict[str, Any]:
+def _build_lesson_plan_payload(
+    body: Mapping[str, Any],
+    *,
+    default_model: str,
+    pdf_file_cache: PdfFileCache | None = None,
+) -> dict[str, Any]:
     model = _clean_model(body.get("model")) or default_model
+    attach_pages = _lesson_plan_attach_page_numbers(body)
+    pdf_file = (
+        _pdf_file_input(
+            body.get("documentFile"),
+            page_numbers=attach_pages,
+            fallback_to_original_on_subset_failure=False,
+            pdf_file_cache=pdf_file_cache,
+        )
+        if attach_pages
+        else None
+    )
+    content: list[dict[str, Any]] = []
+    if pdf_file:
+        content.append(pdf_file)
+    content.append({
+        "type": "input_text",
+        "text": _build_lesson_plan_prompt(body, attached_pages=attach_pages if pdf_file else ()),
+    })
     return {
         "model": model,
         "instructions": SYNCHROPAGE_SHARED_INSTRUCTIONS,
-        "input": [{"role": "user", "content": [{"type": "input_text", "text": _build_lesson_plan_prompt(body)}]}],
+        "input": [{"role": "user", "content": content}],
+        "reasoning": {"effort": _reasoning_effort(body)},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Page transcription prompt (pages whose text layer is unreadable)
+# ---------------------------------------------------------------------------
+
+
+def _transcription_pages(body: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """The pages one transcription request covers, in page order."""
+    return _lesson_plan_pages(body)[:TRANSCRIPTION_MAX_PAGES]
+
+
+def _transcription_page_numbers(body: Mapping[str, Any]) -> list[int]:
+    return [page_no for page_no in (_int_value(item.get("page_no"), 0) for item in _transcription_pages(body)) if page_no > 0]
+
+
+def _build_transcription_prompt(body: Mapping[str, Any]) -> str:
+    document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
+    pages = _transcription_pages(body)
+    page_numbers = _transcription_page_numbers(body)
+    page_count = _int_value(body.get("pageCount"), _int_value(document.get("page_count"), 0))
+    sections = [
+        "Task-specific instructions:",
+        TEACHING_TRANSCRIBER_INSTRUCTIONS,
+        "",
+        "Document:",
+        f"title: {_string_value(document.get('title'), 'Untitled PDF')}",
+        f"page_count: {page_count}",
+        (
+            f"Attached PDF pages: {_format_page_ranges(page_numbers)} (a subset of the original PDF, in this order; "
+            "page_no below refers to the original document)."
+        ),
+        "",
+        "Pages:",
+    ]
+    for item in pages:
+        page_no = _int_value(item.get("page_no"), 0)
+        source = item.get("source") if isinstance(item.get("source"), Mapping) else {}
+        hint = " ".join(str(item.get("text_md") or source.get("text_md") or "").split())
+        sections.append(f"--- p{page_no} ---")
+        sections.append(f"extracted_text_hint: {_truncate(hint, TRANSCRIPTION_HINT_CHARS) if hint else '(none)'}")
+    sections.extend(["", "Return the transcription JSON for exactly these pages."])
+    return "\n".join(sections)
+
+
+def _build_transcription_payload(
+    body: Mapping[str, Any],
+    *,
+    default_model: str,
+    pdf_file_cache: PdfFileCache | None = None,
+) -> dict[str, Any]:
+    model = _clean_model(body.get("model")) or default_model
+    pdf_file = _pdf_file_input(
+        body.get("documentFile"),
+        page_numbers=_transcription_page_numbers(body),
+        fallback_to_original_on_subset_failure=False,
+        pdf_file_cache=pdf_file_cache,
+    )
+    if not pdf_file:
+        raise HttpError(
+            400,
+            "Page transcription needs the PDF file: send documentFile with fileData or a cached sha256",
+            code="transcription_needs_pdf",
+        )
+    return {
+        "model": model,
+        "instructions": SYNCHROPAGE_SHARED_INSTRUCTIONS,
+        "input": [{"role": "user", "content": [pdf_file, {"type": "input_text", "text": _build_transcription_prompt(body)}]}],
         "reasoning": {"effort": _reasoning_effort(body)},
     }
 
@@ -811,7 +1002,7 @@ def _build_teaching_generation_payload(
     )
     if pdf_file:
         content.append(pdf_file)
-    content.append({"type": "input_text", "text": _build_teaching_generation_prompt(body)})
+    content.append({"type": "input_text", "text": _build_teaching_generation_prompt(body, pdf_attached=bool(pdf_file))})
     payload: dict[str, Any] = {
         "model": model,
         "instructions": _teaching_payload_instructions(body),
@@ -870,10 +1061,13 @@ def _teaching_generation_candidate_bodies(
     candidates: list[tuple[Mapping[str, Any], bool]] = []
     if has_pdf_file:
         candidates.extend((candidate, True) for candidate in model_bodies)
-        for candidate in model_bodies:
-            without_file = dict(candidate)
-            without_file.pop("documentFile", None)
-            candidates.append((without_file, False))
+        # A transcription is meaningless without the page, so it never falls
+        # back to a text-only candidate.
+        if not bool(body.get("requirePdfFile")):
+            for candidate in model_bodies:
+                without_file = dict(candidate)
+                without_file.pop("documentFile", None)
+                candidates.append((without_file, False))
     else:
         candidates.extend((candidate, False) for candidate in model_bodies)
     return candidates

@@ -752,10 +752,110 @@ test.describe("Teaching Generation (mocked)", () => {
     await expect(content.locator(".note-eyebrow")).toContainText(/略讲|Skim/);
   });
 
+  test("the lesson map lists the plan's segments and pages and jumps between them", async ({ page }) => {
+    const pack = buildTextPack("map_doc", "Map Deck", 4);
+    (pack.document as Record<string, unknown>).lesson_plan = planMock(4).plan;
+    await loadTextPack(page, pack);
+
+    await page.locator(".tab-button", { hasText: /地图|Map/ }).click();
+    const map = page.locator(".lesson-map");
+    await expect(map).toBeVisible();
+    await expect(map.locator(".lesson-map-summary")).toContainText("A mocked deck about one concept.");
+    await expect(map.locator(".lesson-map-segment")).toHaveCount(1);
+    await expect(map.locator(".lesson-map-segment-title")).toContainText("Opening segment");
+    await expect(map.locator(".lesson-map-page")).toHaveCount(4);
+    // Only the key page is starred, in the chip row and on its own row.
+    await expect(map.locator(".lesson-map-key-chip")).toHaveCount(1);
+    await expect(map.locator(".lesson-map-key-chip")).toContainText("p.2");
+    await expect(map.locator(".lesson-map-page.is-key")).toHaveCount(1);
+    await expect(map.locator(".lesson-map-page.is-key .lesson-map-page-no")).toHaveText("p.2");
+    // Brief and full pages show the planner's cue; the skim cover does not.
+    await expect(map.locator(".lesson-map-page.depth-full .lesson-map-page-cue")).toContainText("the definition");
+    await expect(map.locator(".lesson-map-page.depth-skim .lesson-map-page-cue")).toHaveCount(0);
+    // The reader's page is highlighted and a click moves it.
+    await expect(map.locator(".lesson-map-page.is-current .lesson-map-page-no")).toHaveText("p.1");
+    await map.locator(".lesson-map-page").nth(2).click();
+    await expect(map.locator(".lesson-map-page.is-current .lesson-map-page-no")).toHaveText("p.3");
+    await page.locator(".tab-button", { hasText: /讲解|Notes/ }).click();
+    await expect(page.locator(".note-eyebrow")).toContainText(/第 3 页|Page 3/);
+  });
+
+  test("a page whose text layer is noise is flagged for the planner and the teaching request", async ({ page }) => {
+    const pack = buildTextPack("garbled_doc", "Garbled Deck", 3);
+    // PDF.js output for a slide whose formulas are drawn with an embedded font.
+    pack.pages[1].source.text_md = "Gradient Descent (GD)\n! = 0 , \u0305 & (\") = ' 0\nwhile convergence criteria is not met\nk++\nGoal: Given Find the value of parameter ; < that minimizes empirical risk $ ! (; <)";
+    await loadTextPack(page, pack);
+    await page.unroute("**/api/**");
+    const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      const body = JSON.parse(route.request().postData() || "{}") as Record<string, unknown>;
+      if (url.includes("/api/generate/plan")) {
+        calls.push({ path: "plan", body });
+        await fulfilPlan(route, 3);
+        return;
+      }
+      if (url.includes("/api/generate/pages")) {
+        calls.push({ path: "pages", body });
+        const pages = (body.pages as Array<{ page_no: number }>).map((item) => ({
+          page_no: item.page_no,
+          teaching: { slide_title: `Noisy page ${item.page_no}`, speaker_notes_md: mockNotes("Noisy notes", item.page_no), confidence: 0.9, concepts: ["noise"], output_language: "zh-CN" },
+          status: "completed",
+        }));
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ pages }) });
+        return;
+      }
+      if (url.includes("/api/generate/page")) {
+        calls.push({ path: "page", body });
+        const pageNo = (body.page as { page_no: number }).page_no;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            page: {
+              page_no: pageNo,
+              teaching: { slide_title: `Noisy page ${pageNo}`, speaker_notes_md: mockNotes("Noisy notes", pageNo), confidence: 0.9, concepts: ["noise"], output_language: "zh-CN" },
+              status: "completed",
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await page.locator(".generate-main-button").click();
+    await expect(page.locator(".notes-content")).toContainText(/Noisy notes/, { timeout: 15_000 });
+    await expect.poll(() => calls.filter((call) => call.path === "page" && (call.body.page as { page_no: number }).page_no === 2).length).toBe(1);
+
+    // The planner is told which page it cannot read.
+    const planPages = calls.find((call) => call.path === "plan")?.body.pages as Array<{ page_no: number; garbled?: boolean }>;
+    expect(planPages.map((row) => Boolean(row.garbled))).toEqual([false, true, false]);
+    // The noisy page leaves the batch and asks the quality model for the PDF page.
+    const noisyCall = calls.find((call) => call.path === "page" && (call.body.page as { page_no: number }).page_no === 2);
+    const noisyPage = noisyCall?.body.page as { source: { text_garbled?: boolean } };
+    expect(noisyPage.source.text_garbled).toBe(true);
+    const plan = noisyCall?.body.qualityPlan as { attachPdf: boolean; reasons: string[] };
+    expect(plan.reasons).toContain("garbled-source-text");
+    expect(plan.attachPdf).toBe(true);
+    // Readable pages carry no flag.
+    const readableCalls = calls.filter((call) => call.path !== "plan" && call !== noisyCall);
+    for (const call of readableCalls) {
+      const pages = (call.body.pages as Array<{ source: { text_garbled?: boolean } }>) || [call.body.page as { source: { text_garbled?: boolean } }];
+      for (const item of pages) expect(item.source.text_garbled).toBeUndefined();
+    }
+    // The notes header says the text layer of that page is unreadable.
+    await page.locator(".tab-button", { hasText: /地图|Map/ }).click();
+    await page.locator(".lesson-map-page").nth(1).click();
+    await expect(page.locator(".lesson-map-page.is-current .note-text-layer-unreadable")).toBeVisible();
+    await page.locator(".tab-button", { hasText: /讲解|Notes/ }).click();
+    await expect(page.locator(".note-eyebrow .note-text-layer-unreadable")).toBeVisible();
+  });
+
   test("structure and JSON tabs only appear in Debug mode", async ({ page }) => {
     await expect(page.locator(".tab-group")).toBeVisible();
-    // 讲解 / 笔记
-    await expect(page.locator(".tab-button")).toHaveCount(2);
+    // 讲解 / 笔记 / 地图
+    await expect(page.locator(".tab-button")).toHaveCount(3);
 
     await page.locator(".rail-settings-button").click();
     await page.locator(".settings-nav-item").filter({ hasText: /高级|Advanced/ }).click();
@@ -765,7 +865,7 @@ test.describe("Teaching Generation (mocked)", () => {
     await page.keyboard.press("Escape");
     await expect(page.locator(".settings-dialog")).toHaveCount(0);
     // 讲解 / 笔记 / 结构 / JSON
-    await expect(page.locator(".tab-button")).toHaveCount(4);
+    await expect(page.locator(".tab-button")).toHaveCount(5);
     await page.locator(".tab-button").filter({ hasText: /结构|Struct/ }).click();
     await expect(page.locator(".structure-grid")).toBeVisible();
 
@@ -774,7 +874,7 @@ test.describe("Teaching Generation (mocked)", () => {
     await page.locator(".settings-nav-item").filter({ hasText: /高级|Advanced/ }).click();
     await debugRow.getByRole("switch").click();
     await page.keyboard.press("Escape");
-    await expect(page.locator(".tab-button")).toHaveCount(2);
+    await expect(page.locator(".tab-button")).toHaveCount(3);
     await expect(page.locator(".tab-button.active")).toHaveText(/讲解|Notes/);
     await expect(page.locator(".structure-grid")).toHaveCount(0);
   });
