@@ -32,6 +32,7 @@ from pdf_agent.server.constants import (
     DEFAULT_AGENT_MODEL,
     LESSON_PLAN_CHUNK_PAGES,
     LESSON_PLAN_VERSION,
+    TRANSCRIPTION_MAX_PAGES,
 )
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.gateway_transport import post_json_responses
@@ -39,6 +40,7 @@ from pdf_agent.server.generation_parsing import (
     _parse_generated_page,
     _parse_generated_pages_with_missing,
     _parse_lesson_plan,
+    _parse_transcription,
 )
 from pdf_agent.server.generation_policy import (
     MAX_TIMEOUT_RETRIES,
@@ -65,6 +67,7 @@ from pdf_agent.server.model_gateway import (
 from pdf_agent.server.payload_builders import (
     _build_lesson_plan_payload,
     _build_teaching_generation_payload,
+    _build_transcription_payload,
     _lesson_plan_pages,
     _reasoning_effort,
     _teaching_generation_candidate_bodies,
@@ -250,6 +253,32 @@ class TeachingGenerationGateway:
             "coalesced": False,
         }
         return result
+
+    async def generate_transcription(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        """Transcribe pages whose text layer is unreadable from the attached PDF pages.
+
+        The client sends at most ``TRANSCRIPTION_MAX_PAGES`` pages with the
+        document file; the page subset travels as an ``input_file`` and the
+        model returns Markdown with LaTeX for each page. There is no text-only
+        fallback: without the page there is nothing to transcribe.
+        """
+        pages = _lesson_plan_pages(body)
+        if not pages:
+            raise HttpError(400, "Transcription request did not contain pages", code="invalid_request")
+        if len(pages) > TRANSCRIPTION_MAX_PAGES:
+            raise HttpError(
+                400,
+                f"Transcription covers at most {TRANSCRIPTION_MAX_PAGES} pages per request",
+                code="invalid_request",
+            )
+        request_body: dict[str, Any] = {**body, "requirePdfFile": True}
+
+        def parse(content: str) -> dict[str, Any]:
+            return _parse_transcription(content, request_body)
+
+        return await self._generate(
+            request_body, kind="transcribe", parse=parse, payload_builder=self._build_transcription_payload
+        )
 
     def status(self) -> dict[str, Any]:
         """Cheap, read-only snapshot for ``GET /api/generate/status``."""
@@ -492,7 +521,21 @@ class TeachingGenerationGateway:
         effort: str,
         page_count: int,
     ) -> dict[str, Any]:
-        payload = _build_lesson_plan_payload(candidate_body, default_model=self.model)
+        payload = _build_lesson_plan_payload(
+            candidate_body, default_model=self.model, pdf_file_cache=self.pdf_file_cache
+        )
+        payload.setdefault("max_output_tokens", max_output_tokens_for(effort, page_count))
+        return payload
+
+    def _build_transcription_payload(
+        self,
+        candidate_body: Mapping[str, Any],
+        effort: str,
+        page_count: int,
+    ) -> dict[str, Any]:
+        payload = _build_transcription_payload(
+            candidate_body, default_model=self.model, pdf_file_cache=self.pdf_file_cache
+        )
         payload.setdefault("max_output_tokens", max_output_tokens_for(effort, page_count))
         return payload
 

@@ -244,6 +244,9 @@ export type AppCopy = {
     generationInvalidPageRange: (total: number) => string;
     pdfTextExtracting: (ready: number, total: number) => string;
     pdfTextExtractionFallback: string;
+    generationTranscribing: (done: number, total: number) => string;
+    generationTranscriptionFailed: (count: number) => string;
+    generationTextLayerUnreadable: (count: number) => string;
     checkingNote: (pageNo: number) => string;
   };
   errors: {
@@ -394,6 +397,26 @@ export type AppCopy = {
     tabJsonShort: string;
     tabAnnotations: string;
     tabAnnotationsShort: string;
+    tabMap: string;
+    tabMapShort: string;
+    textLayerTranscribed: string;
+    textLayerTranscribedTitle: string;
+    textLayerUnreadable: string;
+    textLayerUnreadableTitle: string;
+  };
+  lessonMap: {
+    title: string;
+    empty: string;
+    emptyHint: string;
+    keyPagesLabel: string;
+    pageRange: (first: number, last: number) => string;
+    pageCount: (count: number) => string;
+    segmentCount: (count: number) => string;
+    jump: (pageNo: number) => string;
+    statusDone: string;
+    statusRunning: string;
+    statusFailed: string;
+    statusPending: string;
   };
   annotations: {
     highlight: string;
@@ -831,6 +854,9 @@ const zhCN: AppCopy = {
     generationInvalidPageRange: (total) => `页码范围无效，请输入 1-${total} 之间的页码，例如 1-3, 8`,
     pdfTextExtracting: (ready, total) => `正在读取 PDF 文本层，已就绪 ${ready}/${total} 页`,
     pdfTextExtractionFallback: "PDF 文本层读取较慢，先使用已就绪内容继续生成",
+    generationTranscribing: (done, total) => `有 ${total} 页的公式是嵌入字体，文字层读不出来，正在从页面图像转写（${done}/${total}）…`,
+    generationTranscriptionFailed: (count) => `有 ${count} 页转写没有成功，这些页按原有文字继续讲`,
+    generationTextLayerUnreadable: (count) => `有 ${count} 页的文字层不可读（公式是嵌入字体），当前模型读不了 PDF 页面，这些页会照标题和上下文来讲并标为待复核`,
     checkingNote: (pageNo) => `正在检查你在 p.${pageNo} 的笔记`,
   },
   errors: {
@@ -1003,6 +1029,26 @@ const zhCN: AppCopy = {
     tabJsonShort: "JSON",
     tabAnnotations: "笔记",
     tabAnnotationsShort: "笔记",
+    tabMap: "地图",
+    tabMapShort: "地图",
+    textLayerTranscribed: "页面转写",
+    textLayerTranscribedTitle: "这页的文字层不可读（公式是嵌入字体），内容由模型从页面图像转写而来",
+    textLayerUnreadable: "文字层不可读",
+    textLayerUnreadableTitle: "这页的公式是嵌入字体，文字抽取是乱码；当前模型读不了 PDF 页面，讲解只能依据标题和上下文",
+  },
+  lessonMap: {
+    title: "课程地图",
+    empty: "还没有备课。",
+    emptyHint: "点击「生成讲解」后会先通读全文备课；这里会列出每一段讲什么、哪些页详讲、哪些页是重点。",
+    keyPagesLabel: "重点页",
+    pageRange: (first, last) => (first === last ? `p.${first}` : `p.${first}–${last}`),
+    pageCount: (count) => `${count} 页`,
+    segmentCount: (count) => `${count} 段`,
+    jump: (pageNo) => `跳到第 ${pageNo} 页`,
+    statusDone: "已讲解",
+    statusRunning: "正在生成",
+    statusFailed: "生成失败",
+    statusPending: "还没讲",
   },
   annotations: {
     highlight: "高亮",
@@ -1446,6 +1492,9 @@ const enUS: AppCopy = {
     generationInvalidPageRange: (total) => `Invalid page range. Enter pages from 1-${total}, for example 1-3, 8`,
     pdfTextExtracting: (ready, total) => `Reading PDF text layer: ${ready}/${total} pages ready`,
     pdfTextExtractionFallback: "PDF text extraction is slow, continuing with the text that is ready",
+    generationTranscribing: (done, total) => `${total} pages draw their formulas with an embedded font, so their text layer is unreadable; transcribing them from the page images (${done}/${total})…`,
+    generationTranscriptionFailed: (count) => `${count} pages could not be transcribed; continuing with their extracted text`,
+    generationTextLayerUnreadable: (count) => `${count} pages have an unreadable text layer (formulas in an embedded font) and the current model cannot read PDF pages; they will be taught from their titles and context and marked for review`,
     checkingNote: (pageNo) => `Checking your note on p.${pageNo}`,
   },
   errors: {
@@ -1618,6 +1667,26 @@ const enUS: AppCopy = {
     tabJsonShort: "JSON",
     tabAnnotations: "My notes",
     tabAnnotationsShort: "Mine",
+    tabMap: "Map",
+    tabMapShort: "Map",
+    textLayerTranscribed: "Transcribed",
+    textLayerTranscribedTitle: "This page's text layer was unreadable (formulas in an embedded font); a model transcribed it from the page image",
+    textLayerUnreadable: "Unreadable text layer",
+    textLayerUnreadableTitle: "The formulas on this page are drawn with an embedded font and extract as noise; the current model cannot read PDF pages, so the notes rely on the title and context",
+  },
+  lessonMap: {
+    title: "Lesson map",
+    empty: "No lesson plan yet.",
+    emptyHint: "Generate notes and the whole deck is read and planned first; the segments, the pages taught in depth and the key pages appear here.",
+    keyPagesLabel: "Key pages",
+    pageRange: (first, last) => (first === last ? `p.${first}` : `p.${first}–${last}`),
+    pageCount: (count) => `${count} pages`,
+    segmentCount: (count) => `${count} segments`,
+    jump: (pageNo) => `Go to page ${pageNo}`,
+    statusDone: "Explained",
+    statusRunning: "Generating",
+    statusFailed: "Failed",
+    statusPending: "Not yet",
   },
   annotations: {
     highlight: "Highlight",

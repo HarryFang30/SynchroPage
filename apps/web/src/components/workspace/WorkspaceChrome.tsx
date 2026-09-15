@@ -247,6 +247,7 @@ export function MarkdownBlock({
   pageNo,
   pageType,
   plan,
+  textLayer,
   onJumpToPage,
 }: {
   markdown: string;
@@ -256,6 +257,8 @@ export function MarkdownBlock({
   pageType?: string;
   /** Role, depth and segment the lesson plan assigned to this page. */
   plan?: LessonPlanNoteInfo;
+  /** The page's text came from a transcription of the page image, or is unreadable noise. */
+  textLayer?: "transcribed" | "unreadable";
   onJumpToPage?: (pageNo: number) => void;
 }) {
   const copy = useAppCopy();
@@ -289,6 +292,16 @@ export function MarkdownBlock({
               {roleLabel && <span>{roleLabel}</span>}
               {depthLabel && <span>{depthLabel}</span>}
               {plan?.key && <span className="note-key">★ {copy.notes.keyPage}</span>}
+              {textLayer === "transcribed" && (
+                <span className="note-text-layer note-text-layer-transcribed" title={copy.notes.textLayerTranscribedTitle}>
+                  {copy.notes.textLayerTranscribed}
+                </span>
+              )}
+              {textLayer === "unreadable" && (
+                <span className="note-text-layer note-text-layer-unreadable" title={copy.notes.textLayerUnreadableTitle}>
+                  {copy.notes.textLayerUnreadable}
+                </span>
+              )}
             </p>
           )}
           {heading && (

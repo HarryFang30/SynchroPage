@@ -18,7 +18,7 @@ import { normalizeLessonPlan } from "../generation/lessonPlan";
 import type { DocumentRecord, GeneratedPageRecord, StorageRepairResult } from "../persistence/schema";
 import type { ThreadMessageLike } from "../persistence/workspaceStore";
 
-export type ActiveTab = "notes" | "annotations" | "structure" | "json";
+export type ActiveTab = "notes" | "annotations" | "map" | "structure" | "json";
 export type GeneratePageMode = "missing" | "all" | "current" | "custom";
 export type PanelKey = "rail" | "notes" | "agent";
 export type PanelVisibility = Record<PanelKey, boolean>;
@@ -163,7 +163,7 @@ export function isPanelVisibility(value: unknown): value is PanelVisibility {
 }
 
 export function isActiveTab(value: unknown): value is ActiveTab {
-  return value === "notes" || value === "annotations" || value === "structure" || value === "json";
+  return value === "notes" || value === "annotations" || value === "map" || value === "structure" || value === "json";
 }
 
 export function asPersistedRecord(value: unknown): Record<string, unknown> {
@@ -234,6 +234,7 @@ export function normalizePack(raw: unknown, copy: AppCopy): PagePack {
           ocr_used: Boolean(page.source?.ocr_used),
           parser: page.source?.parser || "imported",
           page_type: page.source?.page_type,
+          ...(page.source?.text_garbled ? { text_garbled: true } : {}),
         },
         teaching: {
           output_language: normalizeTeachingOutputLanguage(teaching.output_language),

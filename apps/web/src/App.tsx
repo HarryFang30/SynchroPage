@@ -60,6 +60,7 @@ import {
   SlidePreview,
   StructurePanel,
 } from "./components/workspace/WorkspaceChrome";
+import { LessonMapPanel } from "./components/workspace/LessonMapPanel";
 import { useOAuthFlow } from "./hooks/useOAuthFlow";
 import { useGenerationEngine } from "./hooks/useGenerationEngine";
 import {
@@ -87,6 +88,8 @@ import {
   generationPageStatus,
   hasCompletedTeaching,
   type GenerationPageStatus,
+  pageIsTranscribed,
+  pageTextLayerIsUnreadable,
 } from "./lib/generation/generationRuntime";
 import { cachedPdfDirectFileInputFromUrl } from "./lib/pdf/directFile";
 import { requestJson } from "./lib/http/requestJson";
@@ -384,10 +387,18 @@ export default function App() {
   const [pdfUrl, setPdfUrl] = useState("");
   const [activeTab, setActiveTab] = useState<ActiveTab>("notes");
   // Structure and JSON are inspection views; they only exist while Debug mode is on.
-  const notesTabs: ActiveTab[] = uiPreferences.debugMode ? ["notes", "annotations", "structure", "json"] : ["notes", "annotations"];
+  const notesTabs: ActiveTab[] = uiPreferences.debugMode
+    ? ["notes", "annotations", "map", "structure", "json"]
+    : ["notes", "annotations", "map"];
   useEffect(() => {
     if (!uiPreferences.debugMode && (activeTab === "structure" || activeTab === "json")) setActiveTab("notes");
   }, [activeTab, uiPreferences.debugMode]);
+  // Each tab is its own reading surface: coming back from a long lesson map
+  // must not land the reader halfway down the notes.
+  const notesContentRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    notesContentRef.current?.scrollTo({ top: 0 });
+  }, [activeTab]);
   const [panels, setPanels] = useState<PanelVisibility>(defaultPanelVisibility);
   const [query, setQuery] = useState("");
   const [jobStatus, setJobStatus] = useState(copy.status.localPrototype);
@@ -526,6 +537,10 @@ export default function App() {
     }),
     { done: 0, running: 0, retrying: 0, failed: 0, pending: 0 },
   ), [generationProgressPages]);
+  const generationStatusByPage = useMemo(
+    () => new Map(generationProgressPages.map((item) => [item.pageNo, item.status])),
+    [generationProgressPages],
+  );
   const generateScopeSummary =
     generatePageMode === "current"
       ? copy.topbar.generateScopeCurrent(currentPdfPageNo)
@@ -2728,8 +2743,8 @@ export default function App() {
                     </div>
                     <div className="tab-group">
                       {notesTabs.map((tab) => {
-                        const fullLabel = tab === "notes" ? copy.notes.tabNotes : tab === "annotations" ? copy.notes.tabAnnotations : tab === "structure" ? copy.notes.tabStructure : copy.notes.tabJson;
-                        const shortLabel = tab === "notes" ? copy.notes.tabNotesShort : tab === "annotations" ? copy.notes.tabAnnotationsShort : tab === "structure" ? copy.notes.tabStructureShort : copy.notes.tabJsonShort;
+                        const fullLabel = tab === "notes" ? copy.notes.tabNotes : tab === "annotations" ? copy.notes.tabAnnotations : tab === "map" ? copy.notes.tabMap : tab === "structure" ? copy.notes.tabStructure : copy.notes.tabJson;
+                        const shortLabel = tab === "notes" ? copy.notes.tabNotesShort : tab === "annotations" ? copy.notes.tabAnnotationsShort : tab === "map" ? copy.notes.tabMapShort : tab === "structure" ? copy.notes.tabStructureShort : copy.notes.tabJsonShort;
                         return (
                           <button
                             key={tab}
@@ -2750,7 +2765,7 @@ export default function App() {
                   </div>
                 }
               />
-              <div className="notes-content">
+              <div className="notes-content" ref={notesContentRef}>
                 {activeTab === "notes" && <MarkdownBlock
                     markdown={page.teaching.speaker_notes_md}
                     concepts={page.teaching.concepts}
@@ -2758,8 +2773,18 @@ export default function App() {
                     pageNo={page.page_no}
                     pageType={page.source.page_type}
                     plan={lessonPlanNoteInfo(pack.document.lesson_plan, page.page_no)}
+                    textLayer={pageIsTranscribed(page) ? "transcribed" : pageTextLayerIsUnreadable(page) ? "unreadable" : undefined}
                     onJumpToPage={jumpToPdfPage}
                   />}
+                {activeTab === "map" && (
+                  <LessonMapPanel
+                    plan={pack.document.lesson_plan}
+                    pages={pack.pages}
+                    currentPageNo={currentPdfPageNo}
+                    statuses={generationStatusByPage}
+                    onJumpToPage={jumpToPdfPage}
+                  />
+                )}
                 {activeTab === "annotations" && (
                   <AnnotationsPanel
                     documentTitle={pack.document.title}

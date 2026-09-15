@@ -67,6 +67,11 @@ export type ModelApiConfig = {
     teachingFast: ModelRef;
     teachingBalanced: ModelRef;
     teachingQuality: ModelRef;
+    /**
+     * Transcribes pages whose text layer is unreadable from the page image.
+     * Optional: when absent, the first enabled provider that accepts PDF input is used.
+     */
+    transcription?: ModelRef;
   };
 };
 
@@ -261,8 +266,17 @@ export function normalizeModelApiConfig(value: unknown): ModelApiConfig {
       teachingFast: normalizeModelRef(source.defaults?.teachingFast, providers, defaultModelApiConfig.defaults.teachingFast),
       teachingBalanced: normalizeModelRef(source.defaults?.teachingBalanced, providers, defaultModelApiConfig.defaults.teachingBalanced),
       teachingQuality: normalizeModelRef(source.defaults?.teachingQuality, providers, defaultModelApiConfig.defaults.teachingQuality),
+      ...optionalModelRef(source.defaults?.transcription, providers, "transcription"),
     },
   };
+}
+
+/** An optional default: kept only when it names a known provider and a model. */
+function optionalModelRef(value: unknown, providers: ModelApiProvider[], key: "transcription"): Partial<Record<"transcription", ModelRef>> {
+  const ref = (value && typeof value === "object" ? value : {}) as Partial<ModelRef>;
+  const provider = providers.find((item) => item.id === ref.providerId);
+  const model = cleanString(ref.model) || provider?.models[0] || "";
+  return provider && model ? { [key]: { providerId: provider.id, model } } : {};
 }
 
 export function modelRefLabel(config: ModelApiConfig, ref: ModelRef) {
