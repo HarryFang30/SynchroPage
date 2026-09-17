@@ -80,7 +80,14 @@ async def post_responses_payload_for_body(
     post_with_retries: PostWithRetries,
     codex_include_reasoning_encrypted_content: bool,
     codex_auth_builder: CodexAuthBuilder = build_chatgpt_codex_auth,
+    stream: bool = False,
 ) -> ModelGatewayResult:
+    """Send *responses_payload* to the provider the request selects.
+
+    With ``stream`` every provider is asked to stream its answer, so a
+    ``post_with_retries`` that reads the body as it arrives (the chat route)
+    can pass the text on while it is being written.
+    """
     config = config_store.load_private() if config_store is not None else normalize_model_config(None)
     ref = resolve_model_ref(config, body, default_key=default_key, legacy_model=legacy_model)
     provider = provider_by_id(config, ref["providerId"])
@@ -130,7 +137,8 @@ async def post_responses_payload_for_body(
         api_payload = responses_payload_to_anthropic_messages(payload, provider=provider)
     elif provider_type == ENDPOINT_GOOGLE_GENERATE_CONTENT:
         model_path = urllib.parse.quote(ref["model"].removeprefix("models/"), safe="")
-        url = provider_api_url(provider, f"models/{model_path}:generateContent", endpoint_type=provider_type)
+        method = "streamGenerateContent?alt=sse" if stream else "generateContent"
+        url = provider_api_url(provider, f"models/{model_path}:{method}", endpoint_type=provider_type)
         api_payload = responses_payload_to_gemini_generate_content(payload)
     elif provider_type == ENDPOINT_OLLAMA_CHAT:
         url = provider_api_url(provider, "chat", endpoint_type=provider_type)
@@ -138,8 +146,13 @@ async def post_responses_payload_for_body(
     else:
         url = provider_api_url(provider, "chat/completions", endpoint_type=ENDPOINT_OPENAI_CHAT)
         api_payload = responses_payload_to_chat_completions(payload, provider=provider)
+    if stream and "stream" in api_payload:
+        api_payload["stream"] = True
+        if url.endswith("chat/completions"):
+            # Without this a streamed Chat Completions answer carries no usage.
+            api_payload["stream_options"] = {"include_usage": True}
 
-    text, content_type, sent_payload = await _post_with_reasoning_effort_fallback(
+    text, content_type, sent_payload = await _post_with_stream_options_fallback(
         post_with_retries,
         url,
         api_payload,
@@ -154,6 +167,26 @@ async def post_responses_payload_for_body(
         provider_name=string_value(provider.get("name"), "API Provider"),
         model=string_value(sent_payload.get("model"), ref["model"]),
     )
+
+
+async def _post_with_stream_options_fallback(
+    post_with_retries: PostWithRetries,
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> tuple[str, str, dict[str, Any]]:
+    """POST *payload*; resend once without ``stream_options`` when it is rejected.
+
+    Some OpenAI-compatible gateways predate ``stream_options`` and answer 400;
+    the stream itself works there, only the usage numbers are lost.
+    """
+    try:
+        return await _post_with_reasoning_effort_fallback(post_with_retries, url, payload, headers)
+    except HttpError as exc:
+        if "stream_options" not in payload or exc.status not in {400, 422} or "stream_options" not in str(exc):
+            raise
+        fallback_payload = {key: value for key, value in payload.items() if key != "stream_options"}
+        return await _post_with_reasoning_effort_fallback(post_with_retries, url, fallback_payload, headers)
 
 
 async def _post_with_reasoning_effort_fallback(

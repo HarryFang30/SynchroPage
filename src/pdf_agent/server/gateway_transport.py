@@ -36,6 +36,9 @@ from pdf_agent.server.response_parsing import response_incomplete_reason
 # unbounded error-detail leaks (e.g. HTML error pages, non-JSON bodies).
 _MAX_RAW_UPSTREAM_CHARS = 2000
 
+#: ``HttpError.code`` of a request stopped because nobody is reading its answer.
+CLIENT_CLOSED_CODE = "client_closed"
+
 # Streaming read size.  Small enough that the overall deadline is checked
 # often, large enough that a long SSE body is not read byte by byte.
 _READ_CHUNK_BYTES = 64 * 1024
@@ -102,16 +105,22 @@ def _read_body(
     deadline: float | None,
     started: float,
     socket_timeout: float | None = None,
+    on_chunk: Callable[[bytes], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[bytes, int]:
     """Read *response* incrementally, honouring an overall *deadline*.
 
     Each read blocks for at most ``min(socket_timeout, remaining budget)`` so a
     stream that stalls just before the deadline cannot overrun it by a whole
-    inactivity timeout.
+    inactivity timeout.  ``on_chunk`` sees every chunk as it arrives (the chat
+    route streams the answer from it); ``cancelled`` is polled between chunks
+    so a reader that went away stops the upstream request.
     """
     read_chunk = _chunk_reader(response)
     if read_chunk is None:
         data = response.read()
+        if on_chunk is not None:
+            on_chunk(data)
         return data, len(data)
 
     sock = _response_socket(response) if deadline is not None else None
@@ -139,6 +148,10 @@ def _read_body(
             break
         chunks.append(chunk)
         received += len(chunk)
+        if on_chunk is not None:
+            on_chunk(chunk)
+        if cancelled is not None and cancelled():
+            raise HttpError(499, "The reader closed the request", code=CLIENT_CLOSED_CODE)
     return b"".join(chunks), received
 
 
@@ -161,6 +174,8 @@ def post_json_responses(
     timeout_seconds: float,
     handle_timeout: bool = False,
     deadline_seconds: float | None = None,
+    on_chunk: Callable[[bytes], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[str, str]:
     """POST *payload* as JSON to *url*, returning ``(text, content_type)``.
 
@@ -178,6 +193,10 @@ def post_json_responses(
     deadline_seconds:
         Optional overall budget for this request.  When the body is still
         arriving after it, ``upstream_timeout`` (504) is raised.
+    on_chunk, cancelled:
+        Streaming hooks, see ``_read_body``.  With ``on_chunk`` the caller has
+        already passed the text on, so an answer cut at ``max_output_tokens``
+        is returned as it is instead of raising ``output_truncated``.
     """
     data = json_bytes_utf8_safe(payload, ensure_ascii=False, separators=(",", ":"))
     request = urllib.request.Request(
@@ -200,10 +219,16 @@ def post_json_responses(
         with urllib.request.urlopen(request, timeout=socket_timeout) as response:
             content_type = response.headers.get("Content-Type", "")
             body, _received = _read_body(
-                response, deadline=deadline, started=started, socket_timeout=socket_timeout
+                response,
+                deadline=deadline,
+                started=started,
+                socket_timeout=socket_timeout,
+                on_chunk=on_chunk,
+                cancelled=cancelled,
             )
             text = body.decode("utf-8", errors="replace")
-        _raise_when_output_truncated(text, content_type)
+        if on_chunk is None:
+            _raise_when_output_truncated(text, content_type)
         return text, content_type
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")

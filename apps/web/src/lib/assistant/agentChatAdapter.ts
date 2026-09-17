@@ -9,11 +9,11 @@ import {
   learnerNotesQuestionBlock,
   type LearnerNotesPack,
 } from "../annotations/annotationContext";
-import { requestJson } from "../http/requestJson";
 import type { PdfDirectFileInput } from "../pdf/directFile";
 import type { PdfContextPayload } from "../pdf/textExtraction";
 import type { ChatMessageStatus } from "../persistence";
 import { messageAnchor, messageSelection, rememberSelection, setMessageAnchor } from "./messageAnchors";
+import { streamAgentChat } from "./chatStream";
 import { streamAssistantText } from "./streaming";
 
 export type ThreadAssistantMessagePart = { type: "text"; text: string };
@@ -72,6 +72,9 @@ export type ComposerImageAttachment = {
 
 // The backend reads at most this many images per request (MAX_IMAGE_ATTACHMENTS).
 const MAX_REQUEST_IMAGES = 8;
+// A streamed answer re-renders its Markdown on every update; tokens arrive far
+// more often than the eye can follow.
+const STREAM_RENDER_INTERVAL_MS = 40;
 
 export type AgentSnapshot = {
   contexts: AgentContextItem[];
@@ -352,52 +355,115 @@ export function createPdfAgentAdapter(args: {
         pdfContext: snapshot.pdfContext,
       };
 
-      try {
-        const response = await requestJson<{ message?: { content?: string }; content?: string }>(
-          "/api/agent/chat",
-          {
-            method: "POST",
-            body: JSON.stringify(payload),
-            signal: requestController.signal,
-          },
-          args.copy.errors.accountNotFound,
-        );
-        const content = response.message?.content || response.content;
-        if (!content) throw new Error(args.copy.errors.emptyGatewayResult);
-        answer = content;
-        if (leftScreen()) {
-          persistPartial(content, "completed", true, true);
+      // The request runs on its own, not inside this generator: assistant-ui
+      // stops pulling from the generator the moment the run is aborted, and an
+      // answer that lost its screen still has to be read to the end and saved.
+      let liveText = "";
+      let outcome: { content: string; streamed: boolean } | { error: unknown } | null = null;
+      let wake: (() => void) | null = null;
+      const notify = () => {
+        const resolve = wake;
+        wake = null;
+        resolve?.();
+      };
+      void (async () => {
+        try {
+          let content = "";
+          let truncated = false;
+          for await (const event of streamAgentChat(payload, requestController.signal, args.copy.errors.accountNotFound)) {
+            if (event.type === "delta") {
+              liveText += event.text;
+              persistPartial(liveText, "streaming");
+              notify();
+            } else if (event.type === "done") {
+              content = event.content;
+              truncated = event.truncated;
+            }
+          }
+          const streamed = liveText.length > 0;
+          content = content || liveText;
+          if (!content) throw new Error(args.copy.errors.emptyGatewayResult);
+          if (truncated) content = `${content}\n\n> ${args.copy.agent.answerTruncated}`;
+          answer = content;
+          // An answer that was not streamed is typed out by the generator,
+          // which saves it when the learner has seen it; without a screen it
+          // is saved here.
+          if (streamed || leftScreen()) {
+            persistPartial(content, "completed", true, leftScreen());
+            await persistQueue;
+          }
+          outcome = { content, streamed };
+        } catch (error) {
+          if ((error as Error).name === "AbortError") {
+            // A stop keeps what was on screen when the learner stopped.
+            persistPartial(liveText || streamedText, "stopped", true);
+          } else if (liveText || !args.isBackendOffline()) {
+            // What was already written stays; the failure is said after it.
+            const failureText = agentFailureText(error, args.copy);
+            persistPartial(liveText ? `${liveText}\n\n${failureText}` : failureText, "failed", true, leftScreen());
+          }
           await persistQueue;
-          return;
+          outcome = { error };
+        } finally {
+          notify();
         }
-        for await (const partial of streamAssistantText(content, options.abortSignal, args.copy.errors.generationStopped)) {
-          persistPartial(partial, "streaming");
+      })();
+
+      try {
+        let shownText = "";
+        let lastYieldAt = 0;
+        while (!outcome || shownText !== liveText) {
+          if (shownText === liveText) {
+            await new Promise<void>((resolve) => {
+              wake = resolve;
+            });
+            continue;
+          }
+          // A burst of small deltas is shown as one update per frame or two.
+          const wait = STREAM_RENDER_INTERVAL_MS - (performance.now() - lastYieldAt);
+          if (wait > 0) await new Promise((resolve) => window.setTimeout(resolve, wait));
+          shownText = liveText;
+          lastYieldAt = performance.now();
           yield {
-            content: [{ type: "text", text: partial }] satisfies ThreadAssistantMessagePart[],
+            content: [{ type: "text", text: shownText }] satisfies ThreadAssistantMessagePart[],
             status: { type: "running" },
           };
         }
-        persistPartial(content, "completed", true);
-        await persistQueue;
+        const settled = outcome as { content: string; streamed: boolean } | { error: unknown };
+        if ("error" in settled) throw settled.error;
+        const content = settled.content;
+        if (!settled.streamed) {
+          for await (const partial of streamAssistantText(content, options.abortSignal, args.copy.errors.generationStopped)) {
+            persistPartial(partial, "streaming");
+            yield {
+              content: [{ type: "text", text: partial }] satisfies ThreadAssistantMessagePart[],
+              status: { type: "running" },
+            };
+          }
+          persistPartial(content, "completed", true);
+          await persistQueue;
+        }
         yield {
           content: [{ type: "text", text: content }] satisfies ThreadAssistantMessagePart[],
           status: { type: "complete", reason: "stop" },
         };
       } catch (error) {
         if ((error as Error).name === "AbortError") {
-          // Leaving while the answer was being shown keeps the whole answer; a
-          // stop keeps what was on screen when the learner stopped.
-          if (answer && leftScreen()) persistPartial(answer, "completed", true, true);
-          else persistPartial(streamedText, "stopped", true);
-          await persistQueue;
+          // Leaving while a whole answer was being typed out keeps all of it;
+          // a stop keeps what was on screen. A streamed answer was saved by
+          // the request itself.
+          if (!liveText) {
+            if (answer && leftScreen()) persistPartial(answer, "completed", true, true);
+            else if (answer) persistPartial(streamedText, "stopped", true);
+            await persistQueue;
+          }
           throw error;
         }
-        if (!args.isBackendOffline()) {
+        if (liveText || !args.isBackendOffline()) {
           const failureText = agentFailureText(error, args.copy);
-          persistPartial(failureText, "failed", true, leftScreen());
-          await persistQueue;
+          const shown = liveText ? `${liveText}\n\n${failureText}` : failureText;
           yield {
-            content: [{ type: "text", text: failureText }] satisfies ThreadAssistantMessagePart[],
+            content: [{ type: "text", text: shown }] satisfies ThreadAssistantMessagePart[],
             status: { type: "running" },
           };
           throw new Error(failureText);

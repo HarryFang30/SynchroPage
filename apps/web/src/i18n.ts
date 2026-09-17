@@ -604,6 +604,7 @@ export type AppCopy = {
     stop: string;
     send: string;
     thinking: string;
+    answerTruncated: string;
     removeSelectedContent: string;
     selectionToolbarAria: string;
     addToConversation: string;
@@ -1275,6 +1276,7 @@ const zhCN: AppCopy = {
     stop: "停止",
     send: "发送",
     thinking: "正在基于当前上下文思考",
+    answerTruncated: "回答在这里中断了（达到输出上限，或连接断开）。可以重新生成，或让我接着说。",
     removeSelectedContent: "移除选中内容",
     selectionToolbarAria: "选中内容操作",
     addToConversation: "添加到对话",
@@ -1946,6 +1948,7 @@ const enUS: AppCopy = {
     stop: "Stop",
     send: "Send",
     thinking: "Thinking with the current context",
+    answerTruncated: "The answer was cut off here (output limit reached, or the connection dropped). Regenerate it, or ask me to continue.",
     removeSelectedContent: "Remove selected content",
     selectionToolbarAria: "Selected content actions",
     addToConversation: "Add to conversation",
