@@ -26,6 +26,7 @@ import {
   teachingGenerationQualityPlan,
   teachingModelRequestPriority,
   teachingOutputLanguageName,
+  teachingRequestImagePages,
   TEACHING_PROJECT_MODEL_REQUEST_CONCURRENCY,
   TEACHING_PROJECT_WARMUP_PAGE_COUNT,
   teachingWarmupPageNumbers,
@@ -39,6 +40,7 @@ import {
   lessonPlanMatchesLanguage,
   lessonPlanRequestPages,
   lessonPlanRequestSlice,
+  lessonPlanRow,
   normalizeLessonPlan,
   type LessonPlan,
   type LessonPlanDepth,
@@ -493,7 +495,8 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             const previousPage = generationInputPagesByNumber.get(pageNo - 1);
             const nextPage = generationInputPagesByNumber.get(pageNo + 1);
             const documentFile = await getDocumentFileForPlan(plan);
-            const pageImages = plan.attachPageImage ? await getPageImages([pageNo]) : undefined;
+            const imagePages = teachingRequestImagePages([runningPage], plan, p.modelApiConfig, lessonPlan);
+            const pageImages = imagePages.length ? await getPageImages(imagePages) : undefined;
             const priority = teachingModelRequestPriority([runningPage], p.currentPdfPageNo, "now", "next");
             const timeoutMs = teachingRequestTimeoutMs(plan.reasoningEffort, 1, runtimeLimits.deadlines);
             const response = await runLimitedGenerationRequest(
@@ -538,7 +541,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
 
           const generateSinglePage = async (
             runningPage: PageData,
-            plan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "initial", p.modelApiConfig),
+            plan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "initial", p.modelApiConfig, lessonPlanRow(lessonPlan, runningPage.page_no)),
             fallbackOnFailure?: PageData,
           ) => {
             const pageNo = runningPage.page_no;
@@ -592,6 +595,8 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             const handledPageNumbers = new Set<number>();
             try {
               const documentFile = await getDocumentFileForPlan(pageBatch.plan);
+              const imagePages = teachingRequestImagePages(runningPages, pageBatch.plan, p.modelApiConfig, lessonPlan);
+              const pageImages = imagePages.length ? await getPageImages(imagePages) : undefined;
               const priority = teachingModelRequestPriority(runningPages, p.currentPdfPageNo, "now", "next");
               const timeoutMs = teachingRequestTimeoutMs(
                 pageBatch.plan.reasoningEffort,
@@ -621,6 +626,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                             runningPages.map((page) => page.page_no),
                             handoffFor(runningPages[0].page_no),
                           ),
+                          pageImages,
                         }),
                         signal: requestSignal,
                       },
@@ -1111,7 +1117,8 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               const previousPage = generationInputPagesByNumber.get(pageNo - 1);
               const nextPage = generationInputPagesByNumber.get(pageNo + 1);
               const documentFile = await getDocumentFileForPlan(plan);
-              const pageImages = plan.attachPageImage ? await getProjectPageImages([pageNo]) : undefined;
+              const imagePages = teachingRequestImagePages([runningPage], plan, p.modelApiConfig, lessonPlan);
+              const pageImages = imagePages.length ? await getProjectPageImages(imagePages) : undefined;
               const priority = item.documentId === _documentId
                 ? teachingModelRequestPriority([runningPage], p.currentPdfPageNo, "next", "later")
                 : "later";
@@ -1165,7 +1172,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
 
             const generateSinglePage = async (
               runningPage: PageData,
-              plan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "initial", p.modelApiConfig),
+              plan = teachingGenerationQualityPlan(runningPage, p.uiPreferences.modelReasoningEffort, "initial", p.modelApiConfig, lessonPlanRow(lessonPlan, runningPage.page_no)),
               fallbackOnFailure?: PageData,
             ) => {
               const pageNo = runningPage.page_no;
@@ -1217,6 +1224,8 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               const handledPageNumbers = new Set<number>();
               try {
                 const documentFile = await getDocumentFileForPlan(pageBatch.plan);
+                const imagePages = teachingRequestImagePages(runningPages, pageBatch.plan, p.modelApiConfig, lessonPlan);
+                const pageImages = imagePages.length ? await getProjectPageImages(imagePages) : undefined;
                 const priority = item.documentId === _documentId
                   ? teachingModelRequestPriority(runningPages, p.currentPdfPageNo, "next", "later")
                   : "later";
@@ -1248,6 +1257,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                               runningPages.map((page) => page.page_no),
                               handoffFor(runningPages[0].page_no),
                             ),
+                            pageImages,
                           }),
                           signal: requestSignal,
                         },

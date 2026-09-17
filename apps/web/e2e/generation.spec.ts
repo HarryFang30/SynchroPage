@@ -937,6 +937,66 @@ test.describe("Teaching Generation (mocked)", () => {
     expect(readableCall?.body.pageImages).toBeUndefined();
   });
 
+  test("a segment is one request that thinks as hard as its hardest page and shows the model every page worth explaining", async ({ page }) => {
+    const flash = { providerId: "deepseek", model: "deepseek-flash" };
+    const flashConfig = {
+      version: 1,
+      selectedProviderId: "deepseek",
+      providers: [{
+        id: "deepseek", name: "DeepSeek", type: "openai-compatible", apiHost: "https://api.deepseek.com",
+        apiKeyRequired: true, hasApiKey: true, enabled: true, models: ["deepseek-flash"],
+      }],
+      defaults: { assistant: flash, teachingFast: flash, teachingBalanced: flash, teachingQuality: flash },
+    };
+    await page.unroute("**/api/**");
+    const batches: Array<Record<string, unknown>> = [];
+    await page.route("**/api/**", async (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/model-config")) {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(flashConfig) });
+        return;
+      }
+      if (url.includes("/api/generate/plan")) {
+        await fulfilPlan(route, 8);
+        return;
+      }
+      if (url.includes("/api/generate/pages")) {
+        const body = JSON.parse(route.request().postData() || "{}") as Record<string, unknown>;
+        batches.push(body);
+        const pages = (body.pages as Array<{ page_no: number }>).map((item) => ({
+          page_no: item.page_no,
+          // Two sentences are a complete explanation of a page that explains itself.
+          teaching: { slide_title: `Page ${item.page_no}`, point: `Point ${item.page_no}`, speaker_notes_md: `Short and complete explanation of page ${item.page_no}, nothing more to add.`, confidence: 0.9, concepts: [], output_language: "zh-CN" },
+          status: "completed",
+        }));
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ pages }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+    await page.reload();
+    await uploadPdfFromRail(page, "eight-page.pdf");
+    await expect(page.locator(".pdf-page-shell")).toHaveCount(8);
+
+    await page.locator(".generate-main-button").click();
+    await expect(page.locator(".notes-content")).toContainText(/Short and complete explanation/, { timeout: 20_000 });
+    await expect.poll(() => batches.flatMap((body) => (body.pages as Array<{ page_no: number }>).map((item) => item.page_no)).length, { timeout: 20_000 }).toBe(8);
+
+    // The cover (skim), the key page (full) and the examples (brief) are one
+    // stretch: one request, not one per effort level.
+    expect(batches).toHaveLength(1);
+    const [batch] = batches;
+    // The slides hold a few words each; what decides the effort is the key page.
+    expect(batch.reasoningEffort).toBe("medium");
+    // The model sees every page it has to explain; the cover needs no picture.
+    const images = batch.pageImages as Array<{ page_no: number; data_url: string }>;
+    expect(images.map((image) => image.page_no)).toEqual([2, 3, 4, 5, 6, 7, 8]);
+    expect(images[0].data_url.startsWith("data:image/png;base64,")).toBe(true);
+    // A short explanation is an explanation: nothing was asked for again.
+    await page.waitForTimeout(1_000);
+    expect(batches).toHaveLength(1);
+  });
+
   test("structure and JSON tabs only appear in Debug mode", async ({ page }) => {
     await expect(page.locator(".tab-group")).toBeVisible();
     // 讲解 / 笔记 / 地图

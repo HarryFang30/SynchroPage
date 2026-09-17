@@ -212,8 +212,10 @@ def _teaching_page_output_contract(page_no: Any) -> dict[str, Any]:
         "teaching": {
             "output_language": "zh-CN|en-US",
             "slide_title": "the page's title in the source's own words",
-            "speaker_notes_md": "the lecture for this page in Markdown; labelled blockquotes are the only devices, no headings",
-            "handoff": "one or two sentences: what the student holds after this page, for the next page to pick up",
+            "point": "one sentence: the claim the student must take away from this page",
+            "gap": "what the slide leaves unsaid that the student needs, or none",
+            "speaker_notes_md": "the explanation in Markdown: opens with the point, then closes the gap; labelled blockquotes are the only devices, no headings",
+            "handoff": "one sentence: what the student now holds, so the next page does not explain it again",
             "stuck_points": ["mistakes people really make on this page; 0-3 one-liners; empty on skim pages"],
             "exam_angles": ["only what is really examinable; 0-2 one-liners; empty on skim pages"],
             "confidence": 0.82,
@@ -312,11 +314,11 @@ def _teaching_lesson_plan_lines(body: Mapping[str, Any], target_pages: Sequence[
         lines.append(f"- p{page_no}: role={row['role']} depth={row['depth']}{key}{cue}")
     handoff = _string_value(plan.get("handoff"), "")
     if handoff:
-        lines.append(f"handoff_from_previous_page: {handoff}")
+        lines.append(f"student_already_holds (from the previous page; build on it, do not open by recapping it): {handoff}")
     else:
         lines.append(
-            "handoff_from_previous_page: none (this is the first page you teach in this run; "
-            "open naturally, without recapping pages you were not shown)."
+            "student_already_holds: nothing from this run (this is the first page you teach; "
+            "do not recap pages you were not shown)."
         )
     return lines
 
@@ -477,8 +479,9 @@ def _teaching_prompt_rules(body: Mapping[str, Any], *, batch: bool) -> list[str]
         page_rule,
         "- Always return source.page_type: echo the page_type given for the page, or your own classification when it was unknown. Do not copy source text; omit every other source field except source.pdf_page_ref.",
         f"- Device labels, exactly: {label_list}. The answer of the {labels['check']} device starts the next line of the same blockquote with {labels['answer']}{colon}. No other blockquotes, no headings.",
-        "- Follow the depth the lesson plan gives each page: skim is one sentence, brief one short paragraph, full a proper explanation; a key page may run longer. Never pad a skim or brief page.",
-        "- Fill teaching.handoff with one or two sentences on what the student holds after this page; the request for the next page receives it.",
+        "- Write teaching.point and teaching.gap before teaching.speaker_notes_md, in that order; the first sentence of the explanation states the point and the rest closes the gap.",
+        "- The depth the lesson plan gives a page is a ceiling on length, never a target: skim is one sentence, brief at most a short paragraph, full at most a few paragraphs; a key page may run longer when its gap is that large. Never pad, and never restate what the student can read on the slide.",
+        "- Fill teaching.handoff with one sentence on what the student holds after this page; the request for the next page receives it so that it is not explained twice.",
         "- Fill teaching.concepts with 2-5 short terms named on this page (at most 12 characters each), teaching.stuck_points with 0-3 mistakes people really make on this page, and teaching.exam_angles with 0-2 angles only when the page is really examinable. All three stay empty on skim pages and are never repeated in the prose.",
         "- Also fill visual_explanations on figure and table pages, formula_explanations on formula pages, prerequisites with what the page silently assumes, and evidence with 1-4 short fragments visible on this page; leave an array empty when the page does not call for it.",
         "- Ground every claim in the target page text, the attached PDF page, or the document context; cite other pages as p.N and never invent numbers, definitions, or figure conclusions.",

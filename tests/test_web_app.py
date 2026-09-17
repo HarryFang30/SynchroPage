@@ -896,7 +896,7 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("segment: Opening (pages 3-7)", prompt)
         self.assertIn("- p3: role=title depth=skim — cover", prompt)
         self.assertIn("- p7: role=concept depth=full key=true — the definition", prompt)
-        self.assertIn("handoff_from_previous_page: none", prompt)
+        self.assertIn("student_already_holds: nothing from this run", prompt)
         self.assertIn("--- Target page 3 ---", prompt)
         self.assertIn("source_text:", prompt)
         self.assertNotIn("Pages JSONL:", prompt)
