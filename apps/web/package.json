@@ -18,8 +18,11 @@
     "@fontsource/geist-sans": "^5.2.5",
     "@radix-ui/react-dialog": "^1.1.17",
     "dexie": "^4.4.4",
-    "katex": "^0.17.0",
+    "katex": "0.16.47",
     "lucide-react": "^1.18.0",
+    "mdast-util-math": "^3.0.0",
+    "micromark-extension-math-extended": "^3.2.2",
+    "micromark-util-character": "^2.1.1",
     "pdfjs-dist": "^6.0.227",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
@@ -27,7 +30,7 @@
     "react-resizable-panels": "^4.11.2",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0"
+    "unist-util-visit": "^5.1.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",
@@ -35,11 +38,16 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
     "autoprefixer": "^10.5.0",
+    "micromark-util-types": "^2.0.2",
     "playwright": "^1.61.0",
     "postcss": "^8.5.15",
+    "rehype-stringify": "^10.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
     "tailwindcss": "^3.4.17",
     "tailwindcss-themer": "^4.1.1",
     "typescript": "^6.0.3",
+    "unified": "^11.0.5",
     "vite": "^8.0.16"
   }
 }

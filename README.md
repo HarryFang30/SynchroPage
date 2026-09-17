@@ -410,6 +410,14 @@ Prompt 定义在 `src/pdf_agent/server/constants.py`（`TEACHING_PLANNER_INSTRUC
 }
 ```
 
+### 公式的写法与渲染
+
+讲解、转写和助手回复里的数学都是 LaTeX，前端用 KaTeX 排版（`apps/web/src/lib/markdown/mathMarkdown.ts`）。公式的边界由 Markdown 的 tokenizer 决定，而不是渲染前的字符串修补：`micromark-extension-math-extended` 认 `$$` 围栏、行内 `$$…$$` 和 `\(…\)`，仓库里的 `llmMathText.ts` 补上带 Pandoc 货币规则的单美元 `$…$`（`$5 and $10` 不是公式；`$5, and $x$` 里只有 x 是公式）和写在句子中间的 `\[…\]`。tokenizer 认出来的区间原样交给 KaTeX，认不出来的就是正文，所以一个多余的 `$` 只会多显示一个字符，不会把后面整段变成斜体。独占一段的 `$$…$$` 或 `\[…\]` 提升为独立公式（紧跟的句号进公式里）；标题、标签这类行内位置里的独立公式降为行内。唯一的字符串级处理是表格行里公式内的 `|`（GFM 先按 `|` 切单元格再解析行内内容），会换成 `\lvert{}` / `\rvert{}`。KaTeX 解析不了的公式以源码显示并带 `.katex-error`，页面其余部分不受影响。
+
+后端只修 JSON 转义留下的痕迹（`src/pdf_agent/server/markdown_math.py`）：模型漏写的 `\\`（`\frac` → `\\frac`）、写了两遍的换行（字面的 `\n` 后面不是英文字母时变成换行）和数字前的反斜杠（`\2^n` → `2^n`）；分隔符和公式本身按模型写的原样存储。提示词里要求模型：行内 `$…$`，独立公式单独一行 `$$`、公式、再一行 `$$`，不用 `\( \)`、`\[ \]`，标点和中文写在 `$` 外，金额写 `\$5`，表格里的绝对值写 `\lvert x \rvert`。
+
+回归测试：`apps/web/e2e/markdownMath.spec.ts` 用应用同一条 remark / rehype 管线在 Node 里渲染一组真实写法（曾经渲染坏的三种输入、两种分隔符方言、货币、中文标点、表格、未闭合的分隔符），断言每条公式原样到达 KaTeX、正文一个字不少；`tests/test_markdown_math.py` 覆盖 JSON 修复。
+
 ### 字体
 
 软件里所有英文（界面、讲解、助手回复、设置）都使用 Anthropic Sans，中文仍走 PingFang / Noto Sans SC；代码和路径保持等宽字体，公式由 KaTeX 自带字体排版。字体文件不在仓库里（它是 Anthropic 的专有字体，`apps/web/public/fonts/` 已加入 .gitignore）：装了 Claude 桌面版的机器上运行一次 `./scripts/install-local-fonts.sh`，脚本会把字体从 Claude.app 复制到该目录；没有这些文件时自动回退到系统字体，不影响使用。
