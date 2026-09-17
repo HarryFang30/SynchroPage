@@ -579,13 +579,18 @@ def _image_attachments(value: Any, parts: Any = None) -> list[dict[str, str]]:
     if isinstance(parts, list):
         candidates.extend(part for part in parts if isinstance(part, Mapping) and part.get("type") == "file")
     images: list[dict[str, str]] = []
-    for item in candidates[:MAX_IMAGE_ATTACHMENTS]:
+    seen: set[str] = set()
+    for item in candidates:
+        if len(images) >= MAX_IMAGE_ATTACHMENTS:
+            break
         if not isinstance(item, Mapping):
             continue
         data_url = str(item.get("data_url") or "")
-        if not data_url.startswith("data:image/"):
+        # A client may list the same image both as an attachment and as a file part.
+        if not data_url.startswith("data:image/") or data_url in seen:
             continue
         if len(data_url) > MAX_IMAGE_DATA_URL_CHARS:
             raise HttpError(413, "Image attachment is too large", code="image_too_large")
+        seen.add(data_url)
         images.append({"data_url": data_url})
     return images

@@ -1,5 +1,8 @@
 import { test, expect } from "@playwright/test";
-import { activateAgent, resetStorage, mockApi } from "./helpers";
+import { activateAgent, resetStorage, mockApi, uploadPdfFromRail } from "./helpers";
+
+const TINY_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lL+J+wAAAABJRU5ErkJggg==";
+const TINY_PNG_DATA_URL = `data:image/png;base64,${TINY_PNG_BASE64}`;
 
 test.describe("Agent Panel", () => {
   test.beforeEach(async ({ page }) => {
@@ -495,5 +498,195 @@ test.describe("Agent Panel", () => {
     const composerShell = page.locator(".composer-shell");
     await expect(composerShell.locator(".composer-attachment-preview")).toBeVisible();
     await expect(composerShell.locator(".composer-image-preview")).toContainText("image.png");
+  });
+
+  test("a pending image is sent with the message and leaves the composer", async ({ page }) => {
+    type ChatPayload = {
+      input?: string;
+      attachments?: unknown;
+      parts?: { type?: string; data_url?: string }[];
+      messages?: { role?: string; content?: string }[];
+    };
+    const payloads: ChatPayload[] = [];
+    await page.unroute("**/api/**");
+    await page.route("**/api/**", async (route) => {
+      if (route.request().url().includes("/api/agent/chat")) {
+        payloads.push(JSON.parse(route.request().postData() || "{}") as ChatPayload);
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ content: "Mock reply." }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+    const imageFiles = (parts: ChatPayload["parts"]) => (parts || []).filter((part) => part.type === "file").map((part) => part.data_url);
+
+    const composer = await activateAgent(page);
+    await page.locator('.agent-action-button input[type="file"][accept="image/*"]').setInputFiles({
+      name: "image.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
+    });
+    const tray = page.locator(".composer-shell .composer-image-preview");
+    await expect(tray).toHaveCount(1);
+
+    await composer.click();
+    await composer.fill("这两条指令是配对的吗");
+    await page.keyboard.press("Enter");
+
+    // The image went with the message: shown in the user bubble, gone from the composer.
+    const firstUser = page.locator(".user-message").first();
+    await expect(firstUser.locator(".message-images img")).toHaveCount(1);
+    await expect(firstUser.locator(".message-images img")).toHaveAttribute("src", TINY_PNG_DATA_URL);
+    await expect(firstUser).toContainText("这两条指令是配对的吗");
+    await expect(tray).toHaveCount(0);
+    await expect(page.locator(".assistant-message").last()).toContainText("Mock reply.", { timeout: 10_000 });
+    expect(imageFiles(payloads[0].parts)).toEqual([TINY_PNG_DATA_URL]);
+    expect(payloads[0].attachments).toBeUndefined();
+
+    // A follow-up has no image of its own, but the model still sees the earlier one.
+    await composer.click();
+    await composer.fill("那中间能插别的指令吗");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".user-message")).toHaveCount(2);
+    await expect(page.locator(".user-message").nth(1).locator(".message-images")).toHaveCount(0);
+    await expect.poll(() => payloads.length, { timeout: 10_000 }).toBe(2);
+    expect(imageFiles(payloads[1].parts)).toEqual([TINY_PNG_DATA_URL]);
+    expect(payloads[1].messages?.[0]).toMatchObject({ role: "user", content: "这两条指令是配对的吗\n[1 image attached]" });
+    await expect(tray).toHaveCount(0);
+  });
+
+  test("a sent image is stored with the conversation", async ({ page }) => {
+    await uploadPdfFromRail(page);
+    await expect(page.locator(".pdf-page-shell").first().locator("canvas")).toBeVisible({ timeout: 15_000 });
+    const composer = await activateAgent(page);
+    await page.locator('.agent-action-button input[type="file"][accept="image/*"]').setInputFiles({
+      name: "image.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
+    });
+    await expect(page.locator(".composer-shell .composer-image-preview")).toHaveCount(1);
+    await composer.click();
+    await composer.fill("Explain this screenshot");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".assistant-message").last()).toContainText("Mock assistant reply", { timeout: 10_000 });
+    await expect(page.locator(".composer-shell .composer-image-preview")).toHaveCount(0);
+
+    await page.waitForTimeout(900);
+    await page.reload();
+    await page.waitForSelector(".app-shell", { timeout: 10_000 });
+    // The workspace restores with the assistant panel open.
+    await expect(page.locator(".agent-panel")).toBeVisible({ timeout: 10_000 });
+    await page.locator(".agent-panel").hover();
+    const restored = page.locator(".user-message").first();
+    await expect(restored).toContainText("Explain this screenshot", { timeout: 10_000 });
+    await expect(restored.locator(".message-images img")).toHaveAttribute("src", TINY_PNG_DATA_URL);
+    // The image belongs to the sent message, not to the next draft.
+    await expect(page.locator(".composer-shell .composer-image-preview")).toHaveCount(0);
+  });
+
+  test("a message that is only an image restores without an empty paragraph", async ({ page }) => {
+    await uploadPdfFromRail(page);
+    await expect(page.locator(".pdf-page-shell").first().locator("canvas")).toBeVisible({ timeout: 15_000 });
+    await activateAgent(page);
+    await page.locator('.agent-action-button input[type="file"][accept="image/*"]').setInputFiles({
+      name: "image.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
+    });
+    await expect(page.locator(".composer-shell .composer-image-preview")).toHaveCount(1);
+    await page.locator(".composer-send").click();
+    await expect(page.locator(".assistant-message").last()).toContainText("Mock assistant reply", { timeout: 10_000 });
+    const liveBubble = await page.locator(".user-bubble").first().innerHTML();
+
+    await page.waitForTimeout(900);
+    await page.reload();
+    await page.waitForSelector(".app-shell", { timeout: 10_000 });
+    await expect(page.locator(".agent-panel")).toBeVisible({ timeout: 10_000 });
+    await page.locator(".agent-panel").hover();
+    const restored = page.locator(".user-bubble").first();
+    await expect(restored.locator(".message-images img")).toHaveCount(1, { timeout: 10_000 });
+    expect(await restored.innerHTML()).toBe(liveBubble);
+  });
+
+  test("a pending image goes with a message sent from a button", async ({ page }) => {
+    let parts: { type?: string; data_url?: string }[] = [];
+    await page.unroute("**/api/**");
+    await page.route("**/api/**", async (route) => {
+      if (route.request().url().includes("/api/agent/chat")) {
+        parts = (JSON.parse(route.request().postData() || "{}") as { parts?: typeof parts }).parts || [];
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ content: "Mock reply." }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await activateAgent(page);
+    await page.locator('.agent-action-button input[type="file"][accept="image/*"]').setInputFiles({
+      name: "image.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
+    });
+    const tray = page.locator(".composer-shell .composer-image-preview");
+    await expect(tray).toHaveCount(1);
+
+    // A prompt suggestion is sent without the composer; the image still goes with it.
+    await page.locator(".prompt-suggestions button").first().click();
+    await expect(page.locator(".user-message .message-images img")).toHaveCount(1);
+    await expect(tray).toHaveCount(0);
+    await expect(page.locator(".assistant-message").last()).toContainText("Mock reply.", { timeout: 10_000 });
+    expect(parts.filter((part) => part.type === "file").map((part) => part.data_url)).toEqual([TINY_PNG_DATA_URL]);
+
+    // Nothing is left behind for the next message.
+    const composer = page.locator(".aui-composer-input");
+    await composer.click();
+    await composer.fill("Next question");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".user-message")).toHaveCount(2);
+    await expect(page.locator(".user-message").nth(1).locator(".message-images")).toHaveCount(0);
+  });
+
+  test("an image can be sent without any text", async ({ page }) => {
+    let input = "";
+    await page.unroute("**/api/**");
+    await page.route("**/api/**", async (route) => {
+      if (route.request().url().includes("/api/agent/chat")) {
+        input = (JSON.parse(route.request().postData() || "{}") as { input?: string }).input || "";
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ content: "Mock reply." }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    await activateAgent(page);
+    await page.locator('.agent-action-button input[type="file"][accept="image/*"]').setInputFiles({
+      name: "image.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
+    });
+    await expect(page.locator(".composer-shell .composer-image-preview")).toHaveCount(1);
+    await page.locator(".composer-send").click();
+
+    await expect(page.locator(".user-message .message-images img")).toHaveCount(1);
+    await expect(page.locator(".composer-shell .composer-image-preview")).toHaveCount(0);
+    await expect(page.locator(".assistant-message").last()).toContainText("Mock reply.", { timeout: 10_000 });
+    expect(input).toMatch(/图片|image/i);
+  });
+
+  test("removing a pending image keeps it out of the next message", async ({ page }) => {
+    const composer = await activateAgent(page);
+    await page.locator('.agent-action-button input[type="file"][accept="image/*"]').setInputFiles({
+      name: "image.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
+    });
+    const tray = page.locator(".composer-shell .composer-image-preview");
+    await expect(tray).toHaveCount(1);
+    await tray.locator("button").click();
+    await expect(tray).toHaveCount(0);
+
+    await composer.click();
+    await composer.fill("No image here");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".user-message")).toContainText("No image here");
+    await expect(page.locator(".user-message .message-images")).toHaveCount(0);
   });
 });

@@ -553,6 +553,7 @@ export type AppCopy = {
     quickExplainPrompt: (label: string) => string;
     quickSummarizePrompt: (label: string) => string;
     continuePrompt: string;
+    imageOnlyPrompt: string;
     localPreviewIntro: string;
     localPreviewSelected: (title: string) => string;
     localPreviewContexts: (count: number) => string;
@@ -1192,6 +1193,7 @@ const zhCN: AppCopy = {
     quickExplainPrompt: (label) => `请解释这段选中内容，优先基于该来源回答：${label}`,
     quickSummarizePrompt: (label) => `请总结这段选中内容，提炼关键概念和可能的公式关系：${label}`,
     continuePrompt: "请根据上下文继续。",
+    imageOnlyPrompt: "请看我发的图片，结合当前页面讲解它。",
     localPreviewIntro: "本地预览回复：真实回答会通过后端 `/api/agent/chat` 使用 OpenAI OAuth 发送。",
     localPreviewSelected: (title) => `已读取选中内容：${title}。`,
     localPreviewContexts: (count) => `已读取 ${count} 段上下文。`,
@@ -1831,6 +1833,7 @@ const enUS: AppCopy = {
     quickExplainPrompt: (label) => `Please explain this selected content. Prioritize answering from this source: ${label}`,
     quickSummarizePrompt: (label) => `Please summarize this selected content, extracting key concepts and possible formula relationships: ${label}`,
     continuePrompt: "Please continue based on the context.",
+    imageOnlyPrompt: "Look at the image I sent and explain it in the context of this page.",
     localPreviewIntro: "Local preview reply: real answers are sent through the backend `/api/agent/chat` endpoint using OpenAI OAuth.",
     localPreviewSelected: (title) => `Read selected content: ${title}.`,
     localPreviewContexts: (count) => `Read ${count} context ${count === 1 ? "item" : "items"}.`,

@@ -15,14 +15,16 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import { ReaderMarkdown } from "../workspace/WorkspaceChrome";
 import { type SelectedContext } from "../../hooks/usePageSelection";
-import { type AgentAttachment } from "../../lib/assistant/agentChatAdapter";
+import { type AgentAttachment, composerImageAttachment, messageImages } from "../../lib/assistant/agentChatAdapter";
 import {
   useAppCopy,
+  useAppendUserText,
   useAssistantUi,
 } from "../../lib/contexts";
 import { type PageData } from "../../lib/generation/teachingGeneration";
@@ -60,6 +62,7 @@ export function AssistantThread({
   attachments,
   selectedContext,
   onRemoveAttachment,
+  onAttachmentsSent,
   onRemoveSelectedContext,
   composerInputRef,
   onPasteImages,
@@ -71,6 +74,8 @@ export function AssistantThread({
   attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
   onRemoveAttachment: (id: string) => void;
+  /** The composer sent a message: the pending images went with it. */
+  onAttachmentsSent: () => void;
   onRemoveSelectedContext: () => void;
   composerInputRef: RefObject<HTMLTextAreaElement | null>;
   onPasteImages: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
@@ -79,22 +84,13 @@ export function AssistantThread({
   const copy = useAppCopy();
   const assistantUi = useAssistantUi();
   const { ThreadPrimitive } = assistantUi;
-  const thread = assistantUi.useThreadRuntime();
+  const appendUserText = useAppendUserText();
   const [challengeCount, setChallengeCount] = useState(DEFAULT_CHALLENGE_COUNT);
   const [challengeKind, setChallengeKind] = useState<ChallengeKind>("quiz");
-  const sendSuggestion = useCallback((suggestion: string) => {
-    thread.append({
-      role: "user",
-      content: [{ type: "text", text: suggestion }],
-    });
-  }, [thread]);
+  const sendSuggestion = appendUserText;
   const sendChallenge = useCallback((kind = challengeKind, count = challengeCount) => {
-    const normalizedCount = normalizeChallengeCount(count);
-    thread.append({
-      role: "user",
-      content: [{ type: "text", text: copy.agent.challengeUserMessage(kind, normalizedCount) }],
-    });
-  }, [challengeCount, challengeKind, copy.agent, thread]);
+    appendUserText(copy.agent.challengeUserMessage(kind, normalizeChallengeCount(count)));
+  }, [appendUserText, challengeCount, challengeKind, copy.agent]);
 
   return (
     <ThreadPrimitive.Root className="aui-thread-root">
@@ -133,6 +129,7 @@ export function AssistantThread({
               attachments={attachments}
               selectedContext={selectedContext}
               onRemoveAttachment={onRemoveAttachment}
+              onAttachmentsSent={onAttachmentsSent}
               onRemoveSelectedContext={onRemoveSelectedContext}
               inputRef={composerInputRef}
               onPasteImages={onPasteImages}
@@ -246,7 +243,10 @@ function AssistantMessage() {
 
 function UserMessage() {
   const copy = useAppCopy();
-  const { ActionBarPrimitive, MessagePrimitive } = useAssistantUi();
+  const assistantUi = useAssistantUi();
+  const { ActionBarPrimitive, MessagePrimitive } = assistantUi;
+  const attachments = assistantUi.useAuiState((state) => state.message.attachments);
+  const images = useMemo(() => messageImages({ attachments }), [attachments]);
   return (
     <MessagePrimitive.Root className="aui-message user-message">
       <div className="message-bubble user-bubble">
@@ -258,6 +258,13 @@ function UserMessage() {
             </div>
           )}
         </MessagePrimitive.Quote>
+        {!!images.length && (
+          <div className="message-images">
+            {images.map((image) => (
+              <img key={image.id} src={image.data_url} alt={image.name} title={image.name} />
+            ))}
+          </div>
+        )}
         <MessagePrimitive.Parts />
       </div>
       <ActionBarPrimitive.Root className="message-actions" hideWhenRunning autohide="not-last">
@@ -411,8 +418,7 @@ function ChallengeQuizCard({ quiz, isStreaming, messageId }: { quiz: QuizSet; is
 
 function ChallengeProblemCard({ problem }: { problem: ChallengeProblem }) {
   const copy = useAppCopy();
-  const assistantUi = useAssistantUi();
-  const thread = assistantUi.useThreadRuntime();
+  const appendUserText = useAppendUserText();
   const [showHint, setShowHint] = useState(false);
   const [showSelfCheck, setShowSelfCheck] = useState(false);
   const meta = [
@@ -456,12 +462,7 @@ function ChallengeProblemCard({ problem }: { problem: ChallengeProblem }) {
         </button>
         <button
           type="button"
-          onClick={() => {
-            thread.append({
-              role: "user",
-              content: [{ type: "text", text: copy.agent.challengeUserMessage("problem", 1) }],
-            });
-          }}
+          onClick={() => appendUserText(copy.agent.challengeUserMessage("problem", 1))}
         >
           {copy.agent.challengeProblemAgain}
         </button>
@@ -512,6 +513,7 @@ function AssistantComposer({
   attachments,
   selectedContext,
   onRemoveAttachment,
+  onAttachmentsSent,
   onRemoveSelectedContext,
   inputRef,
   onPasteImages,
@@ -520,6 +522,7 @@ function AssistantComposer({
   attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
   onRemoveAttachment: (id: string) => void;
+  onAttachmentsSent: () => void;
   onRemoveSelectedContext: () => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   onPasteImages: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
@@ -539,6 +542,29 @@ function AssistantComposer({
         : undefined,
     );
   }, [selectedContext, thread]);
+
+  // The pending images are part of the draft: the composer holds them so that
+  // sending moves them onto the user message, the way it does with the quote.
+  useEffect(() => {
+    const composer = thread.composer;
+    const pendingIds = new Set(attachments.map((attachment) => attachment.id));
+    const heldIds = new Set<string>();
+    for (const held of [...composer.getState().attachments]) {
+      if (pendingIds.has(held.id)) {
+        heldIds.add(held.id);
+        continue;
+      }
+      const index = composer.getState().attachments.findIndex((item) => item.id === held.id);
+      if (index !== -1) void composer.getAttachmentByIndex(index).remove().catch(() => undefined);
+    }
+    for (const attachment of attachments) {
+      if (!heldIds.has(attachment.id)) void composer.addAttachment(composerImageAttachment(attachment)).catch(() => undefined);
+    }
+  }, [attachments, thread]);
+
+  const onAttachmentsSentRef = useRef(onAttachmentsSent);
+  onAttachmentsSentRef.current = onAttachmentsSent;
+  useEffect(() => thread.composer.unstable_on("send", () => onAttachmentsSentRef.current()), [thread]);
 
   return (
     <div className="composer-shell">

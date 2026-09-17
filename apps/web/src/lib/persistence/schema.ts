@@ -126,6 +126,8 @@ export type ChatMessageRecord = {
   contentMarkdown?: string;
   selectedContext?: PersistedJson | null;
   sourceRefs?: PersistedJson[];
+  /** Images the user sent with this message (`data_url` holds the image). */
+  attachments?: PersistedJson[];
   status: ChatMessageStatus;
   createdAt: number;
   updatedAt: number;

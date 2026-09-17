@@ -337,6 +337,24 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("上一轮问题", content[1]["text"])
         self.assertEqual(content[2], {"type": "input_image", "image_url": "data:image/png;base64,AAAA"})
 
+    def test_agent_payload_sends_each_image_once(self) -> None:
+        first = {"type": "file", "name": "a.png", "mime": "image/png", "data_url": "data:image/png;base64,AAAA"}
+        second = {"type": "file", "name": "b.png", "mime": "image/png", "data_url": "data:image/png;base64,BBBB"}
+        payload = _build_responses_payload(
+            {
+                "document": {"id": "doc_1", "title": "Doc"},
+                "page": {"page_no": 1, "source": {}, "teaching": {"slide_title": "Intro"}},
+                "input": "这两张图有什么区别",
+                # The same image listed as an attachment and as a file part is one image.
+                "attachments": [first],
+                "parts": [{"type": "text", "text": "这两张图有什么区别"}, first, second],
+            },
+            default_model="fallback-model",
+        )
+
+        images = [part["image_url"] for part in payload["input"][0]["content"] if part["type"] == "input_image"]
+        self.assertEqual(images, ["data:image/png;base64,AAAA", "data:image/png;base64,BBBB"])
+
     def test_agent_payload_truncates_large_pdf_context_to_edges(self) -> None:
         payload = _build_responses_payload(
             {
