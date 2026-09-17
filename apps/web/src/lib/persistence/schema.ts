@@ -109,6 +109,26 @@ export type ChatThreadRecord = {
   workspaceId: string;
   documentId?: string;
   title: string;
+  /** "user" once the learner has renamed the conversation; an auto title follows the first question. */
+  titleSource?: "auto" | "user";
+  /** Summary fields for the conversation list, kept up to date as messages are saved. */
+  messageCount?: number;
+  preview?: string;
+  /** PDF pages the learner asked from, in the order they first came up. */
+  pages?: number[];
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** One row of the conversation list. */
+export type ChatThreadSummary = {
+  id: string;
+  documentId?: string;
+  title: string;
+  titleSource: "auto" | "user";
+  messageCount: number;
+  preview: string;
+  pages: number[];
   createdAt: number;
   updatedAt: number;
 };
@@ -128,6 +148,9 @@ export type ChatMessageRecord = {
   sourceRefs?: PersistedJson[];
   /** Images the user sent with this message (`data_url` holds the image). */
   attachments?: PersistedJson[];
+  /** The PDF page the learner was on when this message was sent. */
+  pageNumber?: number;
+  pageTitle?: string;
   status: ChatMessageStatus;
   createdAt: number;
   updatedAt: number;

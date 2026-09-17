@@ -373,6 +373,14 @@ OAuth / Gateway 配置在 [config/auth/openai_oauth.yaml](config/auth/openai_oau
 9. 在 Agent 面板底部的 Challenge 条里选择题型和题数，点「生成挑战」：选择题会以居中浮层（约 75% 视口、毛玻璃背景）打开，一次一题，答错先给诊断和提示、允许再答一次，锁定后展示为什么对、可迁移的原则和「考试怎么考」；做完给出首答正确率、按考点的强弱和错题重做队列，错题会记入本文档的薄弱点，下次出题优先针对。
 10. 在 PDF 上拖选文字后，浮动工具条最前面是「高亮」和「写笔记」；每一页下方还有「添加本页笔记」。详见下面的「PDF 高亮与笔记」。
 
+### 助手对话
+
+- **一份文档多段对话**：助手面板左上角是当前对话的标题（取自第一个问题，问的是选中内容时带上选中的文字），点它或右侧的时钟图标打开「历史对话」：按今天 / 昨天 / 近 7 天 / 更早分组，可搜索（标题和对话里说过的话都搜）、重命名、删除。铅笔图标开始新对话；旧对话留在历史里，空对话下面还会列出最近 3 段。没写过字的对话不进历史，连点「新对话」也不会堆出空记录。历史只列当前文档的对话，切换文档时回到那份文档最近的一段。
+- **问题记得自己是在哪一页问的**：每条用户消息上有 `p.N` 标签，点它回到那一页；输入框左下角的标签是下一个问题会带上的页，翻页时跟着变。发给模型的历史对话里每个用户回合都标了页码和当时选中的文字，所以翻页之后的追问（「那为什么…」）仍接着上一个话题，新话题则从当前页讲起。
+- **改问题、重新生成**：用户消息悬停出现铅笔，点开直接改，回车重新发送，这条之后的内容被新回答替换；「重新生成」同理，只保留新回答。存下来的对话永远和屏幕上一致。问题如果是针对选中内容问的，重新生成和编辑后仍然针对同一段选中内容。
+- **停止与后台作答**：作答时发送键变成停止键，停止后保留已经显示的部分。作答途中切到别的对话、开新对话或隐藏助手面板不会打断请求：答案回来后存进它所属的对话，不会出现在别的对话里。
+- **回答要答到点子上**：后端 prompt（`AGENT_INSTRUCTIONS`）要求第一句就回答问题，不复述问题、不先总结页面、不加结尾客套；长度跟着问题走；前提错了先纠正；课件没讲的内容用模型自己的知识回答并说明课件没讲；已有讲解视为学生读过的内容，不重复。prompt 的顺序是「页面 / 选中内容 → 之前的对话 → 现在要回答的问题」，问题放在最后且只出现一次；历史对话最多 12 条（最近 4 条保留全文，更早的截短），失败的回答不进历史，测验 JSON 压成一行说明。回答模式（简洁 / 引导 / 详细）只决定讲多深，不再规定固定的分节模板。
+
 ### PDF 高亮与笔记
 
 - **高亮**：选中 PDF 文字后点「高亮」，会以马克笔样式画在文字上（黄 / 绿 / 蓝 / 粉四色，记住上次用的颜色）。高亮位置按页面比例保存，缩放窗口也不会错位。
@@ -471,8 +479,8 @@ workspaces        workspace metadata、active document/thread、当前页、layo
 documents         PDF / SynchroPage document metadata、页数、当前 PDF 页、pdfBlobId
 fileBlobs         PDF Blob 本体
 generatedPages    逐页讲解 markdown/json/status
-chatThreads       Agent 对话线程
-chatMessages      user/assistant/system 消息、selectedContext、sourceRefs、streaming status
+chatThreads       Agent 对话线程：标题（自动 / 用户改名）、消息数、预览、问过的页码
+chatMessages      user/assistant/system 消息、提问时所在页、图片、selectedContext、sourceRefs、streaming status
 selectedContexts  composer 中尚未发送的 PDF/讲解/助手选区
 settings          theme、语言、debug、PDF context 截断策略等 UI 设置
 ```
@@ -481,7 +489,7 @@ settings          theme、语言、debug、PDF context 截断策略等 UI 设置
 
 - PDF 上传成功后保存 Blob + Document + Workspace。
 - PDF 页码切换、讲解页变化、Settings/layout 变化会 debounce 保存。
-- Agent 消息发送前先保存 user message；assistant 消息从 pending、streaming 到 completed/failed/stopped 都会持续保存。
+- Agent 消息发送前先保存 user message；assistant 消息从 pending、streaming 到 completed/failed/stopped 都会持续保存。编辑问题或重新生成后，被替换的消息同时从存储里删掉。
 - selected context 添加到 composer 时保存，清空时删除。
 - 页面隐藏或刷新前会尝试 flush 当前 workspace 快照。
 

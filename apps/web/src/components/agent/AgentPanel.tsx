@@ -1,7 +1,8 @@
 import {
+  ChevronDown,
+  History,
   Image,
-  NotebookText,
-  Trash2,
+  SquarePen,
   X,
 } from "lucide-react";
 import {
@@ -11,6 +12,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import { type AppCopy } from "../../i18n";
 import {
@@ -25,6 +27,7 @@ import {
   AppCopyContext,
   AssistantUiContext,
   PendingImagesContext,
+  PendingQuoteContext,
   useAppCopy,
   useAppendUserText,
   useAssistantUi,
@@ -37,6 +40,7 @@ import { type OAuthMode } from "../../hooks/useOAuthFlow";
 import { createId, compactText } from "../../lib/workspace/synchroPageState";
 import { type ThreadMessageLike } from "../../lib/persistence/workspaceStore";
 import { AssistantThread } from "./AssistantThread";
+import { ConversationHistory, conversationTitle, type ConversationActions } from "./ConversationHistory";
 import { contextSourceLabel, selectedContextSourceLabel } from "./agentLabels";
 
 function composerContextPreview(contexts: AgentContextItem[], copy: AppCopy) {
@@ -96,8 +100,10 @@ export type AgentPanelProps = {
   /** Written notes on the current PDF page that the next quiz will target. */
   learnerNoteCount: number;
   persistChatMessage?: (input: ChatPersistInput) => Promise<void>;
+  pruneChatMessages?: (keepIds: string[]) => Promise<void>;
   onNewConversation: () => void;
-};
+  onJumpToPage: (pageNo: number) => void;
+} & ConversationActions;
 
 export type QuickSelectionPrompt = {
   id: string;
@@ -126,7 +132,7 @@ function QuickSelectionPromptRunner(props: {
     const send = () => {
       timer = null;
       consumedRef.current = prompt.id;
-      appendUserText(prompt.prompt);
+      appendUserText(prompt.prompt, { text: prompt.context.text, messageId: prompt.context.id });
       onConsumedRef.current(prompt.id);
     };
     const isRunning = () => Boolean(thread.getState?.().isRunning);
@@ -193,6 +199,13 @@ export function AgentPanel(props: AgentPanelProps) {
 function AgentPanelLoaded(props: AgentPanelProps) {
   const copy = useAppCopy();
   const assistantUi = useAssistantUi();
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const adapter = useMemo(
     () =>
       createPdfAgentAdapter({
@@ -203,10 +216,16 @@ function AgentPanelLoaded(props: AgentPanelProps) {
         copy,
         createId,
         isBackendOffline: () => props.backendOffline,
-        clearSelectedContext: () => props.setSelectedContext(null),
+        // An answer that finishes after the learner moved to another conversation
+        // must not clear what they have selected there.
+        clearSelectedContext: () => {
+          if (mountedRef.current) props.setSelectedContext(null);
+        },
         persistChatMessage: props.persistChatMessage,
+        pruneChatMessages: props.pruneChatMessages,
+        isOnScreen: () => mountedRef.current,
       }),
-    [copy, props.backendOffline, props.getDocumentFile, props.getPage, props.getPack, props.getSnapshot, props.persistChatMessage, props.setSelectedContext],
+    [copy, props.backendOffline, props.getDocumentFile, props.getPage, props.getPack, props.getSnapshot, props.persistChatMessage, props.pruneChatMessages, props.setSelectedContext],
   );
   const runtime = assistantUi.useLocalRuntime(adapter, { initialMessages: props.initialMessages });
   const { AssistantRuntimeProvider } = assistantUi;
@@ -227,21 +246,34 @@ function AgentPanelLoaded(props: AgentPanelProps) {
     return images;
   }, [setAttachments]);
 
+  const pendingQuoteRef = useRef(props.selectedContext);
+  pendingQuoteRef.current = props.selectedContext;
+  const pendingQuote = useCallback(() => {
+    const context = pendingQuoteRef.current;
+    return context?.text.trim() ? { text: context.text, messageId: context.id } : undefined;
+  }, []);
+
   const clearAgentContext = useCallback(() => {
     props.setContexts([]);
     props.setAttachments([]);
     props.setSelectedContext(null);
   }, [props]);
 
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  const activeConversation = props.conversations.find((conversation) => conversation.id === props.activeConversationId);
+  const activeTitle = activeConversation ? conversationTitle(activeConversation, copy) : copy.agent.newConversation;
+
+  // The panel is remounted for the new conversation. An answer still being
+  // written keeps going and is saved to the conversation it belongs to.
   const startNewConversation = useCallback(() => {
-    runtime.thread.reset();
-    void runtime.thread.composer.reset();
+    setHistoryOpen(false);
     clearAgentContext();
     if (props.pendingSelectionPrompt) {
       props.clearPendingSelectionPrompt(props.pendingSelectionPrompt.id);
     }
     props.onNewConversation();
-  }, [clearAgentContext, props, runtime]);
+  }, [clearAgentContext, props]);
 
   const addImages = async (files: FileList | File[]) => {
     const images = await Promise.all([...files].filter((file) => file.type.startsWith("image/")).slice(0, 6).map((file) => readFileAsDataUrl(file, copy)));
@@ -261,23 +293,43 @@ function AgentPanelLoaded(props: AgentPanelProps) {
   return (
     <aside className="agent-panel">
       <div className="agent-toolbar">
-        <div className="toolbar-title">
+        <button
+          className="conversation-switcher"
+          type="button"
+          data-conversation-history-toggle
+          aria-haspopup="dialog"
+          aria-expanded={historyOpen}
+          title={copy.agent.history}
+          onClick={() => setHistoryOpen((open) => !open)}
+        >
           <span className="agent-dot" />
-          <span>{copy.common.assistant}</span>
-        </div>
+          <span className="conversation-switcher-title">{activeTitle}</span>
+          <ChevronDown aria-hidden="true" />
+        </button>
         <div className="toolbar-actions">
           <span className="agent-model">{props.oauthMode === "connected" ? "OAuth" : props.backendOffline ? "Local" : "OAuth"}</span>
-          <button className="agent-action-button" type="button" onClick={startNewConversation}>
-            <NotebookText />
-            <span>{copy.agent.newConversation}</span>
+          <button
+            className="agent-action-button icon-only"
+            type="button"
+            onClick={startNewConversation}
+            aria-label={copy.agent.newConversation}
+            title={copy.agent.newConversation}
+          >
+            <SquarePen />
           </button>
-          <button className="agent-action-button" type="button" onClick={clearAgentContext}>
-            <Trash2 />
-            <span>{copy.agent.clearContext}</span>
+          <button
+            className="agent-action-button icon-only"
+            type="button"
+            data-conversation-history-toggle
+            aria-label={copy.agent.history}
+            aria-expanded={historyOpen}
+            title={copy.agent.history}
+            onClick={() => setHistoryOpen((open) => !open)}
+          >
+            <History />
           </button>
-          <label className="agent-action-button" title={copy.agent.addImage} aria-label={copy.agent.addImage}>
+          <label className="agent-action-button icon-only" title={copy.agent.addImage} aria-label={copy.agent.addImage}>
             <Image />
-            <span>{copy.agent.addImage}</span>
             <input
               type="file"
               accept="image/*"
@@ -289,6 +341,17 @@ function AgentPanelLoaded(props: AgentPanelProps) {
             />
           </label>
         </div>
+        {historyOpen && (
+          <ConversationHistory
+            conversations={props.conversations}
+            activeConversationId={props.activeConversationId}
+            onOpenConversation={props.onOpenConversation}
+            onRenameConversation={props.onRenameConversation}
+            onDeleteConversation={props.onDeleteConversation}
+            onSearchConversations={props.onSearchConversations}
+            onClose={closeHistory}
+          />
+        )}
       </div>
       <div className="agent-context-strip" hidden={!props.showSourcePills || !props.contexts.length}>
         {props.contexts.map((context) => (
@@ -307,6 +370,7 @@ function AgentPanelLoaded(props: AgentPanelProps) {
       </div>
       <AssistantRuntimeProvider runtime={runtime}>
         <PendingImagesContext.Provider value={takePendingImages}>
+        <PendingQuoteContext.Provider value={pendingQuote}>
           <QuickSelectionPromptRunner
             prompt={props.pendingSelectionPrompt}
             onConsumed={props.clearPendingSelectionPrompt}
@@ -323,7 +387,14 @@ function AgentPanelLoaded(props: AgentPanelProps) {
             composerInputRef={props.composerInputRef}
             onPasteImages={addClipboardImages}
             learnerNoteCount={props.learnerNoteCount}
+            conversations={props.conversations}
+            activeConversationId={props.activeConversationId}
+            onOpenConversation={props.onOpenConversation}
+            onShowHistory={() => setHistoryOpen(true)}
+            onNewConversation={startNewConversation}
+            onJumpToPage={props.onJumpToPage}
           />
+        </PendingQuoteContext.Provider>
         </PendingImagesContext.Provider>
       </AssistantRuntimeProvider>
     </aside>

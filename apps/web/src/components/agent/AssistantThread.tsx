@@ -1,19 +1,21 @@
 import {
-  ChevronLeft,
-  ChevronRight,
   Copy,
+  FileText,
+  Pencil,
   RefreshCw,
   Send,
+  Square,
   Target,
   X,
 } from "lucide-react";
 import {
+  createContext,
   lazy,
   type ClipboardEvent as ReactClipboardEvent,
   type ReactNode,
   type RefObject,
-  Suspense,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -22,14 +24,17 @@ import {
 import { ReaderMarkdown } from "../workspace/WorkspaceChrome";
 import { type SelectedContext } from "../../hooks/usePageSelection";
 import { type AgentAttachment, composerImageAttachment, messageImages } from "../../lib/assistant/agentChatAdapter";
+import { messageAnchor, useLiveMessageAnchor } from "../../lib/assistant/messageAnchors";
 import {
   useAppCopy,
   useAppendUserText,
   useAssistantUi,
 } from "../../lib/contexts";
 import { type PageData } from "../../lib/generation/teachingGeneration";
+import { type ChatThreadSummary } from "../../lib/persistence";
 import { compactText } from "../../lib/workspace/synchroPageState";
 import { selectedContextSourceLabel } from "./agentLabels";
+import { RecentConversations } from "./ConversationHistory";
 import { QuizOverlay, QuizSkeletonOverlay, QuizThreadCard, useQuizRun } from "./QuizOverlay";
 import {
   PROBLEM_TYPE_V1,
@@ -49,6 +54,9 @@ import {
 } from "./quizModel";
 
 const MarkdownRenderer = lazy(() => import("../MarkdownRenderer"));
+// Past this many messages a conversation has usually drifted over several topics.
+const LONG_CONVERSATION_MESSAGES = 24;
+const JumpToPageContext = createContext<(pageNo: number) => void>(() => undefined);
 const CHALLENGE_COUNT_OPTIONS = [1, 3, 5, 10] as const;
 const DEFAULT_CHALLENGE_COUNT = 3;
 type ChallengeKind = "quiz" | "problem";
@@ -67,6 +75,12 @@ export function AssistantThread({
   composerInputRef,
   onPasteImages,
   learnerNoteCount = 0,
+  conversations,
+  activeConversationId,
+  onOpenConversation,
+  onShowHistory,
+  onNewConversation,
+  onJumpToPage,
 }: {
   page: PageData;
   suggestions: string[];
@@ -80,10 +94,17 @@ export function AssistantThread({
   composerInputRef: RefObject<HTMLTextAreaElement | null>;
   onPasteImages: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
   learnerNoteCount?: number;
+  conversations: ChatThreadSummary[];
+  activeConversationId: string | null;
+  onOpenConversation: (id: string) => void;
+  onShowHistory: () => void;
+  onNewConversation: () => void;
+  onJumpToPage: (pageNo: number) => void;
 }) {
   const copy = useAppCopy();
   const assistantUi = useAssistantUi();
   const { ThreadPrimitive } = assistantUi;
+  const messageCount = assistantUi.useAuiState((state) => state.thread.messages.length);
   const appendUserText = useAppendUserText();
   const [challengeCount, setChallengeCount] = useState(DEFAULT_CHALLENGE_COUNT);
   const [challengeKind, setChallengeKind] = useState<ChallengeKind>("quiz");
@@ -93,6 +114,7 @@ export function AssistantThread({
   }, [appendUserText, challengeCount, challengeKind, copy.agent]);
 
   return (
+    <JumpToPageContext.Provider value={onJumpToPage}>
     <ThreadPrimitive.Root className="aui-thread-root">
       <ThreadPrimitive.Viewport className="aui-thread-viewport">
         <div className="aui-thread-inner">
@@ -107,6 +129,12 @@ export function AssistantThread({
                   </button>
                 ))}
               </div>
+              <RecentConversations
+                conversations={conversations}
+                activeConversationId={activeConversationId}
+                onOpenConversation={onOpenConversation}
+                onShowAll={onShowHistory}
+              />
             </div>
           </ThreadPrimitive.Empty>
           <div className="aui-message-list">
@@ -124,7 +152,14 @@ export function AssistantThread({
               onStart={sendChallenge}
               learnerNoteCount={learnerNoteCount}
             />
+            {messageCount >= LONG_CONVERSATION_MESSAGES && (
+              <p className="long-conversation-hint">
+                <span>{copy.agent.longConversationHint}</span>
+                <button type="button" onClick={onNewConversation}>{copy.agent.newConversation}</button>
+              </p>
+            )}
             <AssistantComposer
+              page={page}
               contextPreview={contextPreview}
               attachments={attachments}
               selectedContext={selectedContext}
@@ -138,6 +173,7 @@ export function AssistantThread({
         </div>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
+    </JumpToPageContext.Provider>
   );
 }
 
@@ -236,7 +272,9 @@ function useWeakPointCount() {
 function AssistantMessage() {
   const assistantUi = useAssistantUi();
   const role = assistantUi.useAuiState((state) => state.message.role);
-  return role === "user" ? <UserMessage /> : <AgentMessage />;
+  const isEditing = assistantUi.useAuiState((state) => state.message.composer.isEditing);
+  if (role !== "user") return <AgentMessage />;
+  return isEditing ? <UserMessageEditor /> : <UserMessage />;
 }
 
 // ── UserMessage ──────────────────────────────────────────────
@@ -247,9 +285,27 @@ function UserMessage() {
   const { ActionBarPrimitive, MessagePrimitive } = assistantUi;
   const attachments = assistantUi.useAuiState((state) => state.message.attachments);
   const images = useMemo(() => messageImages({ attachments }), [attachments]);
+  const messageId = assistantUi.useAuiState((state) => state.message.id || "");
+  const metadata = assistantUi.useAuiState((state) => state.message.metadata);
+  const liveAnchor = useLiveMessageAnchor(messageId);
+  const anchor = messageAnchor({ id: messageId, metadata }) || liveAnchor;
+  const jumpToPage = useContext(JumpToPageContext);
   return (
     <MessagePrimitive.Root className="aui-message user-message">
       <div className="message-bubble user-bubble">
+        {anchor && (
+          <button
+            className="message-page-chip"
+            type="button"
+            onClick={() => jumpToPage(anchor.pageNo)}
+            title={copy.agent.askedOnPage(anchor.pageNo)}
+            aria-label={copy.agent.askedOnPage(anchor.pageNo)}
+          >
+            <FileText aria-hidden="true" />
+            <span>p.{anchor.pageNo}</span>
+            {anchor.pageTitle && <span className="message-page-title">{compactText(anchor.pageTitle, 28)}</span>}
+          </button>
+        )}
         <MessagePrimitive.Quote>
           {(quote: { text: string }) => (
             <div className="message-quote">
@@ -269,9 +325,53 @@ function UserMessage() {
       </div>
       <ActionBarPrimitive.Root className="message-actions" hideWhenRunning autohide="not-last">
         <ActionBarPrimitive.Edit asChild>
-          <button type="button" aria-label={copy.agent.edit} title={copy.agent.edit}><RefreshCw /></button>
+          <button type="button" aria-label={copy.agent.edit} title={copy.agent.edit}><Pencil /></button>
         </ActionBarPrimitive.Edit>
       </ActionBarPrimitive.Root>
+    </MessagePrimitive.Root>
+  );
+}
+
+/**
+ * Editing a question sends it again from that point: the answers that came
+ * after it are replaced, as in any chat where a message can be corrected.
+ */
+function UserMessageEditor() {
+  const copy = useAppCopy();
+  const assistantUi = useAssistantUi();
+  const { ComposerPrimitive, MessagePrimitive } = assistantUi;
+  const message = assistantUi.useMessageRuntime();
+  const quote = assistantUi.useAuiState((state) => state.message.metadata?.custom?.quote) as
+    | { text: string; messageId: string }
+    | undefined;
+  // The edited question is still about the selection the original quoted.
+  useEffect(() => {
+    if (quote?.text) message.composer.setQuote(quote);
+  }, [message, quote]);
+  return (
+    <MessagePrimitive.Root className="aui-message user-message editing">
+      <ComposerPrimitive.Root className="edit-composer">
+        {quote?.text && (
+          <div className="message-quote">
+            <span>{copy.agent.quoteLabel}</span>
+            <p>{compactText(quote.text, 220)}</p>
+          </div>
+        )}
+        <ComposerPrimitive.Input
+          className="edit-composer-input"
+          autoFocus
+          submitMode="enter"
+          aria-label={copy.agent.edit}
+        />
+        <div className="edit-composer-actions">
+          <ComposerPrimitive.Cancel asChild>
+            <button type="button">{copy.agent.cancel}</button>
+          </ComposerPrimitive.Cancel>
+          <ComposerPrimitive.Send asChild>
+            <button className="primary" type="button">{copy.agent.editResend}</button>
+          </ComposerPrimitive.Send>
+        </div>
+      </ComposerPrimitive.Root>
     </MessagePrimitive.Root>
   );
 }
@@ -283,7 +383,6 @@ function AgentMessage() {
   const assistantUi = useAssistantUi();
   const {
     ActionBarPrimitive,
-    BranchPickerPrimitive,
     ErrorPrimitive,
     MessagePrimitive,
   } = assistantUi;
@@ -334,15 +433,6 @@ function AgentMessage() {
         )}
       </div>
       <div className="assistant-footer">
-        <BranchPickerPrimitive.Root hideWhenSingleBranch className="branch-picker">
-          <BranchPickerPrimitive.Previous asChild>
-            <button type="button" aria-label={copy.pdf.previousPage} title={copy.pdf.previousPage}><ChevronLeft /></button>
-          </BranchPickerPrimitive.Previous>
-          <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
-          <BranchPickerPrimitive.Next asChild>
-            <button type="button" aria-label={copy.pdf.nextPage} title={copy.pdf.nextPage}><ChevronRight /></button>
-          </BranchPickerPrimitive.Next>
-        </BranchPickerPrimitive.Root>
         <ActionBarPrimitive.Root className="message-actions" hideWhenRunning autohide="not-last">
           <ActionBarPrimitive.Copy asChild>
             <button type="button" aria-label={copy.agent.copy} title={copy.agent.copy}><Copy /></button>
@@ -509,6 +599,7 @@ function ChallengeProblemList({ title, items, ordered = false }: { title: string
 // ── AssistantComposer ────────────────────────────────────────
 
 function AssistantComposer({
+  page,
   contextPreview,
   attachments,
   selectedContext,
@@ -518,6 +609,7 @@ function AssistantComposer({
   inputRef,
   onPasteImages,
 }: {
+  page: PageData;
   contextPreview: string;
   attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
@@ -531,6 +623,8 @@ function AssistantComposer({
   const assistantUi = useAssistantUi();
   const { ComposerPrimitive } = assistantUi;
   const thread = assistantUi.useThreadRuntime();
+  const isRunning = assistantUi.useAuiState((state) => state.thread.isRunning);
+  const jumpToPage = useContext(JumpToPageContext);
 
   useEffect(() => {
     thread.composer.setQuote(
@@ -601,9 +695,26 @@ function AssistantComposer({
           onPaste={onPasteImages}
         />
         <div className="aui-composer-actions">
-          <ComposerPrimitive.Send asChild>
-            <button className="composer-send" type="button" aria-label={copy.agent.send} title={copy.agent.send}><Send /></button>
-          </ComposerPrimitive.Send>
+          {/* What the next question is asked about, visible before it is sent. */}
+          <button
+            className="composer-page-pill"
+            type="button"
+            onClick={() => jumpToPage(page.page_no)}
+            title={copy.agent.composerPageContextHint}
+          >
+            <FileText aria-hidden="true" />
+            <span>{copy.agent.composerPageContext(page.page_no)}</span>
+            <span className="composer-page-title">{compactText(page.teaching.slide_title, 30)}</span>
+          </button>
+          {isRunning ? (
+            <ComposerPrimitive.Cancel asChild>
+              <button className="composer-send composer-stop" type="button" aria-label={copy.agent.stop} title={copy.agent.stop}><Square /></button>
+            </ComposerPrimitive.Cancel>
+          ) : (
+            <ComposerPrimitive.Send asChild>
+              <button className="composer-send" type="button" aria-label={copy.agent.send} title={copy.agent.send}><Send /></button>
+            </ComposerPrimitive.Send>
+          )}
         </div>
       </ComposerPrimitive.Root>
     </div>

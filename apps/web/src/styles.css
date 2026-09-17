@@ -12,5 +12,6 @@
 @import "./styles/quiz.css";
 @import "./styles/calm-surface.css";
 @import "./styles/annotations.css";
+@import "./styles/agent-conversations.css";
 
 @tailwind utilities;

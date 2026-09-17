@@ -8,7 +8,11 @@ import unittest
 from pathlib import Path
 
 from pdf_agent.gateway.openai_gateway import redacted_gateway_error
-from pdf_agent.server.document_context import _pdf_file_input, set_pdf_file_cache
+from pdf_agent.server.document_context import (
+    _pdf_file_input,
+    _transcript_messages,
+    set_pdf_file_cache,
+)
 from pdf_agent.server.errors import HttpError
 from pdf_agent.server.gateway_transport import _redacted_upstream_detail
 from pdf_agent.server.generation_parsing import (
@@ -336,6 +340,70 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("$$Ax = \\lambda x$$", content[1]["text"])
         self.assertIn("上一轮问题", content[1]["text"])
         self.assertEqual(content[2], {"type": "input_image", "image_url": "data:image/png;base64,AAAA"})
+
+    def test_agent_prompt_puts_the_question_after_the_conversation(self) -> None:
+        payload = _build_responses_payload(
+            {
+                "document": {"id": "doc_1", "title": "Doc"},
+                "page": {"page_no": 9, "source": {"text_md": "Ridge regression"}, "teaching": {"slide_title": "Ridge"}},
+                "input": "那为什么要加这一项？",
+                "messages": [
+                    {"role": "user", "status": "success", "content": "经验风险是什么？", "page_no": 4},
+                    {"role": "assistant", "status": "success", "content": "经验风险是训练集上的平均损失。"},
+                    {
+                        "role": "user",
+                        "status": "success",
+                        "content": "这一步怎么来的",
+                        "page_no": 7,
+                        "quote": "w = (X^T X)^{-1}\n  X^T y",
+                    },
+                    {"role": "assistant", "status": "error", "content": "生成失败\n\nupstream 502"},
+                    {"role": "user", "status": "success", "content": "那为什么要加这一项？", "page_no": 9},
+                ],
+            },
+            default_model="fallback-model",
+        )
+        text = payload["input"][0]["content"][-1]["text"]
+
+        self.assertIn("user (p.4): 经验风险是什么？", text)
+        self.assertIn('user (p.7, about the selected text "w = (X^T X)^{-1} X^T y"): 这一步怎么来的', text)
+        # A failed answer is not part of the conversation.
+        self.assertNotIn("upstream 502", text)
+        # The question being asked appears once, in its own section at the very end.
+        self.assertEqual(text.count("那为什么要加这一项？"), 1)
+        self.assertTrue(text.endswith("# Question to answer now\n\n那为什么要加这一项？"))
+        self.assertLess(text.index("# Page the learner is viewing now"), text.index("# Conversation so far"))
+        self.assertLess(text.index("# Conversation so far"), text.index("# Question to answer now"))
+
+    def test_agent_transcript_keeps_a_quiz_as_one_line_and_trims_old_turns(self) -> None:
+        quiz = json.dumps(
+            {
+                "type": "synchropage.challenge_quiz.v2",
+                "title": "岭回归诊断",
+                "questions": [{"id": "q1", "stem": "x" * 3000}],
+            },
+            ensure_ascii=False,
+        )
+        turns = [{"role": "user", "status": "success", "content": "挑战：生成 1 道题", "page_no": 3}, {"role": "assistant", "content": quiz}]
+        for index in range(7):
+            turns.append({"role": "user", "content": f"问题 {index} " + "长" * 5000, "page_no": 3})
+            turns.append({"role": "assistant", "status": "stopped" if index == 6 else "success", "content": f"回答 {index}"})
+        messages = _transcript_messages(turns, "下一个问题")
+
+        self.assertEqual(len(messages), 12)
+        self.assertFalse(any("synchropage.challenge_quiz" in message for message in messages))
+        # 16 turns came in: the quiz pair and the first exchange fall out of the window.
+        self.assertTrue(messages[0].startswith("user (p.3): 问题 1 "))
+        self.assertLess(len(messages[0]), 1_400)
+        self.assertGreater(len(messages[-2]), 3_900)
+        self.assertEqual(messages[-1], "assistant [stopped before finishing]: 回答 6")
+        self.assertEqual(
+            _transcript_messages(turns[:2], ""),
+            [
+                "user (p.3): 挑战：生成 1 道题",
+                "assistant: [The assistant generated an interactive quiz: 岭回归诊断. The questions are not repeated here.]",
+            ],
+        )
 
     def test_agent_payload_sends_each_image_once(self) -> None:
         first = {"type": "file", "name": "a.png", "mime": "image/png", "data_url": "data:image/png;base64,AAAA"}
@@ -917,7 +985,7 @@ class WebAppTest(unittest.TestCase):
         )
         self.assertEqual(agent_payload["prompt_cache_key"], teaching_payload["prompt_cache_key"])
         self.assertEqual(agent_payload["instructions"], teaching_payload["instructions"])
-        self.assertIn("You are the AI agent panel inside SynchroPage.", agent_payload["input"][0]["content"][1]["text"])
+        self.assertIn("You are the AI agent panel inside SynchroPage", agent_payload["input"][0]["content"][1]["text"])
         self.assertIn("You are the SynchroPage teaching assistant", teaching_payload["input"][0]["content"][1]["text"])
 
     def test_document_cache_prefix_is_stable_for_page_order(self) -> None:

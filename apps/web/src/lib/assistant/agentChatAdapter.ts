@@ -13,6 +13,7 @@ import { requestJson } from "../http/requestJson";
 import type { PdfDirectFileInput } from "../pdf/directFile";
 import type { PdfContextPayload } from "../pdf/textExtraction";
 import type { ChatMessageStatus } from "../persistence";
+import { messageAnchor, messageSelection, rememberSelection, setMessageAnchor } from "./messageAnchors";
 import { streamAssistantText } from "./streaming";
 
 export type ThreadAssistantMessagePart = { type: "text"; text: string };
@@ -24,6 +25,8 @@ export type ChatModelMessage = {
   /** Images sent with a user message (assistant-ui complete attachments). */
   attachments?: unknown[];
   createdAt?: Date;
+  status?: { type?: string; reason?: string };
+  metadata?: { custom?: Record<string, unknown> };
 };
 
 export type ChatModelRunOptions = {
@@ -89,6 +92,11 @@ export type ChatPersistInput = {
   createdAt?: number;
   /** Images the user sent with this message. */
   attachments?: AgentAttachment[];
+  /** The PDF page the learner was on when the message was sent. */
+  pageNumber?: number;
+  pageTitle?: string;
+  /** The answer settled after its conversation had left the screen. */
+  detached?: boolean;
   selectedContext?: Record<string, unknown> | null;
   sourceRefs?: Record<string, unknown>[];
 };
@@ -130,6 +138,10 @@ export function createPdfAgentAdapter(args: {
   isBackendOffline: () => boolean;
   clearSelectedContext: () => void;
   persistChatMessage?: (input: ChatPersistInput) => Promise<void>;
+  /** The messages still on screen: an edit or a regenerate drops the ones it replaced. */
+  pruneChatMessages?: (keepIds: string[]) => Promise<void>;
+  /** False once the conversation this adapter serves is no longer displayed. */
+  isOnScreen?: () => boolean;
 }): ChatModelAdapter {
   // Publish the document id for UI that only receives page data (the quiz
   // weak-point note in the composer footer).
@@ -140,10 +152,17 @@ export function createPdfAgentAdapter(args: {
   }
   return {
     async *run(options: ChatModelRunOptions) {
-      const snapshot = args.getSnapshot();
+      const liveSnapshot = args.getSnapshot();
       const pack = args.getPack();
       const page = args.getPage();
       setActiveQuizDocumentId(pack.document.id);
+      const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
+      // A question keeps the selection it was asked about: asking it again
+      // (regenerate, or after editing it) is still about that selection.
+      if (liveSnapshot.selectedContext) rememberSelection(liveSnapshot.selectedContext);
+      const snapshot: AgentSnapshot = liveSnapshot.selectedContext || !latestUser
+        ? liveSnapshot
+        : { ...liveSnapshot, selectedContext: messageSelection(latestUser, messageAnchor(latestUser)?.pageNo) };
       const selectedAgentContext = snapshot.selectedContext
         ? selectedContextToAgentContext(snapshot.selectedContext, args.copy)
         : null;
@@ -154,7 +173,6 @@ export function createPdfAgentAdapter(args: {
         ? learnerNotesContextItem(snapshot.learnerNotes, args.copy)
         : null;
       const documentFile = await args.getDocumentFile?.().catch(() => null) || null;
-      const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
       const latestUserText = latestUser ? messageText(latestUser) : "";
       const latestUserImages = latestUser ? messageImages(latestUser) : [];
       // Images belong to the message they were sent with. Earlier ones stay in
@@ -178,7 +196,15 @@ export function createPdfAgentAdapter(args: {
       const requestModel: ModelRef = snapshot.assistantModel;
       const requestReasoningEffort = challengeRequest ? CHALLENGE_REASONING_EFFORT : snapshot.reasoningEffort;
       const latestUserMeta = latestUser as { id?: string; createdAt?: Date };
+      const latestUserId = latestUserMeta?.id || args.createId("user");
       const assistantMessageId = options.unstable_assistantMessageId || args.createId("assistant");
+      // The question belongs to the page it was asked from, whatever page the
+      // learner turns to afterwards.
+      const pageTitle = stringValue(objectValue(page.teaching).slide_title);
+      if (latestUser && !messageAnchor(latestUser)) {
+        setMessageAnchor(latestUserId, { pageNo: page.page_no, pageTitle });
+      }
+      const latestUserAnchor = latestUser ? messageAnchor(latestUser) || { pageNo: page.page_no, pageTitle } : null;
       if (challengeRequest?.kind === "quiz") markLiveQuizMessage(assistantMessageId);
       const selectedContextRecord = snapshot.selectedContext ? asPersistedRecord(selectedContextPayload(snapshot.selectedContext)) : null;
       const sourceRefs = [
@@ -197,12 +223,14 @@ export function createPdfAgentAdapter(args: {
       };
       if (latestUserText || latestUserImages.length) {
         await enqueuePersist({
-          id: latestUserMeta.id || args.createId("user"),
+          id: latestUserId,
           role: "user",
           content: latestUserText,
           status: "completed",
           createdAt: latestUserMeta.createdAt?.getTime?.() || Date.now(),
           attachments: latestUserImages,
+          pageNumber: latestUserAnchor?.pageNo,
+          pageTitle: latestUserAnchor?.pageTitle,
           selectedContext: selectedContextRecord,
           sourceRefs,
         });
@@ -215,7 +243,12 @@ export function createPdfAgentAdapter(args: {
         selectedContext: selectedContextRecord,
         sourceRefs,
       });
-      const persistPartial = (content: string, status: ChatMessageStatus, force = false) => {
+      // After an edit or a regenerate the thread is shorter than what is stored.
+      const keepIds = [...options.messages.map((message) => message.id || ""), latestUserId, assistantMessageId].filter(Boolean);
+      persistQueue = persistQueue.then(() => args.pruneChatMessages?.(keepIds)).catch(() => undefined);
+      let streamedText = "";
+      const persistPartial = (content: string, status: ChatMessageStatus, force = false, detached = false) => {
+        if (status === "streaming") streamedText = content;
         const now = Date.now();
         if (!force && now - lastPartialSaveAt < 420) return;
         lastPartialSaveAt = now;
@@ -224,10 +257,24 @@ export function createPdfAgentAdapter(args: {
           role: "assistant",
           content,
           status,
+          ...(detached ? { detached } : {}),
           selectedContext: selectedContextRecord,
           sourceRefs,
         });
       };
+
+      // Stop cancels the request. Opening another conversation or hiding the
+      // panel also aborts the run, but the question was asked: the request
+      // keeps going and its answer is saved where it belongs.
+      const onScreen = () => args.isOnScreen?.() ?? true;
+      const leftScreen = () => options.abortSignal.aborted && !onScreen();
+      const requestController = new AbortController();
+      const cancelIfStopped = () => window.setTimeout(() => {
+        if (onScreen()) requestController.abort();
+      }, 0);
+      if (options.abortSignal.aborted) cancelIfStopped();
+      else options.abortSignal.addEventListener("abort", cancelIfStopped, { once: true });
+      let answer = "";
 
       const parts = [
         promptInput ? { type: "text", text: promptInput } : null,
@@ -286,12 +333,10 @@ export function createPdfAgentAdapter(args: {
         document: pack.document,
         documentFile,
         page,
-        messages: options.messages.map((message) => ({
-          role: message.role,
-          status: "success",
-          content: messageTranscriptText(message),
-          parts: [{ type: "text", text: messageTranscriptText(message) }],
-        })),
+        // The conversation before this question; the question itself is `input`.
+        messages: options.messages
+          .filter((message) => message !== latestUser)
+          .map((message) => transcriptMessage(message)),
         input: promptInput,
         parts,
         // The notes digest itself rides in `input`; this item is provenance only.
@@ -313,12 +358,18 @@ export function createPdfAgentAdapter(args: {
           {
             method: "POST",
             body: JSON.stringify(payload),
-            signal: options.abortSignal,
+            signal: requestController.signal,
           },
           args.copy.errors.accountNotFound,
         );
         const content = response.message?.content || response.content;
         if (!content) throw new Error(args.copy.errors.emptyGatewayResult);
+        answer = content;
+        if (leftScreen()) {
+          persistPartial(content, "completed", true, true);
+          await persistQueue;
+          return;
+        }
         for await (const partial of streamAssistantText(content, options.abortSignal, args.copy.errors.generationStopped)) {
           persistPartial(partial, "streaming");
           yield {
@@ -334,13 +385,16 @@ export function createPdfAgentAdapter(args: {
         };
       } catch (error) {
         if ((error as Error).name === "AbortError") {
-          persistPartial("", "stopped", true);
+          // Leaving while the answer was being shown keeps the whole answer; a
+          // stop keeps what was on screen when the learner stopped.
+          if (answer && leftScreen()) persistPartial(answer, "completed", true, true);
+          else persistPartial(streamedText, "stopped", true);
           await persistQueue;
           throw error;
         }
         if (!args.isBackendOffline()) {
           const failureText = agentFailureText(error, args.copy);
-          persistPartial(failureText, "failed", true);
+          persistPartial(failureText, "failed", true, leftScreen());
           await persistQueue;
           yield {
             content: [{ type: "text", text: failureText }] satisfies ThreadAssistantMessagePart[],
@@ -372,7 +426,7 @@ export function createPdfAgentAdapter(args: {
             status: { type: "complete", reason: "stop" },
           };
         } catch (localError) {
-          persistPartial((localError as Error).name === "AbortError" ? "" : (localError as Error).message, (localError as Error).name === "AbortError" ? "stopped" : "failed", true);
+          persistPartial((localError as Error).name === "AbortError" ? streamedText : (localError as Error).message, (localError as Error).name === "AbortError" ? "stopped" : "failed", true);
           await persistQueue;
           throw localError;
         }
@@ -1006,6 +1060,26 @@ function messageTranscriptText(message: unknown): string {
   if (!images) return text;
   const note = `[${images} image${images === 1 ? "" : "s"} attached]`;
   return text ? `${text}\n${note}` : note;
+}
+
+/** One earlier turn as the backend reads it: what was said, from which page, about which selection. */
+function transcriptMessage(message: ChatModelMessage) {
+  const text = messageTranscriptText(message);
+  const anchor = message.role === "user" ? messageAnchor(message) : null;
+  const quote = message.role === "user" ? (message.metadata?.custom?.quote as { text?: unknown } | undefined)?.text : undefined;
+  return {
+    role: message.role,
+    status: transcriptStatus(message),
+    content: text,
+    parts: [{ type: "text", text }],
+    ...(anchor ? { page_no: anchor.pageNo } : {}),
+    ...(typeof quote === "string" && quote.trim() ? { quote: compactPromptLine(quote, 240) } : {}),
+  };
+}
+
+function transcriptStatus(message: ChatModelMessage) {
+  if (message.role !== "assistant" || message.status?.type !== "incomplete") return "success";
+  return message.status.reason === "error" ? "error" : "stopped";
 }
 
 /** The composer form of a pending image: what assistant-ui sends along with the next user message. */

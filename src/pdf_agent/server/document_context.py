@@ -9,6 +9,7 @@ server paths.  ``set_pdf_file_cache()`` remains for direct helper callers.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -24,6 +25,9 @@ from pdf_agent.server.constants import (
     MAX_TRANSCRIPT_MESSAGES,
     PDF_CONTEXT_EDGE_PAGE_COUNT,
     PDF_CONTEXT_FULL_PAGE_LIMIT,
+    TRANSCRIPT_OLDER_MESSAGE_CHARS,
+    TRANSCRIPT_RECENT_MESSAGE_CHARS,
+    TRANSCRIPT_RECENT_MESSAGES,
 )
 from pdf_agent.server.pdf_file_cache import (
     PdfFileCache,
@@ -514,21 +518,77 @@ def _text_from_parts(value: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _transcript_messages(value: Any) -> list[str]:
-    """Format recent transcript messages as prompt blocks."""
+_CHALLENGE_PAYLOAD_RE = re.compile(r'"type"\s*:\s*"synchropage\.challenge_(quiz|problem)')
+_CHALLENGE_TITLE_RE = re.compile(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"')
+_SKIPPED_TRANSCRIPT_STATUSES = {"error", "failed", "pending"}
+_STOPPED_TRANSCRIPT_STATUSES = {"stopped", "cancelled", "canceled", "incomplete"}
+
+
+def _transcript_messages(value: Any, current_request: str = "") -> list[str]:
+    """Format the conversation before the current question as prompt blocks.
+
+    Every user turn is labelled with the page it was asked on (and the text it
+    was asked about), so a conversation that moved across pages stays readable.
+    The question being answered now is not part of the transcript: it has its
+    own section at the end of the prompt.
+    """
     if not isinstance(value, list):
         return []
-    messages: list[str] = []
-    for item in value[-MAX_TRANSCRIPT_MESSAGES:]:
+    turns: list[tuple[str, str]] = []
+    for item in value:
         if not isinstance(item, Mapping):
             continue
         role = _string_value(item.get("role"), "message")
-        content = _truncate(_message_content(item), 4000)
-        if content:
-            status = _string_value(item.get("status"), "success")
-            status_suffix = f" [{status}]" if status not in {"", "success"} else ""
-            messages.append(f"{role}{status_suffix}: {content}")
+        status = _string_value(item.get("status"), "success").lower()
+        if status in _SKIPPED_TRANSCRIPT_STATUSES:
+            continue
+        content = _message_content(item)
+        if role == "assistant":
+            content = _compact_challenge_payload(content)
+        if not content:
+            continue
+        label = _transcript_turn_label(role, item)
+        if status in _STOPPED_TRANSCRIPT_STATUSES:
+            label = f"{label} [stopped before finishing]"
+        turns.append((label, content))
+    if turns and current_request and turns[-1][0].startswith("user"):
+        # An older client lists the question being asked as the last turn too.
+        last = turns[-1][1].strip()
+        request = current_request.strip()
+        if last and (request == last or request.endswith(last)):
+            turns.pop()
+    turns = turns[-MAX_TRANSCRIPT_MESSAGES:]
+    messages: list[str] = []
+    for index, (label, content) in enumerate(turns):
+        recent = index >= len(turns) - TRANSCRIPT_RECENT_MESSAGES
+        limit = TRANSCRIPT_RECENT_MESSAGE_CHARS if recent else TRANSCRIPT_OLDER_MESSAGE_CHARS
+        messages.append(f"{label}: {_truncate(content, limit)}")
     return messages
+
+
+def _transcript_turn_label(role: str, item: Mapping[str, Any]) -> str:
+    """``user (p.12, about the selected text "…")`` for a user turn, the bare role otherwise."""
+    if role != "user":
+        return role
+    details: list[str] = []
+    page_no = _int_value(item.get("page_no") or item.get("pageNumber"), 0)
+    if page_no > 0:
+        details.append(f"p.{page_no}")
+    quote = " ".join(str(item.get("quote") or "").split())
+    if quote:
+        details.append(f'about the selected text "{_truncate(quote, 160)}"')
+    return f"user ({', '.join(details)})" if details else "user"
+
+
+def _compact_challenge_payload(content: str) -> str:
+    """A quiz the assistant generated is a JSON payload: keep only what it was."""
+    match = _CHALLENGE_PAYLOAD_RE.search(content)
+    if not match:
+        return content
+    kind = "an interactive quiz" if match.group(1) == "quiz" else "a worked-problem challenge"
+    title_match = _CHALLENGE_TITLE_RE.search(content)
+    title = title_match.group(1).strip() if title_match else ""
+    return f"[The assistant generated {kind}{f': {title}' if title else ''}. The questions are not repeated here.]"
 
 
 def _message_content(message: Mapping[str, Any]) -> str:
