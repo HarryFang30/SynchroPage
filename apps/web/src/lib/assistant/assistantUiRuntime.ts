@@ -8,5 +8,6 @@ export {
   ThreadPrimitive,
   useAuiState,
   useLocalRuntime,
+  useMessageRuntime,
   useThreadRuntime,
 } from "@assistant-ui/react";

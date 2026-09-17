@@ -54,13 +54,18 @@ export type AssistantUiRuntime = {
     };
   };
   useThreadRuntime: () => AssistantThreadRuntime;
+  useMessageRuntime: () => { composer: { setQuote: (quote?: { text: string; messageId: string }) => void } };
   useAuiState: <T>(selector: (state: {
+    thread: { messages: readonly unknown[]; isRunning: boolean };
     message: {
       id?: string;
       role: string;
       status?: { type?: string; reason?: string };
       content: unknown[];
       attachments?: readonly unknown[];
+      metadata?: { custom?: Record<string, unknown> };
+      /** The message's own composer: open while the learner edits the message. */
+      composer: { isEditing: boolean };
     };
     part: { type?: string; text?: string };
   }) => T) => T;
@@ -81,21 +86,29 @@ export function useAssistantUi() {
 /** Hands over the images waiting in the composer and empties the draft. */
 export const PendingImagesContext = createContext<() => ComposerImageAttachment[]>(() => []);
 
+/** The selection the next message is about, as the composer would quote it. */
+export const PendingQuoteContext = createContext<() => MessageQuote | undefined>(() => undefined);
+
+export type MessageQuote = { text: string; messageId: string };
+
 /**
  * Sends a user message that was not typed into the composer (a suggestion, a
- * challenge button, a quiz answer, a selection prompt). Images waiting in the
- * composer go with it, exactly as they do when the composer sends.
+ * challenge button, a quiz answer, a selection prompt). The images and the
+ * selection waiting in the composer go with it, exactly as they do when the
+ * composer sends.
  */
 export function useAppendUserText() {
   const thread = useAssistantUi().useThreadRuntime();
   const takePendingImages = useContext(PendingImagesContext);
-  return useCallback((text: string) => {
+  const pendingQuote = useContext(PendingQuoteContext);
+  return useCallback((text: string, quote: MessageQuote | undefined = pendingQuote()) => {
     thread.append({
       role: "user",
       content: [{ type: "text", text }],
       attachments: takePendingImages(),
+      metadata: { custom: quote ? { quote } : {} },
     });
-  }, [takePendingImages, thread]);
+  }, [pendingQuote, takePendingImages, thread]);
 }
 
 // ── Lazy loading ─────────────────────────────────────────────

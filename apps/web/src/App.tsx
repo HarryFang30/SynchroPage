@@ -115,17 +115,22 @@ import {
   classifyPersistenceError,
   createChatThread,
   createCourseProject,
+  deleteChatThread,
   deleteCourseProject,
   deleteWorkspaceDocument,
   estimateStorage,
   ensureWorkspace,
   exportWorkspace,
   importWorkspace,
+  listChatThreads,
   loadCourseProjects,
   loadLastWorkspace,
   loadWorkspaceDocument,
   loadWorkspaceDocuments,
   loadWorkspaceProject,
+  openChatThread,
+  pruneChatThreadMessages,
+  renameChatThread,
   requestPersistentStorage,
   repairWorkspaceStorage,
   saveChatMessage,
@@ -136,8 +141,10 @@ import {
   saveSelectedContext,
   saveSettings,
   saveWorkspacePatch,
+  searchChatThreads,
   updateStreamingMessage,
   type ChatMessageRecord,
+  type ChatThreadSummary,
   type CourseProjectRecord,
   type DocumentSidebarItem,
   type ExportedWorkspace,
@@ -435,6 +442,11 @@ export default function App() {
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [documentItems, setDocumentItems] = useState<DocumentSidebarItem[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [chatThreads, setChatThreads] = useState<ChatThreadSummary[]>([]);
+  // A request that is still running belongs to the conversation it was sent
+  // in, even after the learner has opened another one.
+  const activeThreadIdRef = useRef<string | null>(null);
+  activeThreadIdRef.current = threadId;
   const [courseDialogOpen, setCourseDialogOpen] = useState(false);
   const [courseDraftName, setCourseDraftName] = useState("");
   const [railConfirmAction, setRailConfirmAction] = useState<RailConfirmAction | null>(null);
@@ -829,6 +841,19 @@ export default function App() {
     }
   }, [copy.persistence.failed, copy.persistence.quota, copy.persistence.saved, copy.persistence.saving, refreshStorageEstimate]);
 
+  const refreshChatThreads = useCallback(async (nextWorkspaceId = workspaceId, nextDocumentId = documentId) => {
+    if (!nextWorkspaceId) {
+      setChatThreads([]);
+      return;
+    }
+    const threads = await listChatThreads(nextWorkspaceId, nextDocumentId || undefined).catch(() => []);
+    setChatThreads(threads);
+  }, [documentId, workspaceId]);
+
+  useEffect(() => {
+    void refreshChatThreads();
+  }, [refreshChatThreads, threadId]);
+
   const persistChatMessage = useCallback(async (input: ChatPersistInput) => {
     if (!workspaceId || !threadId) return;
     const now = Date.now();
@@ -843,6 +868,7 @@ export default function App() {
       selectedContext: input.selectedContext ?? null,
       sourceRefs: input.sourceRefs || [],
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      ...(input.pageNumber ? { pageNumber: input.pageNumber, pageTitle: input.pageTitle || "" } : {}),
       status: input.status,
       createdAt: input.createdAt || now,
       updatedAt: now,
@@ -863,8 +889,24 @@ export default function App() {
         await saveChatMessage(baseRecord);
       }
     });
+    // An answer that finishes after the learner moved to another conversation
+    // is stored with its own conversation and stays out of the one on screen.
+    if (activeThreadIdRef.current !== threadId) return;
     setPersistedMessages((messages) => upsertThreadMessage(messages, chatMessageToThreadMessageLike(baseRecord)));
-  }, [documentId, persistOperation, threadId, workspaceId]);
+    // An answer that settled while the panel was away: show the stored conversation again.
+    if (input.detached) setAgentRuntimeKey(`${threadId}:settled:${Date.now()}`);
+    if (input.role === "user" || input.status === "completed" || input.status === "failed" || input.status === "stopped") {
+      void refreshChatThreads();
+    }
+  }, [documentId, persistOperation, refreshChatThreads, threadId, workspaceId]);
+
+  const pruneChatMessages = useCallback(async (keepIds: string[]) => {
+    if (!threadId) return;
+    await pruneChatThreadMessages(threadId, keepIds);
+    if (activeThreadIdRef.current !== threadId) return;
+    const keep = new Set(keepIds);
+    setPersistedMessages((messages) => (messages.some((message) => !keep.has(message.id)) ? messages.filter((message) => keep.has(message.id)) : messages));
+  }, [threadId]);
 
   const replacePdfObjectUrl = useCallback((nextUrl: string) => {
     generationAbortControllerRef.current?.abort();
@@ -1680,20 +1722,71 @@ export default function App() {
   }, [copy.persistence, persistOperation, refreshStorageEstimate, workspaceId]);
 
   const startNewPersistedConversation = useCallback(() => {
-    setPersistedMessages([]);
-    setAgentRuntimeKey(`thread:local:${Date.now()}`);
-    if (!workspaceId) return;
+    // A conversation nobody has written in yet is already the new one.
+    const currentIsEmpty = Boolean(threadId) && !persistedMessages.length;
+    if (!workspaceId || currentIsEmpty) {
+      setPersistedMessages([]);
+      setAgentRuntimeKey(`thread:local:${Date.now()}`);
+      return;
+    }
     void persistOperation(async () => {
       const thread = await createChatThread({
         workspaceId,
         documentId: documentId || undefined,
-        title: "Main chat",
       });
+      // The screen changes only once the new conversation exists, so whatever
+      // the previous one still saves lands in the previous one.
       setThreadId(thread.id);
+      setPersistedMessages([]);
       setAgentRuntimeKey(`${thread.id}:0:${Date.now()}`);
       if (documentId) await clearPersistedSelectedContext(workspaceId, documentId);
     }).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
-  }, [copy.persistence.failed, documentId, persistOperation, workspaceId]);
+  }, [copy.persistence.failed, documentId, persistOperation, persistedMessages.length, threadId, workspaceId]);
+
+  const openPersistedConversation = useCallback((nextThreadId: string) => {
+    if (!workspaceId || nextThreadId === threadId) return;
+    void persistOperation(async () => {
+      const opened = await openChatThread(workspaceId, nextThreadId);
+      if (!opened) {
+        await refreshChatThreads();
+        return;
+      }
+      const restoredMessages = opened.messages.map(chatMessageToThreadMessageLike);
+      setThreadId(opened.thread.id);
+      setSelectedContext(null);
+      setAttachments([]);
+      setPendingSelectionPrompt(null);
+      setPersistedMessages(restoredMessages);
+      setAgentRuntimeKey(`${opened.thread.id}:${restoredMessages.length}:${Date.now()}`);
+    }).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+  }, [copy.persistence.failed, persistOperation, refreshChatThreads, threadId, workspaceId]);
+
+  const renamePersistedConversation = useCallback((targetThreadId: string, title: string) => {
+    void persistOperation(async () => {
+      await renameChatThread(targetThreadId, title);
+      await refreshChatThreads();
+    }).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+  }, [copy.persistence.failed, persistOperation, refreshChatThreads]);
+
+  const deletePersistedConversation = useCallback((targetThreadId: string) => {
+    if (!workspaceId) return;
+    void persistOperation(async () => {
+      await deleteChatThread(workspaceId, targetThreadId);
+      if (targetThreadId === threadId) {
+        // The conversation on screen is gone: continue in a fresh one.
+        const thread = await createChatThread({ workspaceId, documentId: documentId || undefined });
+        setThreadId(thread.id);
+        setPersistedMessages([]);
+        setAgentRuntimeKey(`${thread.id}:0:${Date.now()}`);
+      }
+      await refreshChatThreads();
+    }).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
+  }, [copy.persistence.failed, documentId, persistOperation, refreshChatThreads, threadId, workspaceId]);
+
+  const searchPersistedConversations = useCallback(async (query: string) => {
+    if (!workspaceId) return [];
+    return searchChatThreads(workspaceId, documentId || undefined, query);
+  }, [documentId, workspaceId]);
 
   const switchDocument = useCallback((nextDocumentId: string) => {
     if (!workspaceId || nextDocumentId === documentId) return;
@@ -2831,7 +2924,15 @@ export default function App() {
                 showSourcePills={uiPreferences.showSourcePills}
                 pageAwareSuggestions={uiPreferences.pageAwareSuggestions}
                 persistChatMessage={persistChatMessage}
+                pruneChatMessages={pruneChatMessages}
                 onNewConversation={startNewPersistedConversation}
+                conversations={chatThreads}
+                activeConversationId={threadId}
+                onOpenConversation={openPersistedConversation}
+                onRenameConversation={renamePersistedConversation}
+                onDeleteConversation={deletePersistedConversation}
+                onSearchConversations={searchPersistedConversations}
+                onJumpToPage={jumpToPdfPage}
               />
             )}
           </Panel>

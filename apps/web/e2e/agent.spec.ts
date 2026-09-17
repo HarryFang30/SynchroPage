@@ -22,7 +22,7 @@ test.describe("Agent Panel", () => {
     await activateAgent(page);
     const toolbar = page.locator(".agent-toolbar");
     await expect(toolbar).toBeVisible();
-    await expect(toolbar.locator(".toolbar-title")).toBeVisible();
+    await expect(toolbar.locator(".conversation-switcher")).toBeVisible();
     await expect(toolbar.locator(".agent-model")).toHaveText(/OAuth|Local/);
   });
 
@@ -262,7 +262,8 @@ test.describe("Agent Panel", () => {
     await expect.poll(() => requestPayload?.modelProviderId || "").toBe("codex_oauth");
     await expect.poll(() => requestPayload?.model || "").toBe("gpt-5.5");
     await expect.poll(() => requestPayload?.reasoningEffort || "").toBe("xhigh");
-    await expect.poll(() => requestPayload?.messages?.at(-1)?.content || "").toContain("Challenge");
+    // The request is the question; `messages` holds only what was said before it.
+    await expect.poll(() => requestPayload?.messages?.length ?? -1).toBe(0);
   });
 
   test("quiz overlay still renders a legacy v1 quiz payload", async ({ page }) => {
@@ -378,7 +379,7 @@ test.describe("Agent Panel", () => {
     await expect.poll(() => requestPayload?.modelProviderId || "").toBe("codex_oauth");
     await expect.poll(() => requestPayload?.model || "").toBe("gpt-5.5");
     await expect.poll(() => requestPayload?.reasoningEffort || "").toBe("xhigh");
-    await expect.poll(() => requestPayload?.messages?.at(-1)?.content || "").toContain("典型大题");
+    await expect.poll(() => requestPayload?.messages?.length ?? -1).toBe(0);
   });
 
   test("sending a message via Enter renders mocked assistant reply", async ({ page }) => {

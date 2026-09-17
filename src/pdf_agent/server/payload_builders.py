@@ -905,35 +905,27 @@ def _build_ocr_payload(
 
 
 def _agent_answer_mode_prompt(mode: str) -> str:
+    """How deep an ordinary answer goes.  A mode sets depth, never a template."""
     if mode == "detailed":
         return (
             "Mode: detailed\n"
-            "Reasoning effort: xhigh\n"
-            "Response style:\n"
-            "- Give a complete, page-grounded explanation with clear sections.\n"
-            "- Start with a short direct answer, then explain prerequisites, symbols, formulas, code, tables, and edge cases when relevant.\n"
-            "- Use the attached PDF and cacheable document context for cross-page continuity; cite original PDF page numbers when available.\n"
-            "- Include examples or derivations when they help study the material.\n"
-            "- End with a compact takeaway."
+            "- Answer first, then give the question the full treatment it deserves: what it rests on, the derivation or mechanism, "
+            "a worked example on the page's own symbols, the edge cases.\n"
+            "- Give a long answer short headings so it can be scanned; a short question still gets a short answer.\n"
+            "- Everything must serve the question that was asked: no filler sections, no closing recap."
         )
     if mode == "guided":
         return (
             "Mode: guided\n"
-            "Reasoning effort: high\n"
-            "Response style:\n"
-            "- Start with the answer, then teach the path to it step by step.\n"
-            "- Connect the selected material to the current PDF page and nearby document context.\n"
-            "- Surface common mistakes, key assumptions, or one check-your-understanding point when useful.\n"
-            "- Keep the structure clear and cite original PDF page numbers when available."
+            "- Answer first in one or two sentences, then walk the path to it step by step, so the learner could redo it alone.\n"
+            "- Name the step where people usually slip, when there is one.\n"
+            "- At most one check question at the end, and only when it really tests the point."
         )
     return (
         "Mode: concise\n"
-        "Reasoning effort: medium\n"
-        "Response style:\n"
-        "- Answer directly in a compact form.\n"
-        "- Use only the necessary explanation, formulas, or code snippets.\n"
-        "- Prefer 3-6 bullets or short paragraphs unless the user explicitly asks for more detail.\n"
-        "- Cite original PDF page numbers when available."
+        "- Give the shortest complete answer: usually one to five sentences, or a few short bullets for parallel points.\n"
+        "- Add a formula or a one-line example only when the answer needs it.\n"
+        "- Go longer only when the learner asks for more."
     )
 
 
@@ -965,23 +957,26 @@ def _build_agent_interaction_prompt(
     *,
     pdf_file_cache: PdfFileCache | None = None,
 ) -> str:
+    """The chat prompt: what the learner can see, then the conversation, then the question.
+
+    The question goes last, after everything it may refer to, so the model
+    reads the context as context and answers what was actually asked.
+    """
     document = body.get("document") if isinstance(body.get("document"), Mapping) else {}
     page = body.get("page") if isinstance(body.get("page"), Mapping) else {}
     teaching = page.get("teaching") if isinstance(page.get("teaching"), Mapping) else {}
     source = page.get("source") if isinstance(page.get("source"), Mapping) else {}
-    messages = _transcript_messages(body.get("messages"))
     selected_context_value = body.get("selectedContext")
     selected_context = _selected_context(selected_context_value)
     contexts = [*_context_items(body.get("context")), *_context_parts(body.get("parts"))]
     raw_input = str(body.get("input") or "").strip() or _text_from_parts(body.get("parts"))
     input_text = _build_user_request(raw_input, selected_context_value, body.get("pdfContext"))
+    messages = _transcript_messages(body.get("messages"), raw_input)
     answer_mode = _agent_answer_mode(body)
 
     sections = [
         "# Task-specific instructions",
         AGENT_INSTRUCTIONS,
-        "# User request",
-        input_text or "Continue from the provided context.",
         "# Answer mode",
         _agent_answer_mode_prompt(answer_mode),
         "# Document",
@@ -1005,7 +1000,7 @@ def _build_agent_interaction_prompt(
         ])
     sections.extend(
         [
-            "# Current page",
+            "# Page the learner is viewing now",
             f"Page: {_string_value(page.get('page_no'), 'unknown')}",
             f"Title: {_string_value(teaching.get('slide_title'), 'Untitled page')}",
         ]
@@ -1013,7 +1008,12 @@ def _build_agent_interaction_prompt(
     if source.get("text_md"):
         sections.extend(["Source text:", _truncate(str(source.get("text_md")), MAX_CONTEXT_CHARS)])
     if teaching.get("speaker_notes_md"):
-        sections.extend(["Existing notes:", _truncate(str(teaching.get("speaker_notes_md")), MAX_CONTEXT_CHARS)])
+        sections.extend(
+            [
+                "Existing notes (the explanation of this page the learner has already read):",
+                _truncate(str(teaching.get("speaker_notes_md")), MAX_CONTEXT_CHARS),
+            ]
+        )
     if selected_context:
         sections.extend(
             [
@@ -1022,10 +1022,22 @@ def _build_agent_interaction_prompt(
                 selected_context,
             ]
         )
-    if messages:
-        sections.extend(["# Recent conversation", *messages])
     if contexts:
         sections.extend(["# Additional context", *contexts])
+    if messages:
+        sections.extend(
+            [
+                "# Conversation so far",
+                "Oldest first. Each user turn is labelled with the page it was asked on. The question to answer now is not in this list.",
+                *messages,
+            ]
+        )
+    sections.extend(
+        [
+            "# Question to answer now",
+            input_text or "Continue from the provided context.",
+        ]
+    )
     return "\n\n".join(section for section in sections if section)
 
 

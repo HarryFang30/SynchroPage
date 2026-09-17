@@ -457,8 +457,31 @@ export type AppCopy = {
   };
   agent: {
     addImage: string;
-    clearContext: string;
     newConversation: string;
+    cancel: string;
+    history: string;
+    untitledConversation: string;
+    historyToday: string;
+    historyYesterday: string;
+    historyThisWeek: string;
+    historyOlder: string;
+    historySearchPlaceholder: string;
+    historyEmpty: string;
+    historyNoMatches: string;
+    historyScope: string;
+    historyRename: string;
+    historySaveTitle: string;
+    historyDelete: string;
+    historyDeleteConfirm: string;
+    historyMessageCount: (count: number) => string;
+    historyRelativeTime: (elapsedMs: number) => string;
+    historyShowAll: (count: number) => string;
+    recentConversations: string;
+    askedOnPage: (pageNo: number) => string;
+    composerPageContext: (pageNo: number | string) => string;
+    composerPageContextHint: string;
+    editResend: string;
+    longConversationHint: string;
     removeContext: string;
     removeImage: string;
     contextFormula: (pageNo: number) => string;
@@ -1091,8 +1114,39 @@ const zhCN: AppCopy = {
   },
   agent: {
     addImage: "加入图片",
-    clearContext: "清空上下文",
     newConversation: "新对话",
+    cancel: "取消",
+    history: "历史对话",
+    untitledConversation: "未命名对话",
+    historyToday: "今天",
+    historyYesterday: "昨天",
+    historyThisWeek: "近 7 天",
+    historyOlder: "更早",
+    historySearchPlaceholder: "搜索对话",
+    historyEmpty: "这份文档还没有对话。",
+    historyNoMatches: "没有匹配的对话。",
+    historyScope: "这里只列出当前文档的对话",
+    historyRename: "重命名",
+    historySaveTitle: "保存标题",
+    historyDelete: "删除",
+    historyDeleteConfirm: "删除这段对话？",
+    historyMessageCount: (count) => `${count} 条`,
+    historyRelativeTime: (elapsedMs) => {
+      const minutes = Math.floor(elapsedMs / 60_000);
+      if (minutes < 1) return "刚刚";
+      if (minutes < 60) return `${minutes} 分钟前`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours} 小时前`;
+      const days = Math.floor(hours / 24);
+      return days < 30 ? `${days} 天前` : `${Math.floor(days / 30)} 个月前`;
+    },
+    historyShowAll: (count) => `查看全部 ${count} 段`,
+    recentConversations: "最近的对话",
+    askedOnPage: (pageNo) => `在 p.${pageNo} 提的问，点击回到这一页`,
+    composerPageContext: (pageNo) => `p.${pageNo}`,
+    composerPageContextHint: "回答会结合你正在看的这一页；翻页后这里跟着变",
+    editResend: "重新发送",
+    longConversationHint: "这段对话已经很长了。换个话题时开一个新对话，回答会更准。",
     removeContext: "移除上下文",
     removeImage: "移除图片",
     contextFormula: (pageNo) => `公式 · PDF p.${pageNo}`,
@@ -1731,8 +1785,39 @@ const enUS: AppCopy = {
   },
   agent: {
     addImage: "Add image",
-    clearContext: "Clear context",
     newConversation: "New chat",
+    cancel: "Cancel",
+    history: "Chat history",
+    untitledConversation: "Untitled chat",
+    historyToday: "Today",
+    historyYesterday: "Yesterday",
+    historyThisWeek: "Last 7 days",
+    historyOlder: "Older",
+    historySearchPlaceholder: "Search chats",
+    historyEmpty: "No chats for this document yet.",
+    historyNoMatches: "No chats match.",
+    historyScope: "Only chats of the open document are listed",
+    historyRename: "Rename",
+    historySaveTitle: "Save title",
+    historyDelete: "Delete",
+    historyDeleteConfirm: "Delete this chat?",
+    historyMessageCount: (count) => `${count} message${count === 1 ? "" : "s"}`,
+    historyRelativeTime: (elapsedMs) => {
+      const minutes = Math.floor(elapsedMs / 60_000);
+      if (minutes < 1) return "just now";
+      if (minutes < 60) return `${minutes} min ago`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours} h ago`;
+      const days = Math.floor(hours / 24);
+      return days < 30 ? `${days} d ago` : `${Math.floor(days / 30)} mo ago`;
+    },
+    historyShowAll: (count) => `View all ${count}`,
+    recentConversations: "Recent chats",
+    askedOnPage: (pageNo) => `Asked on p.${pageNo}; click to go back to that page`,
+    composerPageContext: (pageNo) => `p.${pageNo}`,
+    composerPageContextHint: "Answers use the page you are viewing; this follows you as you turn pages",
+    editResend: "Send again",
+    longConversationHint: "This chat is getting long. Start a new chat for a new topic and the answers will be sharper.",
     removeContext: "Remove context",
     removeImage: "Remove image",
     contextFormula: (pageNo) => `Formula · PDF p.${pageNo}`,

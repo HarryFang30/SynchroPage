@@ -8,6 +8,7 @@ import {
   type ChatMessageRecord,
   type ChatMessageStatus,
   type ChatThreadRecord,
+  type ChatThreadSummary,
   type CourseProjectRecord,
   type DocumentSidebarItem,
   type DocumentRecord,
@@ -976,7 +977,11 @@ export async function createChatThread(input: {
     id: createRecordId("thread"),
     workspaceId: input.workspaceId,
     documentId: input.documentId,
-    title: input.title || "Main chat",
+    title: input.title || "",
+    titleSource: "auto",
+    messageCount: 0,
+    preview: "",
+    pages: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -993,12 +998,168 @@ export async function createChatThread(input: {
 export async function saveChatMessage(message: ChatMessageRecord) {
   const now = Date.now();
   await synchroPageDb.transaction("rw", synchroPageDb.chatMessages, synchroPageDb.chatThreads, synchroPageDb.workspaces, async () => {
+    // An answer can still be arriving for a conversation that was just deleted.
+    if (!(await synchroPageDb.chatThreads.get(message.threadId))) return;
     await synchroPageDb.chatMessages.put({
       ...message,
       updatedAt: now,
     });
     await synchroPageDb.chatThreads.update(message.threadId, { updatedAt: now });
     await synchroPageDb.workspaces.update(message.workspaceId, { updatedAt: now });
+    // The list row changes when a question is asked and when an answer settles,
+    // not on every streamed chunk.
+    if (message.role === "user" || message.status === "completed" || message.status === "failed" || message.status === "stopped") {
+      await refreshChatThreadSummary(message.threadId);
+    }
+  });
+}
+
+// ── Conversations of a document ──────────────────────────────
+
+const LEGACY_THREAD_TITLE = "Main chat";
+
+/** A title for a conversation, taken from the first thing the learner asked. */
+export function deriveChatThreadTitle(text: string, quote = "") {
+  const question = text.replace(/\s+/g, " ").trim();
+  const quoted = quote.replace(/\s+/g, " ").trim();
+  if (!question) return clipTitle(quoted, 40);
+  if (!quoted) return clipTitle(question, 48);
+  // A question about a selection ("explain this", "where does this come from")
+  // says little on its own: name what was selected.
+  const lead = question.split(/[，,：:。；;]/)[0].trim() || question;
+  return `${clipTitle(lead, 16)}：${clipTitle(quoted, 28)}`;
+}
+
+function clipTitle(value: string, max: number) {
+  return value.length > max ? `${value.slice(0, max - 1).trimEnd()}…` : value;
+}
+
+function messageQuoteText(message: ChatMessageRecord) {
+  const text = (message.selectedContext as { text?: unknown } | null | undefined)?.text;
+  return typeof text === "string" ? text : "";
+}
+
+/** Recompute the list row of a conversation from its messages. */
+async function refreshChatThreadSummary(threadId: string) {
+  const thread = await synchroPageDb.chatThreads.get(threadId);
+  if (!thread) return null;
+  const messages = await synchroPageDb.chatMessages.where("threadId").equals(threadId).sortBy("createdAt");
+  const userMessages = messages.filter((message) => message.role === "user");
+  const first = userMessages[0];
+  const last = userMessages.at(-1);
+  const pages: number[] = [];
+  for (const message of userMessages) {
+    if (message.pageNumber && !pages.includes(message.pageNumber)) pages.push(message.pageNumber);
+  }
+  const patch: Partial<ChatThreadRecord> = {
+    messageCount: messages.filter((message) => message.role === "user" || message.content.trim()).length,
+    preview: last ? clipTitle((last.content || messageQuoteText(last)).replace(/\s+/g, " ").trim(), 120) : "",
+    pages,
+  };
+  if (thread.titleSource !== "user") {
+    patch.titleSource = "auto";
+    patch.title = first ? deriveChatThreadTitle(first.content, messageQuoteText(first)) : "";
+  }
+  await synchroPageDb.chatThreads.update(threadId, patch);
+  return { ...thread, ...patch } as ChatThreadRecord;
+}
+
+function chatThreadSummary(thread: ChatThreadRecord): ChatThreadSummary {
+  return {
+    id: thread.id,
+    documentId: thread.documentId,
+    title: thread.title === LEGACY_THREAD_TITLE && thread.titleSource !== "user" ? "" : thread.title,
+    titleSource: thread.titleSource === "user" ? "user" : "auto",
+    messageCount: thread.messageCount || 0,
+    preview: thread.preview || "",
+    pages: thread.pages || [],
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+  };
+}
+
+/**
+ * The conversations of one document, newest first. A conversation nobody has
+ * written in yet is not history, so it is left out.
+ */
+export async function listChatThreads(workspaceId: string, documentId?: string): Promise<ChatThreadSummary[]> {
+  const threads = documentId
+    ? await synchroPageDb.chatThreads.where("documentId").equals(documentId).toArray()
+    : (await synchroPageDb.chatThreads.where("workspaceId").equals(workspaceId).toArray()).filter((thread) => !thread.documentId);
+  const summaries: ChatThreadSummary[] = [];
+  for (const thread of threads) {
+    if (thread.workspaceId !== workspaceId) continue;
+    // Conversations saved before the list existed have no summary yet.
+    const record = thread.messageCount === undefined ? await refreshChatThreadSummary(thread.id) : thread;
+    if (record?.messageCount) summaries.push(chatThreadSummary(record));
+  }
+  return summaries.sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+/** Ids of the conversations whose title, questions or answers contain the query. */
+export async function searchChatThreads(workspaceId: string, documentId: string | undefined, query: string) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  const threads = await listChatThreads(workspaceId, documentId);
+  const matches: string[] = [];
+  for (const thread of threads) {
+    if (thread.title.toLowerCase().includes(needle)) {
+      matches.push(thread.id);
+      continue;
+    }
+    const hit = await synchroPageDb.chatMessages
+      .where("threadId")
+      .equals(thread.id)
+      .filter((message) => message.content.toLowerCase().includes(needle))
+      .first();
+    if (hit) matches.push(thread.id);
+  }
+  return matches;
+}
+
+/** Open a conversation: it becomes the active one and its messages are returned in order. */
+export async function openChatThread(workspaceId: string, threadId: string) {
+  const thread = await synchroPageDb.chatThreads.get(threadId);
+  if (!thread || thread.workspaceId !== workspaceId) return null;
+  const messages = await synchroPageDb.chatMessages.where("threadId").equals(threadId).sortBy("createdAt");
+  await synchroPageDb.workspaces.update(workspaceId, { activeThreadId: threadId });
+  return { thread, messages };
+}
+
+export async function renameChatThread(threadId: string, title: string) {
+  const clean = title.replace(/\s+/g, " ").trim();
+  if (!clean) {
+    // An emptied title goes back to following the first question.
+    await synchroPageDb.chatThreads.update(threadId, { titleSource: "auto" });
+    await refreshChatThreadSummary(threadId);
+    return;
+  }
+  await synchroPageDb.chatThreads.update(threadId, { title: clipTitle(clean, 80), titleSource: "user" });
+}
+
+export async function deleteChatThread(workspaceId: string, threadId: string) {
+  await synchroPageDb.transaction("rw", synchroPageDb.chatMessages, synchroPageDb.chatThreads, synchroPageDb.workspaces, async () => {
+    await synchroPageDb.chatMessages.where("threadId").equals(threadId).delete();
+    await synchroPageDb.chatThreads.delete(threadId);
+    const workspace = await synchroPageDb.workspaces.get(workspaceId);
+    if (workspace?.activeThreadId === threadId) {
+      await synchroPageDb.workspaces.update(workspaceId, { activeThreadId: undefined });
+    }
+  });
+}
+
+/**
+ * Editing a question or regenerating an answer replaces what came after it:
+ * the stored conversation keeps only the messages that are still on screen.
+ */
+export async function pruneChatThreadMessages(threadId: string, keepIds: string[]) {
+  const keep = new Set(keepIds);
+  await synchroPageDb.transaction("rw", synchroPageDb.chatMessages, synchroPageDb.chatThreads, async () => {
+    const stored = await synchroPageDb.chatMessages.where("threadId").equals(threadId).primaryKeys();
+    const stale = stored.filter((id) => !keep.has(id));
+    if (!stale.length) return;
+    await synchroPageDb.chatMessages.bulkDelete(stale);
+    await refreshChatThreadSummary(threadId);
   });
 }
 
@@ -1546,6 +1707,7 @@ function threadImageAttachments(message: ChatMessageRecord): ThreadImageAttachme
 export function chatMessageToThreadMessageLike(message: ChatMessageRecord): ThreadMessageLike {
   const attachments = threadImageAttachments(message);
   const content = message.contentMarkdown || message.content;
+  const quoteText = messageQuoteText(message);
   return {
     id: message.id,
     role: message.role,
@@ -1566,6 +1728,8 @@ export function chatMessageToThreadMessageLike(message: ChatMessageRecord): Thre
       custom: {
         selectedContext: message.selectedContext || null,
         sourceRefs: message.sourceRefs || [],
+        ...(message.role === "user" && quoteText ? { quote: { text: quoteText, messageId: message.id } } : {}),
+        ...(message.pageNumber ? { pageNo: message.pageNumber, pageTitle: message.pageTitle || "" } : {}),
       },
     },
   };

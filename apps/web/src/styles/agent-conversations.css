@@ -1,0 +1,481 @@
+/* Agent — conversations: switcher, history, recent chats, page anchors, message editing */
+
+/* ---------- Toolbar: the open conversation ---------- */
+.conversation-switcher {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  margin-left: -6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--cs-r-control);
+  background: transparent;
+  color: var(--pp-text-secondary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: var(--cs-w-semibold);
+  text-align: left;
+  cursor: pointer;
+}
+
+.conversation-switcher:hover,
+.conversation-switcher[aria-expanded="true"] {
+  background: var(--cs-tint-2);
+  color: var(--pp-text-primary);
+}
+
+.conversation-switcher .agent-dot {
+  flex: 0 0 auto;
+}
+
+.conversation-switcher-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-switcher svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--pp-text-faint);
+}
+
+.agent-action-button.icon-only {
+  width: 30px;
+  justify-content: center;
+  padding: 0;
+}
+
+.agent-action-button[aria-expanded="true"] {
+  background: var(--cs-tint-2);
+  color: var(--pp-text-primary);
+}
+
+/* ---------- History popover ---------- */
+.conversation-history {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 10px;
+  right: 10px;
+  max-height: min(70vh, 520px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--cs-r-surface);
+  background: var(--pp-bg-elevated);
+  box-shadow: var(--cs-shadow-popover);
+  font-family: var(--font-ui);
+}
+
+.conversation-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: var(--cs-r-control);
+  background: var(--cs-field-bg);
+  color: var(--pp-text-faint);
+}
+
+.conversation-search:focus-within {
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--pp-accent) 70%, transparent);
+}
+
+.conversation-search svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.conversation-search input {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--pp-text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+
+.conversation-search input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.conversation-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.conversation-list section {
+  display: grid;
+  gap: 1px;
+}
+
+.conversation-list h3,
+.recent-conversations h3 {
+  margin: 0;
+  padding: 4px 8px 2px;
+  color: var(--pp-text-faint);
+  font-size: 11.5px;
+  font-weight: var(--cs-w-medium);
+}
+
+.conversation-empty,
+.conversation-scope {
+  margin: 0;
+  color: var(--pp-text-faint);
+  font-size: 12px;
+}
+
+.conversation-empty {
+  padding: 18px 8px;
+  text-align: center;
+}
+
+.conversation-scope {
+  padding: 2px 8px 0;
+}
+
+.conversation-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  border-radius: var(--cs-r-control);
+}
+
+.conversation-row:hover,
+.conversation-row:focus-within {
+  background: var(--cs-tint-2);
+}
+
+.conversation-row.active {
+  background: color-mix(in oklch, var(--pp-accent) 10%, transparent);
+}
+
+.conversation-open,
+.recent-conversation {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 1px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--cs-r-control);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conversation-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pp-text-primary);
+  font-size: 13px;
+  font-weight: var(--cs-w-medium);
+}
+
+.conversation-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pp-text-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.conversation-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding-right: 4px;
+  opacity: 0;
+}
+
+.conversation-row:hover .conversation-row-actions,
+.conversation-row:focus-within .conversation-row-actions {
+  opacity: 1;
+}
+
+.conversation-row-actions button,
+.conversation-row.editing button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pp-text-muted);
+  cursor: pointer;
+}
+
+.conversation-row-actions button:hover,
+.conversation-row.editing button:hover {
+  background: var(--pp-bg-hover);
+  color: var(--pp-text-primary);
+}
+
+.conversation-row-actions svg,
+.conversation-row.editing svg {
+  width: 14px;
+  height: 14px;
+}
+
+.conversation-row.editing,
+.conversation-row.confirming {
+  padding: 4px 4px 4px 8px;
+  background: var(--cs-tint-2);
+}
+
+.conversation-row.editing input {
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  outline: 0;
+  background: var(--pp-bg-input);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--pp-accent) 70%, transparent);
+  color: var(--pp-text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+
+.conversation-row.confirming span {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--pp-text-primary);
+  font-size: 13px;
+}
+
+.conversation-row.confirming button {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--cs-tint-3);
+  color: var(--pp-text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.conversation-row.confirming button.danger {
+  background: var(--pp-danger);
+  color: white;
+}
+
+/* ---------- Empty conversation: the earlier ones stay in reach ---------- */
+.recent-conversations {
+  width: 100%;
+  display: grid;
+  gap: 1px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--cs-hairline);
+  text-align: left;
+}
+
+.recent-conversations header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.recent-conversations h3 {
+  padding-left: 8px;
+}
+
+.recent-conversations header button {
+  border: 0;
+  background: transparent;
+  color: var(--pp-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.recent-conversations header button:hover {
+  color: var(--pp-text-primary);
+}
+
+.recent-conversation:hover {
+  background: var(--cs-tint-2);
+}
+
+/* ---------- The page a question was asked from ---------- */
+.message-page-chip,
+.composer-page-pill {
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pp-text-muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.message-page-chip {
+  margin: 0 0 5px -2px;
+  padding: 1px 4px 1px 2px;
+}
+
+.message-page-chip:hover,
+.composer-page-pill:hover {
+  background: var(--cs-tint-2);
+  color: var(--pp-text-primary);
+}
+
+.message-page-chip svg,
+.composer-page-pill svg {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+}
+
+.message-page-chip > span:first-of-type,
+.composer-page-pill > span:first-of-type {
+  color: var(--pp-text-secondary);
+  font-weight: var(--cs-w-medium);
+}
+
+.message-page-title,
+.composer-page-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-bubble .message-page-chip {
+  display: flex;
+}
+
+.aui-composer-actions {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.composer-page-pill {
+  min-width: 0;
+  flex: 0 1 auto;
+  min-height: 26px;
+  padding: 0 8px 0 6px;
+  background: var(--cs-tint-2);
+}
+
+.composer-stop svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+
+/* ---------- Editing a sent question ---------- */
+.user-message.editing {
+  justify-items: stretch;
+}
+
+.edit-composer {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--cs-r-surface);
+  background: var(--cs-tint-1);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--pp-accent) 70%, transparent);
+}
+
+.edit-composer-input {
+  width: 100%;
+  min-height: 44px;
+  max-height: 180px;
+  resize: none;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--pp-text-primary);
+  padding: 2px 4px;
+  font-family: var(--agent-font-ui);
+  font-size: var(--agent-text-sm);
+  line-height: 1.5;
+}
+
+.edit-composer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.edit-composer-actions button {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--cs-r-control);
+  background: var(--cs-tint-3);
+  color: var(--pp-text-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.edit-composer-actions button.primary {
+  background: var(--pp-accent);
+  color: var(--pp-on-accent);
+}
+
+.edit-composer-actions button:disabled {
+  background: var(--cs-tint-3);
+  color: var(--pp-text-faint);
+  cursor: default;
+}
+
+/* ---------- A conversation that has run long ---------- */
+.long-conversation-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: var(--cs-r-control);
+  background: var(--cs-tint-1);
+  color: var(--pp-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.long-conversation-hint button {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--pp-accent-strong);
+  font: inherit;
+  font-weight: var(--cs-w-medium);
+  cursor: pointer;
+}
