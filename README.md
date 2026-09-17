@@ -164,6 +164,14 @@ open "apps/desktop/release/mac-arm64/SynchroPage.app"
 ./scripts/build-macos-app.sh --user-install --open
 ```
 
+已经打好包、只想安装（不重新构建）：
+
+```bash
+./scripts/build-macos-app.sh --no-build --install --open
+```
+
+打包阶段 electron-builder 会访问 github.com 校验 Electron（本地有缓存也一样），网络不通时报 `getaddrinfo ENOTFOUND github.com`，重试即可；`--no-build` 只复制 `apps/desktop/release` 里现成的 `.app`，不需要网络。
+
 `pack` 会依次执行：
 
 ```text

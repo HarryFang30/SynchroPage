@@ -12,6 +12,7 @@ RUN_USER_INSTALL=0
 RUN_OPEN=0
 RUN_DMG=0
 SKIP_DEPS=0
+SKIP_BUILD=0
 
 usage() {
   cat <<'EOF'
@@ -25,12 +26,15 @@ Options:
   --open          Open the app after build/install
   --dmg           Build dmg/zip artifacts instead of only the .app directory
   --skip-deps     Do not auto-install missing npm/PyInstaller dependencies
+  --no-build      Install/open the app already built in apps/desktop/release
+                  (no rebuild; packaging needs github.com, installing does not)
   -h, --help      Show this help
 
 Examples:
   ./scripts/build-macos-app.sh
   ./scripts/build-macos-app.sh --install --open
   ./scripts/build-macos-app.sh --user-install --open
+  ./scripts/build-macos-app.sh --no-build --install --open
 EOF
 }
 
@@ -50,6 +54,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-deps)
       SKIP_DEPS=1
+      ;;
+    --no-build)
+      SKIP_BUILD=1
       ;;
     -h|--help)
       usage
@@ -74,6 +81,14 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This script builds a macOS .app and must run on macOS." >&2
   exit 1
 fi
+
+if [[ "$SKIP_BUILD" -eq 1 ]]; then
+  if [[ ! -d "$BUILT_APP" ]]; then
+    echo "--no-build: no built app at $BUILT_APP. Run the script once without --no-build." >&2
+    exit 1
+  fi
+  log "Using the existing build ($(stat -f '%Sm' "$BUILT_APP/Contents/MacOS/SynchroPage"))"
+else
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm is required. Install Node.js 20+ first." >&2
@@ -107,6 +122,8 @@ if [[ "$RUN_DMG" -eq 1 ]]; then
   npm --prefix apps/desktop run dist
 else
   npm --prefix apps/desktop run pack
+fi
+
 fi
 
 if [[ ! -d "$BUILT_APP" ]]; then
