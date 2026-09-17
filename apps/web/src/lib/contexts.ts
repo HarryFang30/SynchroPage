@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { getAppCopy, type AppCopy } from "../i18n";
-import type { ChatModelAdapter } from "./assistant/agentChatAdapter";
+import type { ChatModelAdapter, ComposerImageAttachment } from "./assistant/agentChatAdapter";
 import type { ThreadMessageLike } from "./persistence/workspaceStore";
 
 // ── AppCopy context ──────────────────────────────────────────
@@ -32,6 +32,10 @@ export type AssistantThreadRuntime = {
     setQuote: (quote?: { text: string; messageId: string }) => void;
     setText: (text: string) => void;
     send: () => void;
+    getState: () => { attachments: readonly { id: string }[] };
+    addAttachment: (attachment: ComposerImageAttachment) => Promise<void>;
+    getAttachmentByIndex: (index: number) => { remove: () => Promise<void> };
+    unstable_on: (event: "send", callback: () => void) => () => void;
   };
 };
 
@@ -56,6 +60,7 @@ export type AssistantUiRuntime = {
       role: string;
       status?: { type?: string; reason?: string };
       content: unknown[];
+      attachments?: readonly unknown[];
     };
     part: { type?: string; text?: string };
   }) => T) => T;
@@ -69,6 +74,28 @@ export function useAssistantUi() {
   const runtime = useContext(AssistantUiContext);
   if (!runtime) throw new Error("assistant-ui runtime is not loaded");
   return runtime;
+}
+
+// ── Sending a user message from a button ─────────────────────
+
+/** Hands over the images waiting in the composer and empties the draft. */
+export const PendingImagesContext = createContext<() => ComposerImageAttachment[]>(() => []);
+
+/**
+ * Sends a user message that was not typed into the composer (a suggestion, a
+ * challenge button, a quiz answer, a selection prompt). Images waiting in the
+ * composer go with it, exactly as they do when the composer sends.
+ */
+export function useAppendUserText() {
+  const thread = useAssistantUi().useThreadRuntime();
+  const takePendingImages = useContext(PendingImagesContext);
+  return useCallback((text: string) => {
+    thread.append({
+      role: "user",
+      content: [{ type: "text", text }],
+      attachments: takePendingImages(),
+    });
+  }, [takePendingImages, thread]);
 }
 
 // ── Lazy loading ─────────────────────────────────────────────

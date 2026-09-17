@@ -14,6 +14,7 @@ import {
 } from "react";
 import { type AppCopy } from "../../i18n";
 import {
+  composerImageAttachment,
   createPdfAgentAdapter,
   type AgentAttachment,
   type AgentContextItem,
@@ -23,7 +24,9 @@ import {
 import {
   AppCopyContext,
   AssistantUiContext,
+  PendingImagesContext,
   useAppCopy,
+  useAppendUserText,
   useAssistantUi,
   useDeferredAssistantRuntime,
 } from "../../lib/contexts";
@@ -110,6 +113,7 @@ function QuickSelectionPromptRunner(props: {
 }) {
   const assistantUi = useAssistantUi();
   const thread = assistantUi.useThreadRuntime();
+  const appendUserText = useAppendUserText();
   const consumedRef = useRef<string | null>(null);
   const onConsumedRef = useRef(props.onConsumed);
   onConsumedRef.current = props.onConsumed;
@@ -122,10 +126,7 @@ function QuickSelectionPromptRunner(props: {
     const send = () => {
       timer = null;
       consumedRef.current = prompt.id;
-      thread.append({
-        role: "user",
-        content: [{ type: "text", text: prompt.prompt }],
-      });
+      appendUserText(prompt.prompt);
       onConsumedRef.current(prompt.id);
     };
     const isRunning = () => Boolean(thread.getState?.().isRunning);
@@ -153,7 +154,7 @@ function QuickSelectionPromptRunner(props: {
       if (timer !== null) window.clearTimeout(timer);
       unsubscribe?.();
     };
-  }, [props.prompt, thread]);
+  }, [appendUserText, props.prompt, thread]);
 
   return null;
 }
@@ -212,6 +213,19 @@ function AgentPanelLoaded(props: AgentPanelProps) {
   const page = props.getPage();
   const suggestions = pageSuggestions(page, props.pageAwareSuggestions, copy);
   const contextPreview = composerContextPreview(props.contexts, copy);
+
+  // Read at send time, so a message sent right after an image was added still takes it.
+  const pendingImagesRef = useRef(props.attachments);
+  pendingImagesRef.current = props.attachments;
+  const { setAttachments } = props;
+  const takePendingImages = useCallback(() => {
+    const images = pendingImagesRef.current.map(composerImageAttachment);
+    if (images.length) {
+      pendingImagesRef.current = [];
+      setAttachments([]);
+    }
+    return images;
+  }, [setAttachments]);
 
   const clearAgentContext = useCallback(() => {
     props.setContexts([]);
@@ -292,22 +306,25 @@ function AgentPanelLoaded(props: AgentPanelProps) {
         ))}
       </div>
       <AssistantRuntimeProvider runtime={runtime}>
-        <QuickSelectionPromptRunner
-          prompt={props.pendingSelectionPrompt}
-          onConsumed={props.clearPendingSelectionPrompt}
-        />
-        <AssistantThread
-          page={page}
-          suggestions={suggestions}
-          contextPreview={contextPreview}
-          attachments={props.attachments}
-          selectedContext={props.selectedContext}
-          onRemoveAttachment={(id) => props.setAttachments((items) => items.filter((item) => item.id !== id))}
-          onRemoveSelectedContext={() => props.setSelectedContext(null)}
-          composerInputRef={props.composerInputRef}
-          onPasteImages={addClipboardImages}
-          learnerNoteCount={props.learnerNoteCount}
-        />
+        <PendingImagesContext.Provider value={takePendingImages}>
+          <QuickSelectionPromptRunner
+            prompt={props.pendingSelectionPrompt}
+            onConsumed={props.clearPendingSelectionPrompt}
+          />
+          <AssistantThread
+            page={page}
+            suggestions={suggestions}
+            contextPreview={contextPreview}
+            attachments={props.attachments}
+            selectedContext={props.selectedContext}
+            onRemoveAttachment={(id) => props.setAttachments((items) => items.filter((item) => item.id !== id))}
+            onAttachmentsSent={() => props.setAttachments([])}
+            onRemoveSelectedContext={() => props.setSelectedContext(null)}
+            composerInputRef={props.composerInputRef}
+            onPasteImages={addClipboardImages}
+            learnerNoteCount={props.learnerNoteCount}
+          />
+        </PendingImagesContext.Provider>
       </AssistantRuntimeProvider>
     </aside>
   );

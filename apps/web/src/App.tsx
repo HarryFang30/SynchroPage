@@ -747,7 +747,6 @@ export default function App() {
   const getSnapshot = useCallback(
     () => ({
       contexts,
-      attachments,
       selectedContext,
       pdfContext: pdfUrl ? pdfTextContext : buildPdfContextFromPack(pack, uiPreferences),
       learnerNotes: uiPreferences.shareNotesWithAssistant
@@ -761,7 +760,7 @@ export default function App() {
       reasoningEffort: agentAnswerModeReasoningEffort(uiPreferences.agentAnswerMode),
       assistantModel: modelApiConfig.defaults.assistant,
     }),
-    [attachments, contexts, modelApiConfig.defaults.assistant, pack, pdfTextContext, pdfUrl, selectedContext, uiPreferences],
+    [contexts, modelApiConfig.defaults.assistant, pack, pdfTextContext, pdfUrl, selectedContext, uiPreferences],
   );
   const getDocumentFile = useCallback(async () => {
     if (!pdfUrl) return null;
@@ -843,6 +842,7 @@ export default function App() {
       contentMarkdown: input.content,
       selectedContext: input.selectedContext ?? null,
       sourceRefs: input.sourceRefs || [],
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       status: input.status,
       createdAt: input.createdAt || now,
       updatedAt: now,

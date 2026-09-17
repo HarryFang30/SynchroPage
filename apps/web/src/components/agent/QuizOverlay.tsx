@@ -10,7 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { ReaderMarkdown } from "../workspace/WorkspaceChrome";
 import { buildChallengeFollowUpPrompt } from "../../lib/assistant/agentChatAdapter";
-import { useAppCopy, useAssistantUi } from "../../lib/contexts";
+import { useAppCopy, useAppendUserText } from "../../lib/contexts";
 import {
   EMPTY_QUIZ_ANSWER,
   advanceRetryQueue,
@@ -168,8 +168,7 @@ export function useQuizRun(quiz: QuizSet, storageDocumentId?: string) {
 
 export function QuizOverlay({ run }: { run: QuizRun }) {
   const copy = useAppCopy();
-  const assistantUi = useAssistantUi();
-  const thread = assistantUi.useThreadRuntime();
+  const send = useAppendUserText();
   const panelRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [peeking, setPeeking] = useState(false);
@@ -199,10 +198,6 @@ export function QuizOverlay({ run }: { run: QuizRun }) {
       }
     };
   }, [open]);
-
-  const send = useCallback((text: string) => {
-    thread.append({ role: "user", content: [{ type: "text", text }] });
-  }, [thread]);
 
   // "看原文 p.N": hand the PDF pane the page and get out of the way for a moment.
   const peekSource = useCallback((pageNo: number) => {

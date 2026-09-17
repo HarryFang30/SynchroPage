@@ -21,6 +21,8 @@ export type ChatModelMessage = {
   id?: string;
   role: string;
   content?: unknown[];
+  /** Images sent with a user message (assistant-ui complete attachments). */
+  attachments?: unknown[];
   createdAt?: Date;
 };
 
@@ -55,9 +57,21 @@ export type AgentAttachment = {
   data_url: string;
 };
 
+/** An image as assistant-ui carries it on the composer and on a sent user message. */
+export type ComposerImageAttachment = {
+  id: string;
+  type: "image";
+  name: string;
+  contentType: string;
+  content: { type: "image"; image: string }[];
+  status: { type: "complete" };
+};
+
+// The backend reads at most this many images per request (MAX_IMAGE_ATTACHMENTS).
+const MAX_REQUEST_IMAGES = 8;
+
 export type AgentSnapshot = {
   contexts: AgentContextItem[];
-  attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
   pdfContext: PdfContextPayload | null;
   /** The learner's own highlights and notes for this document (null when sharing is off). */
@@ -73,6 +87,8 @@ export type ChatPersistInput = {
   content: string;
   status: ChatMessageStatus;
   createdAt?: number;
+  /** Images the user sent with this message. */
+  attachments?: AgentAttachment[];
   selectedContext?: Record<string, unknown> | null;
   sourceRefs?: Record<string, unknown>[];
 };
@@ -140,9 +156,17 @@ export function createPdfAgentAdapter(args: {
       const documentFile = await args.getDocumentFile?.().catch(() => null) || null;
       const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
       const latestUserText = latestUser ? messageText(latestUser) : "";
+      const latestUserImages = latestUser ? messageImages(latestUser) : [];
+      // Images belong to the message they were sent with. Earlier ones stay in
+      // the request so a follow-up question can still refer to them; when the
+      // cap is hit the oldest are dropped.
+      const requestImages = options.messages
+        .filter((message) => message.role === "user")
+        .flatMap((message) => messageImages(message))
+        .slice(-MAX_REQUEST_IMAGES);
       const challengeRequest = parseChallengeRequest(latestUserText, args.copy);
       const promptInput = buildAgentRequestPrompt({
-        question: latestUserText,
+        question: latestUserText || (latestUserImages.length ? args.copy.agent.imageOnlyPrompt : ""),
         challengeRequest,
         selectedContext: snapshot.selectedContext,
         pdfContext: snapshot.pdfContext,
@@ -171,13 +195,14 @@ export function createPdfAgentAdapter(args: {
           .catch(() => undefined);
         return persistQueue;
       };
-      if (latestUserText) {
+      if (latestUserText || latestUserImages.length) {
         await enqueuePersist({
           id: latestUserMeta.id || args.createId("user"),
           role: "user",
           content: latestUserText,
           status: "completed",
           createdAt: latestUserMeta.createdAt?.getTime?.() || Date.now(),
+          attachments: latestUserImages,
           selectedContext: selectedContextRecord,
           sourceRefs,
         });
@@ -244,7 +269,7 @@ export function createPdfAgentAdapter(args: {
             document_id: pack.document.id,
           },
         })),
-        ...snapshot.attachments.map((attachment) => ({
+        ...requestImages.map((attachment) => ({
           type: "file",
           name: attachment.name,
           mime: attachment.mime,
@@ -264,12 +289,11 @@ export function createPdfAgentAdapter(args: {
         messages: options.messages.map((message) => ({
           role: message.role,
           status: "success",
-          content: messageText(message),
-          parts: [{ type: "text", text: messageText(message) }],
+          content: messageTranscriptText(message),
+          parts: [{ type: "text", text: messageTranscriptText(message) }],
         })),
         input: promptInput,
         parts,
-        attachments: snapshot.attachments,
         // The notes digest itself rides in `input`; this item is provenance only.
         // It goes before the pinned contexts because the backend keeps at most
         // MAX_CONTEXT_ITEMS entries and would drop a trailing one.
@@ -329,7 +353,7 @@ export function createPdfAgentAdapter(args: {
             args.copy.agent.localPreviewIntro,
             selectedAgentContext ? args.copy.agent.localPreviewSelected(selectedAgentContext.title) : "",
             snapshot.contexts.length ? args.copy.agent.localPreviewContexts(snapshot.contexts.length) : args.copy.agent.localPreviewPage(page.page_no),
-            snapshot.attachments.length ? args.copy.agent.localPreviewImages(snapshot.attachments.length) : "",
+            latestUserImages.length ? args.copy.agent.localPreviewImages(latestUserImages.length) : "",
             latestUserText ? args.copy.agent.localPreviewQuestion(latestUserText) : "",
           ]
             .filter(Boolean)
@@ -973,6 +997,49 @@ function messageText(message: unknown): string {
     })
     .join("\n")
     .trim();
+}
+
+/** The text of a message as the transcript shows it: a user message that carried images says so. */
+function messageTranscriptText(message: unknown): string {
+  const text = messageText(message);
+  const images = (message as { role?: string }).role === "user" ? messageImages(message).length : 0;
+  if (!images) return text;
+  const note = `[${images} image${images === 1 ? "" : "s"} attached]`;
+  return text ? `${text}\n${note}` : note;
+}
+
+/** The composer form of a pending image: what assistant-ui sends along with the next user message. */
+export function composerImageAttachment(attachment: AgentAttachment): ComposerImageAttachment {
+  return {
+    id: attachment.id,
+    type: "image",
+    name: attachment.name,
+    contentType: attachment.mime,
+    content: [{ type: "image", image: attachment.data_url }],
+    status: { type: "complete" },
+  };
+}
+
+/** The images a user message was sent with. */
+export function messageImages(message: unknown): AgentAttachment[] {
+  const attachments = (message as { attachments?: unknown }).attachments;
+  if (!Array.isArray(attachments)) return [];
+  const images: AgentAttachment[] = [];
+  for (const item of attachments) {
+    const attachment = item as Partial<ComposerImageAttachment> | null;
+    if (!attachment || !Array.isArray(attachment.content)) continue;
+    const dataUrl = attachment.content.find((part) => part?.type === "image" && typeof part.image === "string")?.image || "";
+    if (!dataUrl.startsWith("data:image/")) continue;
+    images.push({
+      id: String(attachment.id || `img_${images.length}`),
+      type: "image",
+      name: String(attachment.name || "image"),
+      mime: String(attachment.contentType || dataUrl.slice(5, dataUrl.indexOf(";")) || "image/png"),
+      size: Math.floor((dataUrl.length - dataUrl.indexOf(",") - 1) * 0.75),
+      data_url: dataUrl,
+    });
+  }
+  return images;
 }
 
 function agentFailureText(error: unknown, copy: AppCopy) {

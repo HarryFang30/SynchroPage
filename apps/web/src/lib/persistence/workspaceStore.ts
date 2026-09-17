@@ -51,10 +51,22 @@ type LayoutPatch = PersistedJson & {
   activeProjectId?: string;
 };
 
+/** An image sent with a user message, in the shape assistant-ui keeps on the message. */
+export type ThreadImageAttachment = {
+  id: string;
+  type: "image";
+  name: string;
+  contentType: string;
+  content: { type: "image"; image: string }[];
+  status: { type: "complete" };
+};
+
 export type ThreadMessageLike = {
   id: string;
   role: ChatMessageRole;
-  content: string;
+  /** `[]` for a user message that is only images: it has no text part to render. */
+  content: string | [];
+  attachments?: ThreadImageAttachment[];
   createdAt?: Date;
   status?: unknown;
   metadata?: {
@@ -1515,11 +1527,30 @@ function assertExport(
   if (!condition) throw new PersistenceError(kind, message);
 }
 
+function threadImageAttachments(message: ChatMessageRecord): ThreadImageAttachment[] {
+  if (message.role !== "user" || !Array.isArray(message.attachments)) return [];
+  return message.attachments.flatMap((item, index) => {
+    const dataUrl = typeof item?.data_url === "string" ? item.data_url : "";
+    if (!dataUrl.startsWith("data:image/")) return [];
+    return [{
+      id: typeof item.id === "string" && item.id ? item.id : `${message.id}_img_${index}`,
+      type: "image" as const,
+      name: typeof item.name === "string" && item.name ? item.name : "image",
+      contentType: typeof item.mime === "string" && item.mime ? item.mime : "image/png",
+      content: [{ type: "image" as const, image: dataUrl }],
+      status: { type: "complete" as const },
+    }];
+  });
+}
+
 export function chatMessageToThreadMessageLike(message: ChatMessageRecord): ThreadMessageLike {
+  const attachments = threadImageAttachments(message);
+  const content = message.contentMarkdown || message.content;
   return {
     id: message.id,
     role: message.role,
-    content: message.contentMarkdown || message.content,
+    content: !content && attachments.length ? [] : content,
+    ...(attachments.length ? { attachments } : {}),
     createdAt: new Date(message.createdAt),
     status:
       message.role === "assistant"
