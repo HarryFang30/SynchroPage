@@ -181,8 +181,12 @@ def _event_failure(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
         if isinstance(response, Mapping) and isinstance(response.get("error"), Mapping):
             return response["error"]
         return event
-    if isinstance(error, Mapping) and "choices" not in event and "candidates" not in event:
+    if "choices" in event or "candidates" in event:
+        return None
+    if isinstance(error, Mapping):
         return error
+    if isinstance(error, str) and error.strip():  # Ollama and some proxies: {"error": "..."}
+        return {"message": error}
     return None
 
 

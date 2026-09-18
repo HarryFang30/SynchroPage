@@ -378,6 +378,8 @@ export function useGenerationEngine(p: GenerationEngineParams) {
           sharedPdfBlob ??= p.pdfUrl ? fetchPdfBlobForGeneration(p.pdfUrl, generationSignal, p.copy).catch(() => null) : Promise.resolve(null);
           return sharedPdfBlob;
         };
+        // Renderings are ~100-300 KB each; the run keeps only the last few
+        // (renderPdfPageImages has its own bounded cache for re-renders).
         const pageImagesByNumber = new Map<number, PageImageInput>();
         const getPageImages = async (pageNumbers: number[]) => {
           const missing = pageNumbers.filter((pageNo) => !pageImagesByNumber.has(pageNo));
@@ -388,7 +390,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 cacheKey: p.documentId || p.pdfUrl,
                 signal: generationSignal,
               }).catch(() => new Map<number, PageImageInput>());
-              for (const [pageNo, image] of rendered) pageImagesByNumber.set(pageNo, image);
+              for (const [pageNo, image] of rendered) rememberPageImage(pageImagesByNumber, pageNo, image);
             }
           }
           return pageNumbers.map((pageNo) => pageImagesByNumber.get(pageNo)).filter((image): image is PageImageInput => Boolean(image));
@@ -674,7 +676,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
               await runWithConcurrencyLimit(pendingPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async (runningPage) => {
                 await generateSinglePage(
                   runningPage,
-                  batchFailureFallbackPlan(classification, pageBatch.plan, runningPage, p.uiPreferences.modelReasoningEffort, p.modelApiConfig),
+                  batchFailureFallbackPlan(classification, pageBatch.plan, runningPage, p.uiPreferences.modelReasoningEffort, p.modelApiConfig, lessonPlan),
                 );
               });
             }
@@ -1044,7 +1046,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
             if (missing.length && !generationSignal.aborted) {
               const rendered = await renderPdfPageImages(pdfBlob, missing, { cacheKey: item.documentId, signal: generationSignal })
                 .catch(() => new Map<number, PageImageInput>());
-              for (const [pageNo, image] of rendered) projectPageImages.set(pageNo, image);
+              for (const [pageNo, image] of rendered) rememberPageImage(projectPageImages, pageNo, image);
             }
             return pageNumbers.map((pageNo) => projectPageImages.get(pageNo)).filter((image): image is PageImageInput => Boolean(image));
           };
@@ -1302,7 +1304,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
                 await runWithConcurrencyLimit(pendingPages, TEACHING_BATCH_FALLBACK_CONCURRENCY, async (runningPage) => {
                   await generateSinglePage(
                     runningPage,
-                    batchFailureFallbackPlan(classification, pageBatch.plan, runningPage, p.uiPreferences.modelReasoningEffort, p.modelApiConfig),
+                    batchFailureFallbackPlan(classification, pageBatch.plan, runningPage, p.uiPreferences.modelReasoningEffort, p.modelApiConfig, lessonPlan),
                   );
                 });
               }
@@ -1730,7 +1732,7 @@ function resolveBatchResponse(params: {
     if (plan.retryOnWeakOutput && generatedTeachingNeedsRetry(generatedPage, lessonPlanDepthForPage(lessonPlan, runningPage.page_no))) {
       outcome.weakPages.push({
         runningPage,
-        retryPlan: teachingGenerationQualityPlan(runningPage, preference, "retry", modelApiConfig),
+        retryPlan: teachingGenerationQualityPlan(runningPage, preference, "retry", modelApiConfig, lessonPlanRow(lessonPlan, runningPage.page_no)),
         fallback: generatedPage,
       });
       params.onHandled(runningPage.page_no);
@@ -1740,6 +1742,19 @@ function resolveBatchResponse(params: {
     params.onHandled(runningPage.page_no);
   }
   return outcome;
+}
+
+const RUN_PAGE_IMAGE_CACHE_ENTRIES = 24;
+
+/** Keep a rendering for the requests of one pass, not for the whole document. */
+function rememberPageImage(cache: Map<number, PageImageInput>, pageNo: number, image: PageImageInput) {
+  cache.delete(pageNo);
+  cache.set(pageNo, image);
+  while (cache.size > RUN_PAGE_IMAGE_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
 }
 
 /** Plan for a page the batch did not return: same weight, single page. */
@@ -1759,9 +1774,10 @@ function batchFailureFallbackPlan(
   runningPage: PageData,
   preference: UiPreferences["modelReasoningEffort"],
   modelApiConfig: ModelApiConfig,
+  lessonPlan?: LessonPlan,
 ) {
   if (!classification.retryable) {
-    return teachingGenerationQualityPlan(runningPage, preference, "initial", modelApiConfig);
+    return teachingGenerationQualityPlan(runningPage, preference, "initial", modelApiConfig, lessonPlanRow(lessonPlan, runningPage.page_no));
   }
   return planForRetry(classification.kind, batchPlan, 1, { page: runningPage, preference, modelApiConfig });
 }

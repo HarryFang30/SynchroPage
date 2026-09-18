@@ -7,10 +7,12 @@ between waits for the whole answer.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -111,6 +113,8 @@ class StreamTextDecoderTest(unittest.TestCase):
         decoder, texts, _ = _decode(_sse({"type": "response.output_text.delta", "delta": "par"}, {"type": "error", "code": "api_error", "message": "quota exceeded"}))
         self.assertEqual(texts, ["par"])
         self.assertEqual(decoder.failure, {"type": "error", "code": "api_error", "message": "quota exceeded"})
+        decoder, _, _ = _decode(b'{"error":"model requires more system memory than is available"}\n')
+        self.assertEqual(decoder.failure, {"message": "model requires more system memory than is available"})
 
 
 class _Upstream:
@@ -121,6 +125,7 @@ class _Upstream:
         self.release = threading.Event()
         self.reader_left = threading.Event()
         self.status = 200
+        self.silent = False
         upstream = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -146,6 +151,9 @@ class _Upstream:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
+                if upstream.silent:
+                    upstream.release.wait(timeout=30)
+                    return
                 try:
                     self.wfile.write(_sse({"choices": [{"delta": {"content": "第一句。"}}]}))
                     self.wfile.flush()
@@ -181,6 +189,8 @@ class _Upstream:
 
 
 class ChatStreamingHttpTest(unittest.TestCase):
+    gateway_timeout = 30.0
+
     def setUp(self) -> None:
         self.upstream = _Upstream()
         self.tmp = tempfile.TemporaryDirectory()
@@ -209,7 +219,7 @@ class ChatStreamingHttpTest(unittest.TestCase):
             PdfAgentRequestHandler,
             web_root=Path(self.tmp.name),
             oauth_api=OpenAIOAuthApi(manager),
-            chat_gateway=AgentChatGateway(manager, config_store=store, pdf_file_cache=cache),
+            chat_gateway=AgentChatGateway(manager, config_store=store, pdf_file_cache=cache, timeout_seconds=self.gateway_timeout),
             teaching_gateway=TeachingGenerationGateway(manager, config_store=store, pdf_file_cache=cache),
             model_config_store=store,
             runner=AsyncRunner(),
@@ -274,6 +284,26 @@ class ChatStreamingHttpTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, 401)
         self.assertEqual(json.loads(raised.exception.read())["error"], "upstream_error")
 
+    def _pending_chat_tasks(self) -> int:
+        loop = self.server.runner.loop
+
+        async def count() -> int:
+            return sum(1 for task in asyncio.all_tasks(loop) if task is not asyncio.current_task(loop) and not task.done())
+
+        return asyncio.run_coroutine_threadsafe(count(), loop).result(timeout=5)
+
+    def test_reader_that_leaves_during_a_silence_frees_the_request_at_once(self) -> None:
+        # The upstream writes one delta and then says nothing for a long time.
+        response = self._open(stream=True)
+        self.assertEqual(self._next_event(response)["type"], "start")
+        self.assertEqual(self._next_event(response)["type"], "delta")
+        response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
+        response.close()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and self._pending_chat_tasks():
+            time.sleep(0.05)
+        self.assertEqual(self._pending_chat_tasks(), 0, "the upstream read stayed blocked after the reader left")
+
     def test_reader_that_leaves_stops_the_upstream_request(self) -> None:
         self.upstream.endless = True
         response = self._open(stream=True)
@@ -285,6 +315,32 @@ class ChatStreamingHttpTest(unittest.TestCase):
         response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
         response.close()
         self.assertTrue(self.upstream.reader_left.wait(timeout=10), "the upstream request kept running after the reader left")
+
+
+class SilentUpstreamTest(ChatStreamingHttpTest):
+    gateway_timeout = 1.0
+
+    def test_first_words_reach_the_client_while_the_upstream_is_still_writing(self) -> None:
+        self.skipTest("short timeout")
+
+    def test_request_without_stream_still_gets_one_json_answer(self) -> None:
+        self.skipTest("short timeout")
+
+    def test_failure_before_the_answer_starts_keeps_its_http_status(self) -> None:
+        self.skipTest("short timeout")
+
+    def test_reader_that_leaves_during_a_silence_frees_the_request_at_once(self) -> None:
+        self.skipTest("short timeout")
+
+    def test_reader_that_leaves_stops_the_upstream_request(self) -> None:
+        self.skipTest("short timeout")
+
+    def test_model_that_never_answers_is_reported_as_a_timeout_not_a_dead_socket(self) -> None:
+        self.upstream.silent = True
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            self._open(stream=True)
+        self.assertEqual(raised.exception.code, 504)
+        self.assertEqual(json.loads(raised.exception.read())["error"], "upstream_timeout")
 
 
 if __name__ == "__main__":

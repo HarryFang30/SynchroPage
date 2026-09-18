@@ -339,7 +339,7 @@ export function createPdfAgentAdapter(args: {
         // The conversation before this question; the question itself is `input`.
         messages: options.messages
           .filter((message) => message !== latestUser)
-          .map((message) => transcriptMessage(message)),
+          .map((message) => transcriptMessage(message, args.copy)),
         input: promptInput,
         parts,
         // The notes digest itself rides in `input`; this item is provenance only.
@@ -359,6 +359,8 @@ export function createPdfAgentAdapter(args: {
       // stops pulling from the generator the moment the run is aborted, and an
       // answer that lost its screen still has to be read to the end and saved.
       let liveText = "";
+      // Set once the request itself saved the final state of the answer.
+      let settled = false;
       let outcome: { content: string; streamed: boolean } | { error: unknown } | null = null;
       let wake: (() => void) | null = null;
       const notify = () => {
@@ -370,7 +372,10 @@ export function createPdfAgentAdapter(args: {
         try {
           let content = "";
           let truncated = false;
-          for await (const event of streamAgentChat(payload, requestController.signal, args.copy.errors.accountNotFound)) {
+          for await (const event of streamAgentChat(payload, requestController.signal, {
+            accountNotFound: args.copy.errors.accountNotFound,
+            streamEndedEarly: args.copy.errors.streamEndedEarly,
+          })) {
             if (event.type === "delta") {
               liveText += event.text;
               persistPartial(liveText, "streaming");
@@ -390,6 +395,7 @@ export function createPdfAgentAdapter(args: {
           // is saved here.
           if (streamed || leftScreen()) {
             persistPartial(content, "completed", true, leftScreen());
+            settled = true;
             await persistQueue;
           }
           outcome = { content, streamed };
@@ -397,10 +403,12 @@ export function createPdfAgentAdapter(args: {
           if ((error as Error).name === "AbortError") {
             // A stop keeps what was on screen when the learner stopped.
             persistPartial(liveText || streamedText, "stopped", true);
+            settled = true;
           } else if (liveText || !args.isBackendOffline()) {
             // What was already written stays; the failure is said after it.
             const failureText = agentFailureText(error, args.copy);
             persistPartial(liveText ? `${liveText}\n\n${failureText}` : failureText, "failed", true, leftScreen());
+            settled = true;
           }
           await persistQueue;
           outcome = { error };
@@ -429,10 +437,10 @@ export function createPdfAgentAdapter(args: {
             status: { type: "running" },
           };
         }
-        const settled = outcome as { content: string; streamed: boolean } | { error: unknown };
-        if ("error" in settled) throw settled.error;
-        const content = settled.content;
-        if (!settled.streamed) {
+        const result = outcome as { content: string; streamed: boolean } | { error: unknown };
+        if ("error" in result) throw result.error;
+        const content = result.content;
+        if (!result.streamed && !settled) {
           for await (const partial of streamAssistantText(content, options.abortSignal, args.copy.errors.generationStopped)) {
             persistPartial(partial, "streaming");
             yield {
@@ -450,9 +458,9 @@ export function createPdfAgentAdapter(args: {
       } catch (error) {
         if ((error as Error).name === "AbortError") {
           // Leaving while a whole answer was being typed out keeps all of it;
-          // a stop keeps what was on screen. A streamed answer was saved by
-          // the request itself.
-          if (!liveText) {
+          // a stop keeps what was on screen. An answer the request itself
+          // saved is not saved again.
+          if (!settled) {
             if (answer && leftScreen()) persistPartial(answer, "completed", true, true);
             else if (answer) persistPartial(streamedText, "stopped", true);
             await persistQueue;
@@ -1128,9 +1136,15 @@ function messageTranscriptText(message: unknown): string {
   return text ? `${text}\n${note}` : note;
 }
 
+/** The notice shown under a cut-off answer is for the learner, not for the model. */
+function stripTruncationNotice(text: string, copy: AppCopy) {
+  const notice = `> ${copy.agent.answerTruncated}`;
+  return text.endsWith(notice) ? `${text.slice(0, -notice.length).trimEnd()}\n[the answer was cut off here]` : text;
+}
+
 /** One earlier turn as the backend reads it: what was said, from which page, about which selection. */
-function transcriptMessage(message: ChatModelMessage) {
-  const text = messageTranscriptText(message);
+function transcriptMessage(message: ChatModelMessage, copy: AppCopy) {
+  const text = stripTruncationNotice(messageTranscriptText(message), copy);
   const anchor = message.role === "user" ? messageAnchor(message) : null;
   const quote = message.role === "user" ? (message.metadata?.custom?.quote as { text?: unknown } | undefined)?.text : undefined;
   return {

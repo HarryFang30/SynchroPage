@@ -16,9 +16,11 @@ is what the retry policy keys on.
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import inspect
 import json
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -99,6 +101,22 @@ def _response_socket(response: Any) -> Any:
     return sock if callable(getattr(sock, "settimeout", None)) else None
 
 
+def abort_response(response: Any) -> None:
+    """Break off an upstream response from another thread.
+
+    Shutting the socket down wakes a ``read`` that is blocked on a silent
+    model, which then fails as a network error; closing alone would not.
+    """
+    sock = _response_socket(response)
+    if sock is not None:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+    with contextlib.suppress(Exception):  # best effort: the request is being abandoned
+        response.close()
+
+
 def _read_body(
     response: Any,
     *,
@@ -139,9 +157,14 @@ def _read_body(
                 sock.settimeout(max(0.5, min(float(socket_timeout), deadline - now)))
             except OSError:
                 sock = None
+        if cancelled is not None and cancelled():
+            raise HttpError(499, "The reader closed the request", code=CLIENT_CLOSED_CODE)
         try:
             chunk = read_chunk(_READ_CHUNK_BYTES)
         except BaseException as exc:
+            if cancelled is not None and cancelled():
+                # The socket was shut down under the read because the reader left.
+                raise HttpError(499, "The reader closed the request", code=CLIENT_CLOSED_CODE) from exc
             mark_received_bytes(exc, received)
             raise
         if not chunk:
@@ -150,8 +173,6 @@ def _read_body(
         received += len(chunk)
         if on_chunk is not None:
             on_chunk(chunk)
-        if cancelled is not None and cancelled():
-            raise HttpError(499, "The reader closed the request", code=CLIENT_CLOSED_CODE)
     return b"".join(chunks), received
 
 
@@ -176,6 +197,7 @@ def post_json_responses(
     deadline_seconds: float | None = None,
     on_chunk: Callable[[bytes], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    on_response: Callable[[Any], None] | None = None,
 ) -> tuple[str, str]:
     """POST *payload* as JSON to *url*, returning ``(text, content_type)``.
 
@@ -197,6 +219,9 @@ def post_json_responses(
         Streaming hooks, see ``_read_body``.  With ``on_chunk`` the caller has
         already passed the text on, so an answer cut at ``max_output_tokens``
         is returned as it is instead of raising ``output_truncated``.
+    on_response:
+        Receives the open upstream response as soon as the headers are in, so
+        a caller can ``abort_response`` it from another thread.
     """
     data = json_bytes_utf8_safe(payload, ensure_ascii=False, separators=(",", ":"))
     request = urllib.request.Request(
@@ -217,6 +242,8 @@ def post_json_responses(
         socket_timeout = max(1.0, min(socket_timeout, float(deadline_seconds)))
     try:
         with urllib.request.urlopen(request, timeout=socket_timeout) as response:
+            if on_response is not None:
+                on_response(response)
             content_type = response.headers.get("Content-Type", "")
             body, _received = _read_body(
                 response,

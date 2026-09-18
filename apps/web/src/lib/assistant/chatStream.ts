@@ -15,6 +15,12 @@ type ChatResponseBody = {
   truncated?: boolean;
 };
 
+export type ChatStreamMessages = {
+  accountNotFound?: string;
+  /** Shown when the connection closes before the answer was complete. */
+  streamEndedEarly?: string;
+};
+
 /**
  * Ask the assistant and read the answer as it is written.
  *
@@ -25,7 +31,7 @@ type ChatResponseBody = {
 export async function* streamAgentChat(
   payload: Record<string, unknown>,
   signal: AbortSignal,
-  accountNotFoundMessage?: string,
+  messages: ChatStreamMessages = {},
 ): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch("/api/agent/chat", {
     method: "POST",
@@ -33,7 +39,7 @@ export async function* streamAgentChat(
     body: JSON.stringify({ ...payload, stream: true }),
     signal,
   });
-  if (!response.ok) throw await httpRequestErrorFromResponse(response, accountNotFoundMessage);
+  if (!response.ok) throw await httpRequestErrorFromResponse(response, messages.accountNotFound);
   const contentType = response.headers.get("Content-Type") || "";
   if (!contentType.includes("text/event-stream") || !response.body) {
     yield doneEvent((await response.json()) as ChatResponseBody);
@@ -63,7 +69,7 @@ export async function* streamAgentChat(
     void reader.cancel().catch(() => undefined);
   }
   // The connection closed before the answer was complete.
-  if (!finished) throw new HttpRequestError("The answer stream ended early", { status: 502, code: "network_error" });
+  if (!finished) throw new HttpRequestError(messages.streamEndedEarly || "The answer stream ended early", { status: 502, code: "network_error" });
 }
 
 function parseEventLine(line: string): ChatStreamEvent | null {

@@ -938,15 +938,18 @@ test.describe("Teaching Generation (mocked)", () => {
   });
 
   test("a segment is one request that thinks as hard as its hardest page and shows the model every page worth explaining", async ({ page }) => {
+    // Three tiers: the request of a stretch follows its hardest page's tier.
+    const fast = { providerId: "deepseek", model: "deepseek-chat" };
     const flash = { providerId: "deepseek", model: "deepseek-flash" };
+    const quality = { providerId: "deepseek", model: "deepseek-v4-pro" };
     const flashConfig = {
       version: 1,
       selectedProviderId: "deepseek",
       providers: [{
         id: "deepseek", name: "DeepSeek", type: "openai-compatible", apiHost: "https://api.deepseek.com",
-        apiKeyRequired: true, hasApiKey: true, enabled: true, models: ["deepseek-flash"],
+        apiKeyRequired: true, hasApiKey: true, enabled: true, models: ["deepseek-chat", "deepseek-flash", "deepseek-v4-pro"],
       }],
-      defaults: { assistant: flash, teachingFast: flash, teachingBalanced: flash, teachingQuality: flash },
+      defaults: { assistant: flash, teachingFast: fast, teachingBalanced: flash, teachingQuality: quality },
     };
     await page.unroute("**/api/**");
     const batches: Array<Record<string, unknown>> = [];
@@ -986,8 +989,10 @@ test.describe("Teaching Generation (mocked)", () => {
     // stretch: one request, not one per effort level.
     expect(batches).toHaveLength(1);
     const [batch] = batches;
-    // The slides hold a few words each; what decides the effort is the key page.
+    // The slides hold a few words each; what decides the effort, and with it
+    // the model tier, is the key page.
     expect(batch.reasoningEffort).toBe("medium");
+    expect(batch.model).toBe("deepseek-flash");
     // The model sees every page it has to explain; the cover needs no picture.
     const images = batch.pageImages as Array<{ page_no: number; data_url: string }>;
     expect(images.map((image) => image.page_no)).toEqual([2, 3, 4, 5, 6, 7, 8]);

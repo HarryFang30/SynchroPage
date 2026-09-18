@@ -254,6 +254,7 @@ export type AppCopy = {
     accountNotFound: string;
     jsonNeedsPages: string;
     emptyGatewayResult: string;
+    streamEndedEarly: string;
     generationStopped: string;
     generationRequestStalled: (seconds: number) => string;
     generationBatchRequestStalled: (seconds: number) => string;
@@ -890,6 +891,7 @@ const zhCN: AppCopy = {
     accountNotFound: "请先连接 OpenAI OAuth 后再发送。",
     jsonNeedsPages: "JSON 需要包含 pages 数组",
     emptyGatewayResult: "AI 网关返回了空结果",
+    streamEndedEarly: "连接在回答写完之前断开了",
     generationStopped: "生成已停止",
     generationRequestStalled: (seconds) => `OpenAI 上游超过 ${seconds} 秒没有返回，已自动停止这一页。可能是服务端限流或请求卡住，请稍后重试。`,
     generationBatchRequestStalled: (seconds) => `OpenAI 上游超过 ${seconds} 秒没有返回，已自动拆分为单页重试。`,
@@ -1562,6 +1564,7 @@ const enUS: AppCopy = {
     accountNotFound: "Connect OpenAI OAuth before sending.",
     jsonNeedsPages: "JSON must contain a pages array",
     emptyGatewayResult: "AI gateway returned an empty result",
+    streamEndedEarly: "The connection dropped before the answer was complete",
     generationStopped: "Generation stopped",
     generationRequestStalled: (seconds) => `OpenAI upstream did not return for ${seconds}s, so this page was stopped automatically. This may be rate limiting or a stuck request. Try again shortly.`,
     generationBatchRequestStalled: (seconds) => `OpenAI upstream did not return for ${seconds}s, so the batch was split into single-page retries.`,

@@ -336,6 +336,9 @@ export function teachingQualityModelReadsImages(config?: ModelApiConfig) {
  * when the PDF page itself is attached (and the provider reads PDFs) that
  * already covers it.
  */
+/** Provider types whose backend adapter does not forward image parts. */
+const IMAGE_DROPPING_PROVIDER_TYPES = new Set(["google-generate-content", "ollama-chat"]);
+
 export function teachingRequestImagePages(
   pages: PageData[],
   plan: TeachingGenerationQualityPlan,
@@ -345,7 +348,9 @@ export function teachingRequestImagePages(
   if (plan.attachPageImage) return pages.map((page) => page.page_no);
   const provider = teachingProviderForPlan(config, plan.providerId);
   if (!providerModelReadsImages(provider, plan.model)) return [];
-  if (plan.attachPdf && providerSupportsPdfInput(provider)) return [];
+  // A provider that reads the PDF gets the page itself where it matters
+  // (attachPdf); the Gemini and Ollama adapters drop image parts.
+  if (providerSupportsPdfInput(provider) || IMAGE_DROPPING_PROVIDER_TYPES.has(provider?.type || "")) return [];
   return pages
     .filter((page) => {
       const depth = lessonPlanRow(lessonPlan, page.page_no)?.depth;
@@ -522,11 +527,11 @@ export function teachingGenerationQualityPlan(
     retryOnWeakOutput = visualLike || complexTextLike;
   }
 
-  const planFloor = lessonPlanReasoningFloor(planRow);
-  if (planFloor) {
-    reasons.push(`lesson-plan-${planRow?.key ? "key" : planRow?.depth}`);
-    requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, planFloor);
-  }
+  // The plan's floor picks the model tier below; it is applied to the
+  // effort after the learner's preference is resolved, so that it can only
+  // raise the effort, never cap a high preference.
+  const planFloor = preference === "none" ? undefined : lessonPlanReasoningFloor(planRow);
+  if (planFloor) reasons.push(`lesson-plan-${planRow?.key ? "key" : planRow?.depth}`);
 
   if (complexTextLike) {
     if (formulaLike) reasons.push("formula");
@@ -592,14 +597,8 @@ export function teachingGenerationQualityPlan(
   if (attachPdf || attachPageImage) batchable = false;
 
   if (!reasons.length) reasons.push("text-fast-path");
-  const modelDefaults = teachingModelDefaults(modelApiConfig);
-  const selectedRef =
-    attachPdf || attachPageImage || requestedReasoning === "high"
-      ? modelDefaults.quality
-      : requestedReasoning === "medium"
-        ? modelDefaults.balanced
-        : modelDefaults.fast;
-  const fallbackRef = modelDefaults.quality;
+  const plannedReasoning = planFloor ? maxTeachingReasoningEffort(requestedReasoning, planFloor) : requestedReasoning;
+  const selectedRef = teachingModelRefForEffort(plannedReasoning, modelApiConfig, attachPdf || attachPageImage);
   const capabilities = teachingModelCapabilities(
     teachingProviderForPlan(modelApiConfig, selectedRef.providerId),
     selectedRef.model,
@@ -609,27 +608,60 @@ export function teachingGenerationQualityPlan(
     requestedReasoning = maxTeachingReasoningEffort(requestedReasoning, effortFloor);
     reasons.push(`model-effort-floor-${effortFloor}`);
   }
-  const reasoningEffort = clampTeachingReasoningEffort(
-    teachingGenerationReasoningEffort(preference, requestedReasoning),
-    capabilities,
-  );
+  let reasoningEffort = teachingGenerationReasoningEffort(preference, requestedReasoning);
+  if (planFloor) reasoningEffort = maxTeachingReasoningEffort(reasoningEffort, planFloor);
   return {
-    providerId: selectedRef.providerId,
-    model: selectedRef.model,
-    fallbackProviderId:
-      selectedRef.providerId === fallbackRef.providerId && selectedRef.model === fallbackRef.model
-        ? undefined
-        : fallbackRef.providerId,
-    fallbackModel: selectedRef.providerId === fallbackRef.providerId && selectedRef.model === fallbackRef.model
-      ? undefined
-      : fallbackRef.model,
-    reasoningEffort,
+    ...teachingModelFields(selectedRef, modelApiConfig),
+    reasoningEffort: clampTeachingReasoningEffort(reasoningEffort, capabilities),
     attachPdf,
     attachPageImage,
     batchable,
     retryOnWeakOutput,
     attempt,
     reasons,
+    maxBatchSize: capabilities.recommendedBatchSize,
+  };
+}
+
+/** The model tier an effort calls for: quality for high and above (or a page that needs the file), balanced for medium, else fast. */
+function teachingModelRefForEffort(
+  effort: UiPreferences["modelReasoningEffort"],
+  modelApiConfig: ModelApiConfig | undefined,
+  needsQuality = false,
+): ModelRef {
+  const modelDefaults = teachingModelDefaults(modelApiConfig);
+  if (needsQuality || teachingReasoningRank[effort] >= teachingReasoningRank.high) return modelDefaults.quality;
+  return effort === "medium" ? modelDefaults.balanced : modelDefaults.fast;
+}
+
+function teachingModelFields(selectedRef: ModelRef, modelApiConfig: ModelApiConfig | undefined) {
+  const fallbackRef = teachingModelDefaults(modelApiConfig).quality;
+  const same = selectedRef.providerId === fallbackRef.providerId && selectedRef.model === fallbackRef.model;
+  return {
+    providerId: selectedRef.providerId,
+    model: selectedRef.model,
+    fallbackProviderId: same ? undefined : fallbackRef.providerId,
+    fallbackModel: same ? undefined : fallbackRef.model,
+  };
+}
+
+/**
+ * A stretch of one segment is one request at its hardest page's effort; the
+ * model tier follows that effort, as it would for a single page.
+ */
+function mergeBatchPlanEffort(
+  plan: TeachingGenerationQualityPlan,
+  effort: UiPreferences["modelReasoningEffort"],
+  modelApiConfig: ModelApiConfig | undefined,
+): TeachingGenerationQualityPlan {
+  const merged = maxTeachingReasoningEffort(plan.reasoningEffort, effort);
+  if (merged === plan.reasoningEffort) return plan;
+  const selectedRef = teachingModelRefForEffort(merged, modelApiConfig);
+  const capabilities = teachingModelCapabilities(teachingProviderForPlan(modelApiConfig, selectedRef.providerId), selectedRef.model);
+  return {
+    ...plan,
+    ...teachingModelFields(selectedRef, modelApiConfig),
+    reasoningEffort: clampTeachingReasoningEffort(merged, capabilities),
     maxBatchSize: capabilities.recommendedBatchSize,
   };
 }
@@ -931,9 +963,7 @@ export function batchTeachingPages(
     // A stretch of one segment is one request: it thinks as hard as its
     // hardest page needs instead of being cut wherever the effort changes.
     const open = currentPlan as TeachingGenerationQualityPlan | null;
-    currentPlan = open
-      ? { ...open, reasoningEffort: maxTeachingReasoningEffort(open.reasoningEffort, plan.reasoningEffort) }
-      : plan;
+    currentPlan = open ? mergeBatchPlanEffort(open, plan.reasoningEffort, modelApiConfig) : plan;
     currentSegment = segmentId;
     currentBatch.push(page);
   }
@@ -1053,10 +1083,10 @@ function teachingPlansCanShareBatch(
   right: TeachingGenerationQualityPlan,
   planned = false,
 ) {
+  // With a plan the effort, and with it the model tier, is settled per
+  // stretch of a segment, not per page.
   return (
-    left.providerId === right.providerId &&
-    left.model === right.model &&
-    (planned || left.reasoningEffort === right.reasoningEffort) &&
+    (planned || (left.providerId === right.providerId && left.model === right.model && left.reasoningEffort === right.reasoningEffort)) &&
     left.attachPdf === right.attachPdf &&
     left.attachPageImage === right.attachPageImage &&
     left.batchable === right.batchable &&

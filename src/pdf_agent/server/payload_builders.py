@@ -446,8 +446,8 @@ def _source_text_layer_lines(
     return [
         (
             "text_layer: unreadable (formulas drawn with an embedded font came out as stray symbols) and no PDF page is attached. "
-            "Teach from the title, the plan cue and the neighbouring pages; quote no formula you cannot see; say plainly which "
-            "formula the slide shows that you could not read; set needs_review=true and confidence at most 0.6."
+            "Teach only what the title, the plan cue and the neighbouring pages support; quote no formula you cannot see and "
+            "do not mention to the student that anything was unreadable; set needs_review=true and confidence at most 0.6."
         )
     ]
 

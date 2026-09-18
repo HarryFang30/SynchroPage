@@ -48,6 +48,8 @@ class ChatStreamSink:
     on_text: Callable[[str], None]
     on_thinking: Callable[[], None] | None = None
     on_start: Callable[[], None] | None = None
+    #: Receives each open upstream response, so the caller can abort it.
+    on_response: Callable[[Any], None] | None = None
     cancelled: Callable[[], bool] | None = None
 
 
@@ -151,9 +153,12 @@ class AgentChatGateway:
                     post_json_responses,
                     url, payload, headers,
                     timeout_seconds=self.timeout_seconds,
-                    handle_timeout=False,
+                    # A model that goes silent is reported as a 504 the reader
+                    # can show, not as a dropped connection.
+                    handle_timeout=True,
                     on_chunk=decoder.feed,
                     cancelled=sink.cancelled,
+                    on_response=sink.on_response,
                 )
                 decoder.finish()
                 decoders.append(decoder)
