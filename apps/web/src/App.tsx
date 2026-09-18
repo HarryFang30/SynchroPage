@@ -1721,9 +1721,9 @@ export default function App() {
     }, copy.persistence.saved).catch((error) => setJobStatus((error as Error).message || copy.persistence.failed));
   }, [copy.persistence, persistOperation, refreshStorageEstimate, workspaceId]);
 
-  const startNewPersistedConversation = useCallback(() => {
+  const startNewPersistedConversation = useCallback((written = false) => {
     // A conversation nobody has written in yet is already the new one.
-    const currentIsEmpty = Boolean(threadId) && !persistedMessages.length;
+    const currentIsEmpty = Boolean(threadId) && !persistedMessages.length && !written;
     if (!workspaceId || currentIsEmpty) {
       setPersistedMessages([]);
       setAgentRuntimeKey(`thread:local:${Date.now()}`);

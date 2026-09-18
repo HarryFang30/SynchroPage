@@ -155,7 +155,7 @@ export function AssistantThread({
             {messageCount >= LONG_CONVERSATION_MESSAGES && (
               <p className="long-conversation-hint">
                 <span>{copy.agent.longConversationHint}</span>
-                <button type="button" onClick={onNewConversation}>{copy.agent.newConversation}</button>
+                <button type="button" onClick={() => onNewConversation()}>{copy.agent.newConversation}</button>
               </p>
             )}
             <AssistantComposer

@@ -101,7 +101,8 @@ export type AgentPanelProps = {
   learnerNoteCount: number;
   persistChatMessage?: (input: ChatPersistInput) => Promise<void>;
   pruneChatMessages?: (keepIds: string[]) => Promise<void>;
-  onNewConversation: () => void;
+  /** `written` is true when the conversation on screen has messages (persisted state may lag behind). */
+  onNewConversation: (written: boolean) => void;
   onJumpToPage: (pageNo: number) => void;
 } & ConversationActions;
 
@@ -272,8 +273,10 @@ function AgentPanelLoaded(props: AgentPanelProps) {
     if (props.pendingSelectionPrompt) {
       props.clearPendingSelectionPrompt(props.pendingSelectionPrompt.id);
     }
-    props.onNewConversation();
-  }, [clearAgentContext, props]);
+    // What is on screen decides whether this conversation is still empty: a
+    // question sent a moment ago may not have reached the store yet.
+    props.onNewConversation(runtime.thread.getState().messages.length > 0);
+  }, [clearAgentContext, props, runtime]);
 
   const addImages = async (files: FileList | File[]) => {
     const images = await Promise.all([...files].filter((file) => file.type.startsWith("image/")).slice(0, 6).map((file) => readFileAsDataUrl(file, copy)));

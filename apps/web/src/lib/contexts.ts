@@ -50,6 +50,7 @@ export type AssistantUiRuntime = {
   useLocalRuntime: (adapter: ChatModelAdapter, options: { initialMessages: ThreadMessageLike[] }) => {
     thread: {
       reset: () => void;
+      getState: () => { messages: readonly unknown[]; isRunning: boolean };
       composer: { reset: () => void | Promise<void> };
     };
   };
