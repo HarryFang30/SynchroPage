@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { resetStorage, mockApi, uploadPdfFromRail } from "./helpers";
+import { resetStorageWithExplanationsOpen as resetStorage, mockApi, uploadPdfFromRail } from "./helpers";
 
 type TeachingRequestBody = {
   reasoningEffort?: string;
@@ -1004,8 +1004,8 @@ test.describe("Teaching Generation (mocked)", () => {
 
   test("structure and JSON tabs only appear in Debug mode", async ({ page }) => {
     await expect(page.locator(".tab-group")).toBeVisible();
-    // 讲解 / 笔记 / 地图
-    await expect(page.locator(".tab-button")).toHaveCount(3);
+    // 讲解 / 助手 / 笔记 / 地图
+    await expect(page.locator(".tab-button")).toHaveCount(4);
 
     await page.locator(".rail-settings-button").click();
     await page.locator(".settings-nav-item").filter({ hasText: /高级|Advanced/ }).click();
@@ -1014,8 +1014,8 @@ test.describe("Teaching Generation (mocked)", () => {
     await expect(debugRow.getByRole("switch")).toHaveAttribute("aria-checked", "true");
     await page.keyboard.press("Escape");
     await expect(page.locator(".settings-dialog")).toHaveCount(0);
-    // 讲解 / 笔记 / 结构 / JSON
-    await expect(page.locator(".tab-button")).toHaveCount(5);
+    // 讲解 / 助手 / 笔记 / 地图 / 结构 / JSON
+    await expect(page.locator(".tab-button")).toHaveCount(6);
     await page.locator(".tab-button").filter({ hasText: /结构|Struct/ }).click();
     await expect(page.locator(".structure-grid")).toBeVisible();
 
@@ -1024,7 +1024,7 @@ test.describe("Teaching Generation (mocked)", () => {
     await page.locator(".settings-nav-item").filter({ hasText: /高级|Advanced/ }).click();
     await debugRow.getByRole("switch").click();
     await page.keyboard.press("Escape");
-    await expect(page.locator(".tab-button")).toHaveCount(3);
+    await expect(page.locator(".tab-button")).toHaveCount(4);
     await expect(page.locator(".tab-button.active")).toHaveText(/讲解|Notes/);
     await expect(page.locator(".structure-grid")).toHaveCount(0);
   });

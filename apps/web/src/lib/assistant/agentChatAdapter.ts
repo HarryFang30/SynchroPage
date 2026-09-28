@@ -85,6 +85,12 @@ export type AgentSnapshot = {
   answerMode: UiPreferences["agentAnswerMode"];
   reasoningEffort: UiPreferences["modelReasoningEffort"];
   assistantModel: ModelRef;
+  /**
+   * The learner has opened this page's explanation. False while they are still
+   * working the page out themselves (think first): the assistant must not hand
+   * the explanation over unasked.
+   */
+  explanationRead?: boolean;
 };
 
 export type ChatPersistInput = {
@@ -160,12 +166,17 @@ export function createPdfAgentAdapter(args: {
       const page = args.getPage();
       setActiveQuizDocumentId(pack.document.id);
       const latestUser = [...options.messages].reverse().find((message) => message.role === "user");
+      // "Just tell me" and a hand-in are about the conversation, not about the
+      // selection waiting in the composer; that selection stays for the next question.
+      const ignoresSelection = messageIgnoresSelection(latestUser);
       // A question keeps the selection it was asked about: asking it again
       // (regenerate, or after editing it) is still about that selection.
-      if (liveSnapshot.selectedContext) rememberSelection(liveSnapshot.selectedContext);
-      const snapshot: AgentSnapshot = liveSnapshot.selectedContext || !latestUser
-        ? liveSnapshot
-        : { ...liveSnapshot, selectedContext: messageSelection(latestUser, messageAnchor(latestUser)?.pageNo) };
+      if (liveSnapshot.selectedContext && !ignoresSelection) rememberSelection(liveSnapshot.selectedContext);
+      const snapshot: AgentSnapshot = ignoresSelection
+        ? { ...liveSnapshot, selectedContext: null }
+        : liveSnapshot.selectedContext || !latestUser
+          ? liveSnapshot
+          : { ...liveSnapshot, selectedContext: messageSelection(latestUser, messageAnchor(latestUser)?.pageNo) };
       const selectedAgentContext = snapshot.selectedContext
         ? selectedContextToAgentContext(snapshot.selectedContext, args.copy)
         : null;
@@ -331,7 +342,13 @@ export function createPdfAgentAdapter(args: {
       const payload = {
         modelProviderId: requestModel.providerId,
         model: requestModel.model,
-        answerMode: snapshot.answerMode,
+        // A challenge asks for strict JSON with its own answers and hints; the
+        // coaching rules are for ordinary turns.
+        answerMode: challengeRequest && snapshot.answerMode === "coach" ? "concise" : snapshot.answerMode,
+        // Holding the explanation back is part of coaching; a direct mode answers in full.
+        ...(snapshot.explanationRead === false && snapshot.answerMode === "coach" && !challengeRequest
+          ? { explanationRead: false }
+          : {}),
         reasoningEffort: requestReasoningEffort,
         document: pack.document,
         documentFile,
@@ -505,10 +522,15 @@ export function createPdfAgentAdapter(args: {
           throw localError;
         }
       } finally {
-        args.clearSelectedContext();
+        if (!ignoresSelection) args.clearSelectedContext();
       }
     },
   };
+}
+
+function messageIgnoresSelection(message: unknown) {
+  const custom = (message as { metadata?: { custom?: Record<string, unknown> } } | undefined)?.metadata?.custom;
+  return custom?.ignoreSelection === true;
 }
 
 export function selectedContextPayload(context: SelectedContext) {

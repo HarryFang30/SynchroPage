@@ -1,0 +1,673 @@
+/* ============================================================
+   study.css — "think first" study surface
+   Imported LAST. Wins by cascade order at equal specificity; the
+   `:root .app-shell …` prefix matches the (0,3,0) dark-theme rules
+   in the earlier layers so one rule serves both themes through
+   the --sp-* tokens below.
+
+   The workspace reads like a desk: the PDF lies on the darkest
+   ground, the side column is the sheet of paper beside it, and
+   the rail recedes. The learner's own writing is set in blue ink
+   (--sp-pen), everything the AI wrote in ordinary ink, so the two
+   are never confused at a glance.
+   ============================================================ */
+
+:root {
+  --sp-chrome: oklch(0.972 0.007 82);
+  --sp-rail: oklch(0.958 0.008 80);
+  --sp-desk: oklch(0.936 0.009 80);
+  --sp-paper: oklch(0.994 0.003 85);
+  --sp-hairline: color-mix(in oklch, var(--pp-text-primary) 9%, transparent);
+  --sp-hairline-soft: color-mix(in oklch, var(--pp-text-primary) 6%, transparent);
+  --sp-tint: color-mix(in oklch, var(--pp-text-primary) 4.5%, transparent);
+  --sp-tint-strong: color-mix(in oklch, var(--pp-text-primary) 8%, transparent);
+  --sp-pen: oklch(0.46 0.12 255);
+  --sp-pen-soft: oklch(0.46 0.12 255 / 0.07);
+  --sp-pen-rule: oklch(0.46 0.12 255 / 0.5);
+  --sp-think: oklch(0.972 0.02 72);
+  --sp-think-rule: oklch(0.6 0.125 39 / 0.2);
+  --sp-field: oklch(1 0 0);
+  --sp-shadow-card: 0 1px 2px oklch(0.3 0.02 70 / 0.05), 0 4px 14px oklch(0.3 0.02 70 / 0.05);
+  --sp-r-card: 14px;
+  --sp-r-control: 9px;
+}
+
+:root[data-synchropage-resolved-theme="dark"] {
+  --sp-chrome: oklch(0.186 0.006 75);
+  --sp-rail: oklch(0.172 0.006 75);
+  --sp-desk: oklch(0.152 0.005 75);
+  --sp-paper: oklch(0.212 0.007 75);
+  --sp-hairline: oklch(1 0 0 / 0.075);
+  --sp-hairline-soft: oklch(1 0 0 / 0.05);
+  --sp-tint: oklch(1 0 0 / 0.04);
+  --sp-tint-strong: oklch(1 0 0 / 0.075);
+  --sp-pen: oklch(0.8 0.085 250);
+  --sp-pen-soft: oklch(0.8 0.085 250 / 0.09);
+  --sp-pen-rule: oklch(0.8 0.085 250 / 0.55);
+  --sp-think: oklch(0.242 0.016 62);
+  --sp-think-rule: oklch(0.665 0.13 39 / 0.26);
+  --sp-field: oklch(0.185 0.006 75);
+  --sp-shadow-card: 0 1px 2px oklch(0 0 0 / 0.3), 0 6px 18px oklch(0 0 0 / 0.18);
+}
+
+/* ---------- 1. Surfaces ---------- */
+:root .app-shell .topbar {
+  background: var(--sp-chrome);
+  border-bottom: 1px solid var(--sp-hairline-soft);
+}
+
+:root .app-shell .page-rail {
+  background: var(--sp-rail);
+}
+
+:root .app-shell .pdf-pane,
+:root .app-shell .pdf-frame,
+:root .app-shell .workspace-panels {
+  background: var(--sp-desk);
+}
+
+:root .app-shell .pdf-pane .pane-toolbar {
+  background: var(--sp-desk);
+  border-bottom-color: transparent;
+}
+
+:root .app-shell .pdf-pane .toolbar-title {
+  color: var(--pp-text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+:root .app-shell .pdf-pane .toolbar-title .status-dot {
+  display: none;
+}
+
+:root .app-shell .notes-pane,
+:root .app-shell .side-pane-toolbar {
+  background: var(--sp-paper);
+}
+
+:root .app-shell .workspace-panel:has(> .notes-pane) {
+  box-shadow: -1px 0 0 var(--sp-hairline-soft);
+}
+
+/* ---------- 2. Top bar ---------- */
+:root .app-shell .brand-mark {
+  background: var(--pp-text-primary);
+  color: var(--sp-chrome);
+  border-radius: 8px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Preparing explanations is the AI's job and happens once per document; it
+   is a quiet tool, not the loudest thing on the screen. */
+:root .app-shell .generate-split .primary-button {
+  background: var(--sp-tint);
+  color: var(--pp-text-primary);
+  box-shadow: inset 0 0 0 1px var(--sp-hairline);
+  font-weight: 500;
+}
+
+:root .app-shell .generate-split .primary-button:not(:disabled):hover {
+  background: var(--sp-tint-strong);
+}
+
+:root .app-shell .generate-split .primary-button:not(:disabled):active {
+  background: var(--sp-tint-strong);
+}
+
+:root .app-shell .generate-split .generate-main-button svg {
+  color: var(--pp-accent);
+}
+
+:root .app-shell .generate-split .generate-menu-button {
+  box-shadow: inset 0 0 0 1px var(--sp-hairline), inset 1px 0 0 var(--sp-hairline);
+}
+
+/* ---------- 3. Side column tabs ---------- */
+:root .app-shell .side-pane-toolbar {
+  gap: 12px;
+  padding: 0 14px 0 10px;
+  border-bottom: 1px solid var(--sp-hairline-soft);
+}
+
+:root .app-shell .side-tabs {
+  height: 100%;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+:root .app-shell .side-tabs .tab-button {
+  position: relative;
+  height: 100%;
+  padding: 0 10px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--pp-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+}
+
+:root .app-shell .side-tabs .tab-button:hover {
+  background: transparent;
+  color: var(--pp-text-primary);
+}
+
+:root .app-shell .side-tabs .tab-button.active {
+  background: transparent;
+  color: var(--pp-text-primary);
+}
+
+:root .app-shell .side-tabs .tab-button:focus-visible {
+  outline-offset: -3px;
+  border-radius: 6px;
+}
+
+:root .app-shell .side-tabs .tab-button.active::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--pp-accent);
+}
+
+.side-pane-toolbar .notes-toolbar-right {
+  margin-left: auto;
+}
+
+/* The assistant lives in the side column; it fills it and drops the chrome
+   it needed as a pane of its own. */
+.side-assistant {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+:root .app-shell .side-assistant .agent-panel {
+  min-width: 0;
+  height: 100%;
+  background: transparent;
+  grid-template-rows: 44px auto minmax(0, 1fr);
+}
+
+:root .app-shell .side-assistant .agent-toolbar {
+  background: transparent;
+  border-bottom: 1px solid var(--sp-hairline-soft);
+}
+
+/* ---------- 4. Explanation reading ---------- */
+:root .app-shell .notes-content {
+  padding: 26px clamp(20px, 5cqi, 44px) 40px;
+}
+
+:root .app-shell.compact-mode .notes-content {
+  padding: 18px clamp(16px, 4cqi, 28px) 24px;
+}
+
+:root .app-shell .note-markdown {
+  max-width: 64ch;
+}
+
+.note-lead-slot,
+.note-hidden-slot,
+.note-after-slot {
+  margin: 0 0 22px;
+}
+
+.note-after-slot {
+  margin: 26px 0 0;
+}
+
+/* ---------- 5. Think first ---------- */
+.think-first,
+.think-first-recap {
+  display: grid;
+  gap: 12px;
+  padding: 18px 18px 16px;
+  border-radius: var(--sp-r-card);
+}
+
+.think-first {
+  background: var(--sp-think);
+  box-shadow: inset 0 0 0 1px var(--sp-think-rule);
+}
+
+.note-markdown .think-first-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--pp-accent-strong);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+:root[data-synchropage-resolved-theme="dark"] .note-markdown .think-first-eyebrow {
+  color: var(--pp-accent-text);
+}
+
+.think-first-eyebrow svg {
+  width: 14px;
+  height: 14px;
+}
+
+.note-markdown .think-first-question {
+  margin: 0;
+  color: var(--pp-text-primary);
+  font-size: calc(17px * var(--reader-font-scale, 1));
+  font-weight: 600;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.note-markdown .think-first-question.generic {
+  font-size: calc(15.5px * var(--reader-font-scale, 1));
+  font-weight: 500;
+  color: var(--pp-text-secondary);
+}
+
+.think-first-input {
+  width: 100%;
+  min-height: 88px;
+  resize: none;
+  overflow-y: auto;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: var(--sp-r-control);
+  background: var(--sp-field);
+  box-shadow: inset 0 0 0 1px var(--sp-hairline);
+  color: var(--sp-pen);
+  font: inherit;
+  font-size: calc(15px * var(--reader-font-scale, 1));
+  line-height: 1.7;
+  transition: box-shadow 140ms ease;
+}
+
+.think-first-input::placeholder {
+  color: var(--pp-text-faint);
+}
+
+.think-first-input:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--sp-pen-rule), 0 0 0 3px var(--sp-pen-soft);
+}
+
+.think-first-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.think-first-submit,
+.think-first-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--sp-r-control);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.think-first-submit svg,
+.think-first-secondary svg {
+  width: 15px;
+  height: 15px;
+}
+
+.think-first-submit {
+  background: var(--pp-accent);
+  color: var(--pp-on-accent);
+}
+
+.think-first-submit:hover:not(:disabled) {
+  background: var(--pp-accent-hover);
+}
+
+.think-first-submit:disabled {
+  background: var(--sp-tint-strong);
+  color: var(--pp-text-faint);
+  cursor: default;
+}
+
+.think-first-secondary {
+  background: transparent;
+  color: var(--pp-text-secondary);
+}
+
+.think-first-secondary:hover {
+  background: var(--sp-tint);
+  color: var(--pp-text-primary);
+}
+
+.think-first-hint {
+  margin-left: auto;
+  color: var(--pp-text-faint);
+  font-size: 11.5px;
+}
+
+.think-first-recap {
+  gap: 8px;
+  padding: 14px 16px 10px 18px;
+  background: var(--sp-pen-soft);
+  box-shadow: inset 3px 0 0 var(--sp-pen-rule);
+}
+
+.note-markdown .think-first-recap .think-first-eyebrow,
+:root[data-synchropage-resolved-theme="dark"] .note-markdown .think-first-recap .think-first-eyebrow {
+  color: var(--sp-pen);
+}
+
+.note-markdown .think-first-recap-question {
+  margin: 0;
+  color: var(--pp-text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.note-markdown .think-first-recap-text {
+  margin: 0;
+  color: var(--sp-pen);
+  font-size: calc(15px * var(--reader-font-scale, 1));
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.think-first-recap .think-first-actions {
+  margin-left: -8px;
+}
+
+.think-first-veil {
+  display: grid;
+  gap: 14px;
+  padding: 4px 2px 0;
+}
+
+.think-first-veil-lines {
+  display: grid;
+  gap: 10px;
+}
+
+.think-first-veil-lines span {
+  height: 9px;
+  border-radius: 5px;
+  background: var(--sp-tint-strong);
+}
+
+.think-first-veil-lines span:nth-child(1) {
+  width: 92%;
+}
+
+.think-first-veil-lines span:nth-child(2) {
+  width: 78%;
+}
+
+.think-first-veil-lines span:nth-child(3) {
+  width: 54%;
+}
+
+.note-markdown .think-first-veil p,
+.note-markdown .explanation-missing p {
+  margin: 0;
+  color: var(--pp-text-muted);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.think-first-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--pp-text-secondary);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--sp-hairline);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.think-first-link:hover {
+  color: var(--pp-text-primary);
+  text-decoration-color: currentColor;
+}
+
+.explanation-missing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--sp-r-card);
+  background: var(--sp-tint);
+}
+
+.think-first-after {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--sp-pen);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.think-first-after::before {
+  content: "✎ ";
+}
+
+.think-first-after:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .think-first,
+  .think-first-recap {
+    animation: sp-rise 220ms ease-out both;
+  }
+}
+
+@keyframes sp-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- 6. Learner notes: the reflection's question, blue ink ---------- */
+.page-note-prompt {
+  display: grid;
+  gap: 2px;
+}
+
+.page-note-prompt span {
+  color: var(--pp-text-faint);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.page-note-prompt .page-note-prompt-text {
+  color: var(--pp-text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.page-note:has(.page-note-prompt) .page-note-input {
+  color: var(--sp-pen);
+}
+
+/* ---------- 7. Assistant ---------- */
+.answer-mode-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--sp-tint);
+  box-shadow: inset 0 0 0 1px var(--sp-hairline-soft);
+}
+
+.answer-mode-toggle button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pp-text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.answer-mode-toggle button:hover {
+  color: var(--pp-text-primary);
+}
+
+.answer-mode-toggle button.active {
+  background: var(--sp-paper);
+  color: var(--pp-text-primary);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.12), inset 0 0 0 1px var(--sp-hairline-soft);
+}
+
+:root[data-synchropage-resolved-theme="dark"] .answer-mode-toggle button.active {
+  background: oklch(1 0 0 / 0.1);
+}
+
+.aui-welcome-lede {
+  max-width: 34em;
+  margin: -4px 0 14px;
+  color: var(--pp-text-muted);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+:root .app-shell .aui-welcome .prompt-suggestions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
+  gap: 8px;
+}
+
+:root .app-shell .aui-welcome .prompt-suggestions button {
+  justify-content: flex-start;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--sp-tint);
+  box-shadow: inset 0 0 0 1px var(--sp-hairline-soft);
+  color: var(--pp-text-primary);
+  font-size: 13px;
+  text-align: left;
+}
+
+:root .app-shell .aui-welcome .prompt-suggestions button:hover {
+  background: var(--sp-tint-strong);
+}
+
+:root .app-shell .aui-welcome .prompt-suggestions button[data-starter-kind="prefill"]::before {
+  content: "✎";
+  margin-right: 8px;
+  color: var(--sp-pen);
+}
+
+.direct-answer-button {
+  height: 26px;
+  margin-right: auto;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--sp-tint);
+  color: var(--pp-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.direct-answer-button:hover {
+  background: var(--sp-tint-strong);
+  color: var(--pp-text-primary);
+}
+
+.direct-answer-button::after {
+  content: " →";
+}
+
+/* The learner's messages are their own words: blue ink, like the reflections. */
+:root .app-shell .user-bubble {
+  color: var(--sp-pen);
+}
+
+.challenge-problem-answer {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.challenge-problem-answer span {
+  color: var(--pp-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.challenge-problem-answer textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--sp-r-control);
+  background: var(--sp-field);
+  box-shadow: inset 0 0 0 1px var(--sp-hairline);
+  color: var(--sp-pen);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.challenge-problem-answer textarea:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--sp-pen-rule), 0 0 0 3px var(--sp-pen-soft);
+}
+
+:root .app-shell .challenge-problem-actions button.primary {
+  background: var(--pp-accent);
+  color: var(--pp-on-accent);
+}
+
+:root .app-shell .challenge-problem-actions button.primary:disabled {
+  background: var(--sp-tint-strong);
+  color: var(--pp-text-faint);
+}
+
+:root .app-shell .challenge-problem-actions button.quiet {
+  background: transparent;
+  color: var(--pp-text-muted);
+}
+
+/* ---------- 8. Selection toolbar: the learner's own move comes first ---------- */
+:root .app-shell .selection-toolbar .selection-toolbar-primary {
+  color: var(--sp-pen);
+  font-weight: 600;
+}

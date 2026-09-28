@@ -71,7 +71,7 @@ test.describe("PDF highlights and notes", () => {
     await expect(page.locator(".pdf-highlight[data-color='green']")).toHaveCount(1);
 
     // The document-wide index lists both entries.
-    await page.locator(".tab-group").getByRole("button", { name: /^笔记$|^My notes$/ }).click();
+    await page.locator(".tab-group").getByRole("tab", { name: /^笔记$|^My notes$/ }).click();
     await expect(page.locator(".annotations-item")).toHaveCount(2);
     await expect(page.locator(".annotations-item").nth(1)).toContainText("Definition to remember");
 
@@ -184,12 +184,25 @@ test.describe("Notes as assistant context", () => {
     await writeNoteOnPageOne(page, "电场是标量");
     const captured = await captureChat(page);
     await page.locator(".pdf-page-notes[data-page-number='1'] .page-note-ask").first().click();
-    await expect(page.locator(".user-message")).toContainText("请检查我对这条笔记的理解");
+    await expect(page.locator(".user-message")).toContainText("请检查我写下的理解");
     await expect.poll(() => captured.last?.selectedContext?.pdfPageNumber ?? null).toBe(1);
     // The backend re-wraps inputs that do not open with the selected-source header.
     expect(captured.last?.input?.startsWith("Selected source:")).toBe(true);
     expect(captured.last?.input).toContain("电场是标量");
     expect(captured.last?.input).toContain("Page One");
+    // A check critiques; it never hands back a replacement note.
+    expect(captured.last?.input).toContain("不要替我改写");
+    expect(captured.last?.input).not.toContain("替换掉我原笔记");
+  });
+
+  test("a highlight without a written line cannot be checked", async ({ page }) => {
+    await selectPdfText(page, "Page One");
+    await page.locator(".selection-toolbar").getByRole("button", { name: /^高亮$|^Highlight$/ }).click();
+    const card = page.locator(".pdf-page-notes[data-page-number='1'] .page-note").first();
+    await expect(card).toBeVisible();
+    await expect(card.locator(".page-note-ask")).toBeDisabled();
+    await card.locator(".page-note-input").fill("这是定义");
+    await expect(card.locator(".page-note-ask")).toBeEnabled();
   });
 
   test("an empty page note cannot be checked until something is written", async ({ page }) => {

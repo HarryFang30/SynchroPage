@@ -67,6 +67,8 @@ export type AppCopy = {
       compactModeDescription: string;
     };
     agent: {
+      thinkFirstLabel: string;
+      thinkFirstDescription: string;
       sourcePillsLabel: string;
       sourcePillsDescription: string;
       shareNotesLabel: string;
@@ -80,6 +82,7 @@ export type AppCopy = {
       explanationLanguageEnglish: string;
       answerModeLabel: string;
       answerModeDescription: string;
+      answerModeCoach: string;
       answerModeConcise: string;
       answerModeGuided: string;
       answerModeDetailed: string;
@@ -204,7 +207,7 @@ export type AppCopy = {
     noSelection: string;
     selectionAdded: string;
     explainingSelection: string;
-    summarizingSelection: string;
+    hintingSelection: string;
     codeCopied: (code: string) => string;
     enterCode: (code: string) => string;
     oauthCanceled: string;
@@ -401,6 +404,9 @@ export type AppCopy = {
     tabAnnotationsShort: string;
     tabMap: string;
     tabMapShort: string;
+    tabAssistant: string;
+    tabAssistantShort: string;
+    sideTabsLabel: string;
     textLayerTranscribed: string;
     textLayerTranscribedTitle: string;
     textLayerUnreadable: string;
@@ -455,6 +461,35 @@ export type AppCopy = {
     contextTitle: (count: number) => string;
     contextSource: string;
     contextInventory: (count: number, pages: string) => string;
+    reflectionKicker: string;
+    reflectionAfterKicker: string;
+    highlightNotePlaceholder: string;
+  };
+  thinkFirst: {
+    label: string;
+    /** For pages whose explanation has no question of its own; keyed by the lesson-plan role. */
+    genericQuestion: (role?: string) => string;
+    placeholder: string;
+    inputAria: string;
+    compare: string;
+    keep: string;
+    reveal: string;
+    hint: string;
+    saveEdit: string;
+    cancelEdit: string;
+    recapLabel: string;
+    recapAfterLabel: string;
+    edit: string;
+    check: string;
+    checkHint: string;
+    veil: string;
+    noExplanation: string;
+    preparing: string;
+    prepareThisPage: string;
+    failedExplanation: string;
+    retryThisPage: string;
+    writeAfter: string;
+    saved: (pageNo: number) => string;
   };
   agent: {
     addImage: string;
@@ -494,8 +529,20 @@ export type AppCopy = {
     assistantMessage: string;
     pageSource: (pageNo: number | string) => string;
     imagePreview: (name: string) => string;
-    selectedFallbackSuggestions: string[];
-    pageSuggestions: (title: string, concept: string) => string[];
+    starters: Array<{ label: string; kind: "prefill" | "send" | "quiz"; text: string }>;
+    startersLabel: string;
+    welcomeCoach: string;
+    welcomeCoachLede: string;
+    welcomeDirectLede: string;
+    answerModeToggleLabel: string;
+    answerModeCoach: string;
+    answerModeCoachHint: string;
+    answerModeDirect: string;
+    answerModeDirectHint: string;
+    tellMeDirectly: string;
+    tellMeDirectlyLabel: string;
+    tellMeDirectlyHint: string;
+    loading: string;
     challengeTitle: string;
     challengeModeDiagnostic: string;
     challengeAction: string;
@@ -519,6 +566,12 @@ export type AppCopy = {
     challengeProblemEntryLabel: string;
     challengeProblemHintAction: string;
     challengeProblemSelfCheckAction: string;
+    challengeProblemPeekRubric: string;
+    challengeProblemAnswerLabel: string;
+    challengeProblemAnswerPlaceholder: string;
+    challengeProblemSubmit: string;
+    challengeProblemResubmit: string;
+    challengeProblemSubmitPrompt: (stem: string, answer: string) => string;
     challengeProblemTrapLabel: string;
     challengeProblemRubricLabel: string;
     challengeProblemAgain: string;
@@ -575,7 +628,7 @@ export type AppCopy = {
     quizNoteNote: (count: number) => string;
     contextLearnerNote: (pageNo: number) => string;
     quickExplainPrompt: (label: string) => string;
-    quickSummarizePrompt: (label: string) => string;
+    quickHintPrompt: (label: string) => string;
     continuePrompt: string;
     imageOnlyPrompt: string;
     localPreviewIntro: string;
@@ -600,6 +653,7 @@ export type AppCopy = {
     regenerate: string;
     askWithSelectionPlaceholder: string;
     askPlaceholder: string;
+    coachPlaceholder: string;
     inputAria: string;
     formulaTitle: string;
     stop: string;
@@ -610,7 +664,9 @@ export type AppCopy = {
     selectionToolbarAria: string;
     addToConversation: string;
     explainSelection: string;
-    summarizeSelection: string;
+    explainYourself: string;
+    explainYourselfPrefill: string;
+    hintSelection: string;
   };
   oauth: {
     kicker: string;
@@ -704,6 +760,8 @@ const zhCN: AppCopy = {
       compactModeDescription: "减少 toolbar 和 pane 的间距。",
     },
     agent: {
+      thinkFirstLabel: "先想后看",
+      thinkFirstDescription: "每页讲解打开前，先让你对这一页的问题写下自己的想法；写完再对照讲解，也可以直接看。封面、目录这类页不受影响。",
       sourcePillsLabel: "显示来源 pill",
       sourcePillsDescription: "在对话上方显示紧凑来源上下文。",
       shareNotesLabel: "把我的笔记发给助手",
@@ -715,11 +773,12 @@ const zhCN: AppCopy = {
       explanationLanguageAuto: "跟随界面",
       explanationLanguageChinese: "中文",
       explanationLanguageEnglish: "English",
-      answerModeLabel: "问答回答模式",
-      answerModeDescription: "控制 Agent 问答的回答结构和实际 reasoning.effort；讲解生成仍使用下方模型思考强度。",
-      answerModeConcise: "简洁型 · medium",
-      answerModeGuided: "引导型 · high",
-      answerModeDetailed: "细节型 · extra high",
+      answerModeLabel: "助手回答方式",
+      answerModeDescription: "引导：先问你怎么想、给提示，你要答案时再给；其余三种直接回答，详略不同。助手面板上也能一键切换引导和直答。",
+      answerModeCoach: "引导 · 先让你想",
+      answerModeConcise: "直答 · 简洁",
+      answerModeGuided: "直答 · 分步讲解",
+      answerModeDetailed: "直答 · 详细",
       modelReasoningEffortLabel: "模型思考强度",
       modelReasoningEffortDescription: "写入 Responses API 的 reasoning.effort。强度越高通常越慢、成本越高，但复杂任务更可靠。",
       reasoningEffortNone: "none · 最快",
@@ -841,7 +900,7 @@ const zhCN: AppCopy = {
     noSelection: "没有可加入的页面选区",
     selectionAdded: "选中内容已加入对话",
     explainingSelection: "正在解释选中内容",
-    summarizingSelection: "正在总结选中内容",
+    hintingSelection: "正在为选中内容准备提示",
     codeCopied: (code) => `授权码 ${code} 已复制`,
     enterCode: (code) => `请在 OpenAI 页面输入授权码 ${code}`,
     oauthCanceled: "OAuth 登录已取消",
@@ -935,8 +994,8 @@ const zhCN: AppCopy = {
     restoreWorkbench: "恢复完整工作台",
     hideRail: "隐藏左侧目录",
     showRail: "显示左侧目录",
-    hideNotes: "隐藏讲解面板",
-    showNotes: "显示讲解面板",
+    hideNotes: "隐藏侧栏",
+    showNotes: "显示侧栏",
     hideAgent: "隐藏助手",
     showAgent: "显示助手",
     exitPdfFocus: "退出 PDF 专注",
@@ -949,7 +1008,7 @@ const zhCN: AppCopy = {
     importJson: "导入 SynchroPage JSON",
     exportJson: "导出 JSON",
     advancedSettings: "高级设置",
-    generate: "生成",
+    generate: "备课",
     stopGeneration: "停止",
     generateScopeLabel: "生成范围",
     generateScopeAll: "全部页面",
@@ -1060,6 +1119,9 @@ const zhCN: AppCopy = {
     tabAnnotationsShort: "笔记",
     tabMap: "地图",
     tabMapShort: "地图",
+    tabAssistant: "助手",
+    tabAssistantShort: "助手",
+    sideTabsLabel: "侧栏",
     textLayerTranscribed: "页面转写",
     textLayerTranscribedTitle: "这页的文字层不可读（公式是嵌入字体），内容由模型从页面图像转写而来",
     textLayerUnreadable: "文字层不可读",
@@ -1107,13 +1169,55 @@ const zhCN: AppCopy = {
     emptyNote: "（尚未写内容）",
     highlightLayerAria: (pageNo) => `p.${pageNo} 的高亮`,
     checkUnderstanding: "让 AI 检查",
-    checkUnderstandingHint: "让助手对照原文检查这条笔记",
-    checkHighlightHint: "让助手说说这一句为什么值得划、会怎么考",
+    checkUnderstandingHint: "AI 对照原文点评：哪里对、哪里要改，不替你重写",
+    checkHighlightHint: "先写一句你为什么划这里，AI 再来点评",
     checkUnderstandingEmpty: "先写下你的理解，再让 AI 检查",
     noteContextLabel: (pageNo) => `我在 p.${pageNo} 的笔记`,
     contextTitle: (count) => `我的笔记 · ${count} 条`,
     contextSource: "学习者笔记",
     contextInventory: (count, pages) => `已随本次提问附上我在 ${pages} 写的 ${count} 条笔记。`,
+    reflectionKicker: "读讲解前的想法",
+    reflectionAfterKicker: "读完讲解后的复述",
+    highlightNotePlaceholder: "为什么划这一句？用自己的话写一句…",
+  },
+  thinkFirst: {
+    label: "先想一想",
+    genericQuestion: (role) => {
+      switch (role) {
+        case "exercise":
+          return "先自己做一遍：你的答案是什么？哪一步最关键？";
+        case "derivation":
+          return "先别看讲解：这一步推导是怎么从上一行走到下一行的？你卡在哪里？";
+        case "example":
+          return "这个例子想说明什么？如果换一个数或条件，结果会怎么变？";
+        case "recap":
+        case "summary":
+          return "不看讲解，这一段你能复述出哪几个要点？";
+        default:
+          return "先别看讲解：这一页最想让你明白的是什么？用一两句话写下来。";
+      }
+    },
+    placeholder: "用你自己的话写一两句，不用写对，也不用写全",
+    inputAria: "我的想法",
+    compare: "对照讲解",
+    keep: "记下来",
+    reveal: "直接看讲解",
+    hint: "⌘↵ 提交",
+    saveEdit: "保存",
+    cancelEdit: "取消",
+    recapLabel: "我的想法",
+    recapAfterLabel: "我的复述",
+    edit: "修改",
+    check: "请 AI 点评",
+    checkHint: "AI 只指出哪里对、哪里要改，不替你重写",
+    veil: "讲解已经备好，写下你的想法后对照着看。",
+    noExplanation: "这一页还没有讲解。",
+    preparing: "正在备这一页的讲解…",
+    prepareThisPage: "备这一页",
+    failedExplanation: "这一页的讲解没有生成成功。",
+    retryThisPage: "重新备这一页",
+    writeAfter: "读完了？用自己的话复述一遍",
+    saved: (pageNo) => `已把你在 p.${pageNo} 的想法存进笔记`,
   },
   agent: {
     addImage: "加入图片",
@@ -1161,8 +1265,25 @@ const zhCN: AppCopy = {
     assistantMessage: "助手消息",
     pageSource: (pageNo) => `页面 p.${pageNo}`,
     imagePreview: (name) => `图片 · ${name}`,
-    selectedFallbackSuggestions: ["解释当前页的核心内容", "总结本页关键知识点", "用例子讲清楚这一页", "根据本页内容出几道题"],
-    pageSuggestions: () => ["解释当前页的核心内容", "总结本页关键知识点", "用例子讲清楚这一页", "根据本页内容出几道题"],
+    starters: [
+      { label: "我来讲，你挑毛病", kind: "prefill", text: "我对这一页的理解是：" },
+      { label: "我卡在……", kind: "prefill", text: "我卡在这里：" },
+      { label: "给我一个提示", kind: "send", text: "这一页我还没想明白。先别讲答案，给我一个能让我自己往下想的提示。" },
+      { label: "考我一道题", kind: "quiz", text: "" },
+    ],
+    startersLabel: "从这里开始",
+    welcomeCoach: "先说说你的想法",
+    welcomeCoachLede: "说出你的理解或卡住的地方，我帮你往下想；想要答案时直接说。",
+    welcomeDirectLede: "直答模式：助手会直接回答。想自己先想，切回「引导」。",
+    answerModeToggleLabel: "回答方式",
+    answerModeCoach: "引导",
+    answerModeCoachHint: "先问你怎么想、给提示，你要答案时再给",
+    answerModeDirect: "直答",
+    answerModeDirectHint: "直接给出答案",
+    tellMeDirectly: "直接告诉我答案吧。",
+    tellMeDirectlyLabel: "直接告诉我",
+    tellMeDirectlyHint: "跳过提示，让助手给出完整答案",
+    loading: "正在准备",
     challengeTitle: "挑战",
     challengeModeDiagnostic: "漏洞诊断",
     challengeAction: "生成挑战",
@@ -1187,7 +1308,23 @@ const zhCN: AppCopy = {
     challengeProblemTasksLabel: "分问",
     challengeProblemEntryLabel: "第一步怎么想",
     challengeProblemHintAction: "看第一步提示",
-    challengeProblemSelfCheckAction: "我做完了，看检查点",
+    challengeProblemSelfCheckAction: "看评分要点",
+    challengeProblemPeekRubric: "不做了，直接看要点",
+    challengeProblemAnswerLabel: "我的解答",
+    challengeProblemAnswerPlaceholder: "写下你的思路和步骤，卡住的地方也写出来",
+    challengeProblemSubmit: "交给 AI 批改",
+    challengeProblemResubmit: "改完再交",
+    challengeProblemSubmitPrompt: (stem, answer) => [
+      "这是我对上面这道大题的解答，请按你出题时给的评分要点批改。只点评，不要替我写出完整解答：",
+      `题目：${stem}`,
+      "我的解答：",
+      answer,
+      "",
+      "请按这个顺序回答：",
+      "1. 逐条对照评分要点，每条说「做到了」「部分做到」或「没做到」。",
+      "2. 指出第一个出错或卡住的地方，说清为什么不对。",
+      "3. 给一个只推进一步的提示，让我自己改，不要给出完整答案。",
+    ].join("\n"),
     challengeProblemTrapLabel: "常见误区",
     challengeProblemRubricLabel: "自查采分点",
     challengeProblemAgain: "再来一道大题",
@@ -1248,7 +1385,7 @@ const zhCN: AppCopy = {
     quizNoteNote: (count) => `会针对你在这一页写的 ${count} 条笔记出题`,
     contextLearnerNote: (pageNo) => `我的笔记 · p.${pageNo}`,
     quickExplainPrompt: (label) => `请解释这段选中内容，优先基于该来源回答：${label}`,
-    quickSummarizePrompt: (label) => `请总结这段选中内容，提炼关键概念和可能的公式关系：${label}`,
+    quickHintPrompt: (label) => `这段选中内容我还没看懂。先别直接讲，给我一个提示，让我自己想明白它在说什么。来源：${label}`,
     continuePrompt: "请根据上下文继续。",
     imageOnlyPrompt: "请看我发的图片，结合当前页面讲解它。",
     localPreviewIntro: "本地预览回复：真实回答会通过后端 `/api/agent/chat` 使用 OpenAI OAuth 发送。",
@@ -1271,8 +1408,9 @@ const zhCN: AppCopy = {
     generationFailed: "生成失败，请重试",
     copy: "复制",
     regenerate: "重新生成",
-    askWithSelectionPlaceholder: "基于选中内容提问",
+    askWithSelectionPlaceholder: "你怎么理解这段？或者说说卡在哪里…",
     askPlaceholder: "询问当前页面或选中内容",
+    coachPlaceholder: "说说你的想法，或者卡在哪里…",
     inputAria: "助手输入框",
     formulaTitle: "数学公式",
     stop: "停止",
@@ -1282,8 +1420,10 @@ const zhCN: AppCopy = {
     removeSelectedContent: "移除选中内容",
     selectionToolbarAria: "选中内容操作",
     addToConversation: "添加到对话",
-    explainSelection: "解释选中内容",
-    summarizeSelection: "总结选中内容",
+    explainSelection: "解释",
+    explainYourself: "我来解释",
+    explainYourselfPrefill: "我的理解：",
+    hintSelection: "给我提示",
   },
   oauth: {
     kicker: "OpenAI Codex 登录",
@@ -1377,6 +1517,8 @@ const enUS: AppCopy = {
       compactModeDescription: "Reduce toolbar and pane spacing.",
     },
     agent: {
+      thinkFirstLabel: "Think first",
+      thinkFirstDescription: "Before a page's explanation opens, write your own take on the page's question; then compare, or open it straight away. Covers, outlines and similar pages open directly.",
       sourcePillsLabel: "Show source pills",
       sourcePillsDescription: "Show compact source context above the conversation.",
       shareNotesLabel: "Share my notes with the assistant",
@@ -1388,11 +1530,12 @@ const enUS: AppCopy = {
       explanationLanguageAuto: "Follow interface",
       explanationLanguageChinese: "中文",
       explanationLanguageEnglish: "English",
-      answerModeLabel: "Q&A answer mode",
-      answerModeDescription: "Controls Agent chat structure and the actual reasoning.effort. Generated notes still use the model thinking intensity below.",
-      answerModeConcise: "Concise · medium",
-      answerModeGuided: "Guided · high",
-      answerModeDetailed: "Detailed · extra high",
+      answerModeLabel: "How the assistant answers",
+      answerModeDescription: "Coach asks what you think and gives hints, and gives the answer when you ask for it; the other three answer directly at different depths. The assistant panel switches between coach and direct in one click.",
+      answerModeCoach: "Coach · you think first",
+      answerModeConcise: "Direct · concise",
+      answerModeGuided: "Direct · step by step",
+      answerModeDetailed: "Direct · detailed",
       modelReasoningEffortLabel: "Model thinking intensity",
       modelReasoningEffortDescription: "Sent to the Responses API as reasoning.effort. Higher effort is slower and more expensive, but can improve complex tasks.",
       reasoningEffortNone: "none · fastest",
@@ -1514,7 +1657,7 @@ const enUS: AppCopy = {
     noSelection: "No page selection is available to add",
     selectionAdded: "Selected content added to the conversation",
     explainingSelection: "Explaining selected content",
-    summarizingSelection: "Summarizing selected content",
+    hintingSelection: "Preparing a hint for the selection",
     codeCopied: (code) => `Authorization code ${code} copied`,
     enterCode: (code) => `Enter authorization code ${code} on the OpenAI page`,
     oauthCanceled: "OAuth sign-in canceled",
@@ -1608,8 +1751,8 @@ const enUS: AppCopy = {
     restoreWorkbench: "Restore full workspace",
     hideRail: "Hide outline",
     showRail: "Show outline",
-    hideNotes: "Hide notes pane",
-    showNotes: "Show notes pane",
+    hideNotes: "Hide side panel",
+    showNotes: "Show side panel",
     hideAgent: "Hide assistant",
     showAgent: "Show assistant",
     exitPdfFocus: "Exit PDF focus",
@@ -1622,7 +1765,7 @@ const enUS: AppCopy = {
     importJson: "Import SynchroPage JSON",
     exportJson: "Export JSON",
     advancedSettings: "Advanced settings",
-    generate: "Generate",
+    generate: "Prepare",
     stopGeneration: "Stop",
     generateScopeLabel: "Generate range",
     generateScopeAll: "All pages",
@@ -1733,6 +1876,9 @@ const enUS: AppCopy = {
     tabAnnotationsShort: "Mine",
     tabMap: "Map",
     tabMapShort: "Map",
+    tabAssistant: "Assistant",
+    tabAssistantShort: "Chat",
+    sideTabsLabel: "Side panel",
     textLayerTranscribed: "Transcribed",
     textLayerTranscribedTitle: "This page's text layer was unreadable (formulas in an embedded font); a model transcribed it from the page image",
     textLayerUnreadable: "Unreadable text layer",
@@ -1780,13 +1926,55 @@ const enUS: AppCopy = {
     emptyNote: "(nothing written yet)",
     highlightLayerAria: (pageNo) => `Highlights on p.${pageNo}`,
     checkUnderstanding: "Check with AI",
-    checkUnderstandingHint: "Ask the assistant to check this note against the page",
-    checkHighlightHint: "Ask the assistant why this line matters and how it is tested",
+    checkUnderstandingHint: "AI critiques it against the page: what holds and what to fix, never a rewrite",
+    checkHighlightHint: "Write a line on why you marked this first, then ask AI",
     checkUnderstandingEmpty: "Write your understanding first, then ask AI to check it",
     noteContextLabel: (pageNo) => `My note on p.${pageNo}`,
     contextTitle: (count) => `My notes · ${count}`,
     contextSource: "Learner notes",
     contextInventory: (count, pages) => `Sent ${count} of my own notes (${pages}) with this question.`,
+    reflectionKicker: "Before reading",
+    reflectionAfterKicker: "Said back after reading",
+    highlightNotePlaceholder: "Why did you mark this? One line in your own words…",
+  },
+  thinkFirst: {
+    label: "Think first",
+    genericQuestion: (role) => {
+      switch (role) {
+        case "exercise":
+          return "Try it yourself first: what is your answer, and which step is the one that matters?";
+        case "derivation":
+          return "Before the explanation: how does the derivation get from one line to the next? Where do you get stuck?";
+        case "example":
+          return "What is this example showing? What would change with a different number or condition?";
+        case "recap":
+        case "summary":
+          return "Without the explanation: which points of this section can you say back?";
+        default:
+          return "Before the explanation: what is this page trying to make you understand? Write it in a sentence or two.";
+      }
+    },
+    placeholder: "A sentence or two in your own words. It does not have to be right or complete.",
+    inputAria: "My take",
+    compare: "Compare with explanation",
+    keep: "Keep it",
+    reveal: "Just show me",
+    hint: "⌘↵ to submit",
+    saveEdit: "Save",
+    cancelEdit: "Cancel",
+    recapLabel: "My take",
+    recapAfterLabel: "In my words",
+    edit: "Edit",
+    check: "Ask AI to critique",
+    checkHint: "AI says what holds and what to fix; it never rewrites it for you",
+    veil: "The explanation is ready. Write your take, then compare.",
+    noExplanation: "This page has no explanation yet.",
+    preparing: "Preparing this page…",
+    prepareThisPage: "Prepare this page",
+    failedExplanation: "This page's explanation could not be prepared.",
+    retryThisPage: "Try this page again",
+    writeAfter: "Done reading? Say it back in your own words",
+    saved: (pageNo) => `Saved your take on p.${pageNo} to your notes`,
   },
   agent: {
     addImage: "Add image",
@@ -1834,8 +2022,25 @@ const enUS: AppCopy = {
     assistantMessage: "Assistant message",
     pageSource: (pageNo) => `Page p.${pageNo}`,
     imagePreview: (name) => `Image · ${name}`,
-    selectedFallbackSuggestions: ["Explain the core idea of this page", "Summarize the key points", "Teach this page with an example", "Quiz me on this page"],
-    pageSuggestions: () => ["Explain the core idea of this page", "Summarize the key points", "Teach this page with an example", "Quiz me on this page"],
+    starters: [
+      { label: "I'll explain, you critique", kind: "prefill", text: "My understanding of this page: " },
+      { label: "I'm stuck on…", kind: "prefill", text: "I'm stuck here: " },
+      { label: "Give me a hint", kind: "send", text: "I haven't worked this page out yet. Don't give me the answer; give me a hint that lets me think it through myself." },
+      { label: "Quiz me on one", kind: "quiz", text: "" },
+    ],
+    startersLabel: "Start here",
+    welcomeCoach: "What do you think?",
+    welcomeCoachLede: "Say what you understand or where you are stuck, and I will help you think it through. Ask for the answer whenever you want it.",
+    welcomeDirectLede: "Direct mode: the assistant answers straight away. Switch to Coach to think first.",
+    answerModeToggleLabel: "How to answer",
+    answerModeCoach: "Coach",
+    answerModeCoachHint: "Asks what you think and gives hints; the answer when you ask for it",
+    answerModeDirect: "Direct",
+    answerModeDirectHint: "Gives the answer directly",
+    tellMeDirectly: "Just tell me the answer.",
+    tellMeDirectlyLabel: "Just tell me",
+    tellMeDirectlyHint: "Skip the hints and get the full answer",
+    loading: "Getting ready",
     challengeTitle: "Challenge",
     challengeModeDiagnostic: "Diagnostic",
     challengeAction: "Generate",
@@ -1860,7 +2065,23 @@ const enUS: AppCopy = {
     challengeProblemTasksLabel: "Tasks",
     challengeProblemEntryLabel: "First move",
     challengeProblemHintAction: "Show first hint",
-    challengeProblemSelfCheckAction: "I tried it, show checks",
+    challengeProblemSelfCheckAction: "Show the rubric",
+    challengeProblemPeekRubric: "Skip it, show the rubric",
+    challengeProblemAnswerLabel: "My solution",
+    challengeProblemAnswerPlaceholder: "Write your reasoning and steps, including where you got stuck",
+    challengeProblemSubmit: "Hand in for marking",
+    challengeProblemResubmit: "Hand in again",
+    challengeProblemSubmitPrompt: (stem, answer) => [
+      "Here is my solution to the problem above. Mark it against the rubric you wrote with the problem. Critique only; do not write the full solution for me:",
+      `Problem: ${stem}`,
+      "My solution:",
+      answer,
+      "",
+      "Answer in this order:",
+      "1. Go through the rubric point by point: met, partly met, or not met.",
+      "2. Name the first place where I went wrong or got stuck, and why it is wrong.",
+      "3. Give one hint that moves me a single step, so I can fix it myself; no full solution.",
+    ].join("\n"),
     challengeProblemTrapLabel: "Common traps",
     challengeProblemRubricLabel: "Self-check points",
     challengeProblemAgain: "Another problem",
@@ -1921,7 +2142,7 @@ const enUS: AppCopy = {
     quizNoteNote: (count) => `Questions will target the ${count} note${count === 1 ? "" : "s"} you wrote on this page`,
     contextLearnerNote: (pageNo) => `My note · p.${pageNo}`,
     quickExplainPrompt: (label) => `Please explain this selected content. Prioritize answering from this source: ${label}`,
-    quickSummarizePrompt: (label) => `Please summarize this selected content, extracting key concepts and possible formula relationships: ${label}`,
+    quickHintPrompt: (label) => `I don't understand this selection yet. Don't explain it; give me a hint so I can work out what it says myself. Source: ${label}`,
     continuePrompt: "Please continue based on the context.",
     imageOnlyPrompt: "Look at the image I sent and explain it in the context of this page.",
     localPreviewIntro: "Local preview reply: real answers are sent through the backend `/api/agent/chat` endpoint using OpenAI OAuth.",
@@ -1944,8 +2165,9 @@ const enUS: AppCopy = {
     generationFailed: "Generation failed. Try again.",
     copy: "Copy",
     regenerate: "Regenerate",
-    askWithSelectionPlaceholder: "Ask about the selected content",
+    askWithSelectionPlaceholder: "How do you read this? Or where are you stuck…",
     askPlaceholder: "Ask about the current page or selected content",
+    coachPlaceholder: "Say what you think, or where you are stuck…",
     inputAria: "Assistant input",
     formulaTitle: "Math formula",
     stop: "Stop",
@@ -1955,8 +2177,10 @@ const enUS: AppCopy = {
     removeSelectedContent: "Remove selected content",
     selectionToolbarAria: "Selected content actions",
     addToConversation: "Add to conversation",
-    explainSelection: "Explain selection",
-    summarizeSelection: "Summarize selection",
+    explainSelection: "Explain",
+    explainYourself: "I'll explain",
+    explainYourselfPrefill: "My understanding: ",
+    hintSelection: "Give me a hint",
   },
   oauth: {
     kicker: "OpenAI Codex sign-in",

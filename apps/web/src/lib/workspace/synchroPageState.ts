@@ -1,6 +1,7 @@
 import type { AppCopy } from "../../i18n";
 import {
   defaultUiPreferences,
+  migrateLearningDefaults,
   normalizeAgentAnswerMode,
   normalizeExplanationLanguage,
   normalizeLanguage,
@@ -18,9 +19,11 @@ import { normalizeLessonPlan } from "../generation/lessonPlan";
 import type { DocumentRecord, GeneratedPageRecord, StorageRepairResult } from "../persistence/schema";
 import type { ThreadMessageLike } from "../persistence/workspaceStore";
 
-export type ActiveTab = "notes" | "annotations" | "map" | "structure" | "json";
+/** Tabs of the side column: the explanation, the assistant, the learner's notes, the lesson map, and two debug views. */
+export type ActiveTab = "notes" | "assistant" | "annotations" | "map" | "structure" | "json";
 export type GeneratePageMode = "missing" | "all" | "current" | "custom";
-export type PanelKey = "rail" | "notes" | "agent";
+/** The document rail on the left and the side column (explanation, assistant, notes, map) on the right. */
+export type PanelKey = "rail" | "side";
 export type PanelVisibility = Record<PanelKey, boolean>;
 
 export function createId(prefix: string) {
@@ -104,7 +107,7 @@ export function pagePackFromPersistence(
 }
 
 export function settingsRecordToPreferences(record: Partial<UiPreferences> | null | undefined): UiPreferences {
-  const merged = { ...defaultUiPreferences, ...(record || {}) };
+  const merged = migrateLearningDefaults(record);
   return {
     ...merged,
     language: normalizeLanguage(merged.language),
@@ -152,18 +155,34 @@ export function workspaceLayoutSnapshot(input: {
   };
 }
 
-export function isPanelVisibility(value: unknown): value is PanelVisibility {
-  const record = value as Partial<PanelVisibility> | null;
-  return (
-    Boolean(record) &&
-    typeof record?.rail === "boolean" &&
-    typeof record?.notes === "boolean" &&
-    typeof record?.agent === "boolean"
-  );
+/**
+ * Read a saved layout. Layouts saved before the explanation and the assistant
+ * shared one column have separate `notes` and `agent` flags: the column is open
+ * when either was, and a layout that showed only the assistant opens on it.
+ */
+export function restorePanelVisibility(value: unknown): { panels: PanelVisibility; assistantOnly: boolean } | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.rail !== "boolean") return null;
+  if (typeof record.side === "boolean") return { panels: { rail: record.rail, side: record.side }, assistantOnly: false };
+  if (typeof record.notes === "boolean" && typeof record.agent === "boolean") {
+    return {
+      panels: { rail: record.rail, side: record.notes || record.agent },
+      assistantOnly: record.agent && !record.notes,
+    };
+  }
+  return null;
 }
 
 export function isActiveTab(value: unknown): value is ActiveTab {
-  return value === "notes" || value === "annotations" || value === "map" || value === "structure" || value === "json";
+  return (
+    value === "notes" ||
+    value === "assistant" ||
+    value === "annotations" ||
+    value === "map" ||
+    value === "structure" ||
+    value === "json"
+  );
 }
 
 export function asPersistedRecord(value: unknown): Record<string, unknown> {
@@ -240,6 +259,11 @@ export function normalizePack(raw: unknown, copy: AppCopy): PagePack {
           output_language: normalizeTeachingOutputLanguage(teaching.output_language),
           slide_title: teaching.slide_title || teaching.title || copy.errors.importedPageTitle(index),
           speaker_notes_md: teaching.speaker_notes_md || teaching.notes || "",
+          // Written with the explanation and read back later: the think-first
+          // question, the page's point, and the handoff the next page's request takes.
+          ...(typeof teaching.question === "string" && teaching.question.trim() ? { question: teaching.question.trim() } : {}),
+          ...(typeof teaching.point === "string" && teaching.point.trim() ? { point: teaching.point.trim() } : {}),
+          ...(typeof teaching.handoff === "string" && teaching.handoff.trim() ? { handoff: teaching.handoff.trim() } : {}),
           concepts: Array.isArray(teaching.concepts) ? teaching.concepts : [],
           visual_explanations: Array.isArray(teaching.visual_explanations)
             ? teaching.visual_explanations

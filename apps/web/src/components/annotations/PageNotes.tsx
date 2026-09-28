@@ -10,6 +10,7 @@ import {
 import type { AppCopy } from "../../i18n";
 import { ANNOTATION_COLORS, compactQuote, formatAnnotationTime } from "../../lib/annotations/annotationModel";
 import type { AnnotationColor, AnnotationRecord } from "../../lib/persistence";
+import { ReaderMarkdown } from "../workspace/WorkspaceChrome";
 
 export type PageNotesHandlers = {
   onActivate: (id: string) => void;
@@ -68,6 +69,11 @@ export function PageNotes({
       </button>
     </div>
   );
+}
+
+export function checkNoteHint(annotation: AnnotationRecord, copy: AppCopy) {
+  if (annotation.note.trim()) return copy.annotations.checkUnderstandingHint;
+  return annotation.quote.trim() ? copy.annotations.checkHighlightHint : copy.annotations.checkUnderstandingEmpty;
 }
 
 function NoteCard({
@@ -144,6 +150,11 @@ function NoteCard({
         <blockquote className="page-note-quote" title={annotation.quote}>
           {compactQuote(annotation.quote)}
         </blockquote>
+      ) : annotation.prompt?.trim() ? (
+        <div className="page-note-kicker page-note-prompt">
+          <span>{annotation.afterReading ? copy.annotations.reflectionAfterKicker : copy.annotations.reflectionKicker}</span>
+          <ReaderMarkdown className="page-note-prompt-text" inline text={annotation.prompt} />
+        </div>
       ) : (
         <div className="page-note-kicker">{copy.annotations.pageNoteTitle}</div>
       )}
@@ -152,7 +163,7 @@ function NoteCard({
         className="page-note-input"
         rows={1}
         value={annotation.note}
-        placeholder={copy.annotations.notePlaceholder}
+        placeholder={annotation.quote.trim() ? copy.annotations.highlightNotePlaceholder : copy.annotations.notePlaceholder}
         aria-label={copy.annotations.noteAria}
         spellCheck={false}
         onChange={(event) => handlers.onChangeNote(annotation.id, event.target.value)}
@@ -181,16 +192,11 @@ function NoteCard({
         <button
           type="button"
           className="page-note-ask"
-          disabled={!annotation.note.trim() && !annotation.quote.trim()}
+          // The check critiques what the learner wrote; there is nothing to check before they write.
+          disabled={!annotation.note.trim()}
           onClick={() => handlers.onCheckNote(annotation)}
           aria-label={copy.annotations.checkUnderstanding}
-          title={
-                  annotation.note.trim()
-                    ? copy.annotations.checkUnderstandingHint
-                    : annotation.quote.trim()
-                      ? copy.annotations.checkHighlightHint
-                      : copy.annotations.checkUnderstandingEmpty
-                }
+          title={checkNoteHint(annotation, copy)}
         >
           <Sparkles aria-hidden="true" />
           <span>{copy.annotations.checkUnderstanding}</span>

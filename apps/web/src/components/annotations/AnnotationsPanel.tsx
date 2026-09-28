@@ -7,6 +7,8 @@ import {
   groupAnnotationsByPage,
 } from "../../lib/annotations/annotationModel";
 import type { AnnotationRecord } from "../../lib/persistence";
+import { checkNoteHint } from "./PageNotes";
+import { ReaderMarkdown } from "../workspace/WorkspaceChrome";
 
 /**
  * Document-wide index of highlights and notes (the "笔记" tab in the notes
@@ -39,6 +41,8 @@ export function AnnotationsPanel({
       title: copy.annotations.markdownTitle,
       page: copy.annotations.pageHeading,
       emptyNote: copy.annotations.emptyNote,
+      prompt: copy.annotations.reflectionKicker,
+      promptAfterReading: copy.annotations.reflectionAfterKicker,
     });
     const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -93,6 +97,12 @@ export function AnnotationsPanel({
               >
                 {annotation.quote.trim() ? (
                   <span className="annotations-item-quote">{compactQuote(annotation.quote, 120)}</span>
+                ) : annotation.prompt?.trim() ? (
+                  <span className="annotations-item-kicker annotations-item-prompt">
+                    {annotation.afterReading ? copy.annotations.reflectionAfterKicker : copy.annotations.reflectionKicker}
+                    {" · "}
+                    <ReaderMarkdown className="annotations-item-prompt-text" inline text={compactQuote(annotation.prompt, 120)} />
+                  </span>
                 ) : (
                   <span className="annotations-item-kicker">{copy.annotations.pageNoteTitle}</span>
                 )}
@@ -104,16 +114,10 @@ export function AnnotationsPanel({
               <button
                 type="button"
                 className="page-note-ask annotations-item-ask"
-                disabled={!annotation.note.trim() && !annotation.quote.trim()}
+                disabled={!annotation.note.trim()}
                 onClick={() => onCheckNote(annotation)}
                 aria-label={copy.annotations.checkUnderstanding}
-                title={
-                  annotation.note.trim()
-                    ? copy.annotations.checkUnderstandingHint
-                    : annotation.quote.trim()
-                      ? copy.annotations.checkHighlightHint
-                      : copy.annotations.checkUnderstandingEmpty
-                }
+                title={checkNoteHint(annotation, copy)}
               >
                 <Sparkles aria-hidden="true" />
               </button>

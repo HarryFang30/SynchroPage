@@ -32,7 +32,7 @@ export type AssistantThreadRuntime = {
     setQuote: (quote?: { text: string; messageId: string }) => void;
     setText: (text: string) => void;
     send: () => void;
-    getState: () => { attachments: readonly { id: string }[] };
+    getState: () => { attachments: readonly { id: string }[]; text?: string };
     addAttachment: (attachment: ComposerImageAttachment) => Promise<void>;
     getAttachmentByIndex: (index: number) => { remove: () => Promise<void> };
     unstable_on: (event: "send", callback: () => void) => () => void;
@@ -65,6 +65,8 @@ export type AssistantUiRuntime = {
       content: unknown[];
       attachments?: readonly unknown[];
       metadata?: { custom?: Record<string, unknown> };
+      /** The newest message of the thread. */
+      isLast?: boolean;
       /** The message's own composer: open while the learner edits the message. */
       composer: { isEditing: boolean };
     };
@@ -102,12 +104,23 @@ export function useAppendUserText() {
   const thread = useAssistantUi().useThreadRuntime();
   const takePendingImages = useContext(PendingImagesContext);
   const pendingQuote = useContext(PendingQuoteContext);
-  return useCallback((text: string, quote: MessageQuote | undefined = pendingQuote()) => {
+  /**
+   * `quote: null` sends no quote. `ignoreSelection` marks a message whose
+   * subject is fixed ("just tell me", a hand-in): the selection waiting in the
+   * composer is neither sent with it nor used up by it.
+   */
+  return useCallback((text: string, quote?: MessageQuote | null, options: { ignoreSelection?: boolean } = {}) => {
+    const messageQuote = quote === undefined ? (options.ignoreSelection ? undefined : pendingQuote()) : quote || undefined;
     thread.append({
       role: "user",
       content: [{ type: "text", text }],
-      attachments: takePendingImages(),
-      metadata: { custom: quote ? { quote } : {} },
+      attachments: options.ignoreSelection ? [] : takePendingImages(),
+      metadata: {
+        custom: {
+          ...(messageQuote ? { quote: messageQuote } : {}),
+          ...(options.ignoreSelection ? { ignoreSelection: true } : {}),
+        },
+      },
     });
   }, [pendingQuote, takePendingImages, thread]);
 }

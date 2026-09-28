@@ -24,6 +24,8 @@ export type AnnotationDraft = {
   rects?: AnnotationRect[];
   note?: string;
   color?: AnnotationColor;
+  prompt?: string;
+  afterReading?: boolean;
 };
 
 /**
@@ -114,6 +116,8 @@ export function useDocumentAnnotations(input: {
       quote: draft.quote || "",
       rects: draft.rects || [],
       note: draft.note || "",
+      ...(draft.prompt?.trim() ? { prompt: draft.prompt.trim() } : {}),
+      ...(draft.prompt?.trim() && draft.afterReading ? { afterReading: true } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -129,9 +133,10 @@ export function useDocumentAnnotations(input: {
     return record;
   }, [documentId, persist, preferredColor, workspaceId]);
 
-  const updateNote = useCallback((id: string, note: string) => {
+  /** `patch` carries extra fields that change with the text (a reflection rewritten after reading). */
+  const updateNote = useCallback((id: string, note: string, patch?: Pick<AnnotationRecord, "afterReading">) => {
     setAnnotations((current) =>
-      current.map((item) => (item.id === id ? { ...item, note, updatedAt: Date.now() } : item)),
+      current.map((item) => (item.id === id ? { ...item, ...patch, note, updatedAt: Date.now() } : item)),
     );
     const timers = pendingTimersRef.current;
     const existing = timers.get(id);

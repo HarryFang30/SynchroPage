@@ -280,7 +280,7 @@ test.describe("Assistant conversations", () => {
     const payloads = await mockChat(page);
     await openDocument(page);
     await selectPdfText(page, "Page One");
-    await page.locator(".selection-toolbar").getByRole("button", { name: /解释选中内容|Explain selection/ }).click();
+    await page.locator(".selection-toolbar").getByRole("button", { name: /给我提示|Give me a hint/ }).click();
     await expect(page.locator(".assistant-message").last()).toContainText("Reply to:", { timeout: 10_000 });
 
     const first = page.locator(".user-message").first();

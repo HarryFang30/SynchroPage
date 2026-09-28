@@ -62,6 +62,8 @@ export type PageData = {
     speaker_notes_md: string;
     /** The one claim the student must take away; the explanation opens with it. */
     point?: string;
+    /** Asked before the explanation opens; the learner answers it from the slide alone. */
+    question?: string;
     /** One sentence on what the student holds after this page; the next page's request receives it. */
     handoff?: string;
     concepts: string[];

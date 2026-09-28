@@ -34,10 +34,12 @@ import {
   useDeferredAssistantRuntime,
 } from "../../lib/contexts";
 import { type PdfDirectFileInput } from "../../lib/pdf/directFile";
+import { type AgentAnswerMode } from "../../settings";
+import { composerTextWithPrefill } from "../../lib/assistant/composerText";
 import { type PageData, type PagePack } from "../../lib/generation/teachingGeneration";
 import { type SelectedContext } from "../../hooks/usePageSelection";
 import { type OAuthMode } from "../../hooks/useOAuthFlow";
-import { createId, compactText } from "../../lib/workspace/synchroPageState";
+import { createId } from "../../lib/workspace/synchroPageState";
 import { type ThreadMessageLike } from "../../lib/persistence/workspaceStore";
 import { AssistantThread } from "./AssistantThread";
 import { ConversationHistory, conversationTitle, type ConversationActions } from "./ConversationHistory";
@@ -50,13 +52,6 @@ function composerContextPreview(contexts: AgentContextItem[], copy: AppCopy) {
     return `${contextSourceLabel(first, copy)}${extra}`;
   }
   return "";
-}
-
-function pageSuggestions(page: PageData, pageAware: boolean, copy: AppCopy) {
-  if (!pageAware) {
-    return copy.agent.selectedFallbackSuggestions;
-  }
-  return copy.agent.pageSuggestions(compactText(page.teaching.slide_title, 42), page.teaching.concepts[0] || "this page");
 }
 
 async function readFileAsDataUrl(file: File, copy: AppCopy) {
@@ -104,6 +99,12 @@ export type AgentPanelProps = {
   /** `written` is true when the conversation on screen has messages (persisted state may lag behind). */
   onNewConversation: (written: boolean) => void;
   onJumpToPage: (pageNo: number) => void;
+  /** Coach (lead the learner to the answer) or one of the modes that give it. */
+  answerMode: AgentAnswerMode;
+  onAnswerModeChange: (mode: AgentAnswerMode) => void;
+  /** Text to put in the composer for the learner to finish (not sent). */
+  composerPrefill: ComposerPrefill | null;
+  clearComposerPrefill: (id: string) => void;
 } & ConversationActions;
 
 export type QuickSelectionPrompt = {
@@ -111,6 +112,76 @@ export type QuickSelectionPrompt = {
   prompt: string;
   context: SelectedContext;
 };
+
+export type ComposerPrefill = {
+  id: string;
+  text: string;
+};
+
+// ── ComposerPrefillRunner ────────────────────────────────────
+
+
+/**
+ * Starts a message for the learner to finish ("我的理解是："): the composer
+ * gets the text and the focus, nothing is sent.
+ */
+function ComposerPrefillRunner(props: {
+  prefill: ComposerPrefill | null;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  onConsumed: (id: string) => void;
+}) {
+  const thread = useAssistantUi().useThreadRuntime();
+  const onConsumedRef = useRef(props.onConsumed);
+  onConsumedRef.current = props.onConsumed;
+  useEffect(() => {
+    const prefill = props.prefill;
+    if (!prefill) return undefined;
+    const timer = window.setTimeout(() => {
+      thread.composer.setText(composerTextWithPrefill(thread.composer.getState().text, prefill.text));
+      onConsumedRef.current(prefill.id);
+      window.setTimeout(() => {
+        const input = props.inputRef.current;
+        if (!input) return;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }, 20);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [props.inputRef, props.prefill, thread]);
+  return null;
+}
+
+/** Coach leads to the answer; "direct" returns to the answer-giving mode last chosen (App maps it). */
+function AnswerModeToggle({ mode, onChange }: { mode: AgentAnswerMode; onChange: (mode: AgentAnswerMode) => void }) {
+  const copy = useAppCopy();
+  const coaching = mode === "coach";
+  return (
+    <div className="answer-mode-toggle" role="radiogroup" aria-label={copy.agent.answerModeToggleLabel}>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={coaching}
+        className={coaching ? "active" : ""}
+        title={copy.agent.answerModeCoachHint}
+        onClick={() => onChange("coach")}
+      >
+        {copy.agent.answerModeCoach}
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={!coaching}
+        className={coaching ? "" : "active"}
+        title={copy.agent.answerModeDirectHint}
+        onClick={() => {
+          if (coaching) onChange("concise");
+        }}
+      >
+        {copy.agent.answerModeDirect}
+      </button>
+    </div>
+  );
+}
 
 // ── QuickSelectionPromptRunner ───────────────────────────────
 
@@ -170,7 +241,7 @@ function QuickSelectionPromptRunner(props: {
 
 export function AgentPanel(props: AgentPanelProps) {
   const copy = useAppCopy();
-  const { assistantUi, requestAssistantUi } = useDeferredAssistantRuntime(Boolean(props.pendingSelectionPrompt));
+  const { assistantUi, requestAssistantUi } = useDeferredAssistantRuntime(Boolean(props.pendingSelectionPrompt || props.composerPrefill));
   if (!assistantUi) {
     return (
       <aside
@@ -184,7 +255,7 @@ export function AgentPanel(props: AgentPanelProps) {
             <span>{copy.common.assistant}</span>
           </div>
           <div className="toolbar-actions">
-            <span className="agent-model">{copy.agent.thinking}</span>
+            <span className="agent-model">{copy.agent.loading}</span>
           </div>
         </div>
       </aside>
@@ -231,7 +302,6 @@ function AgentPanelLoaded(props: AgentPanelProps) {
   const runtime = assistantUi.useLocalRuntime(adapter, { initialMessages: props.initialMessages });
   const { AssistantRuntimeProvider } = assistantUi;
   const page = props.getPage();
-  const suggestions = pageSuggestions(page, props.pageAwareSuggestions, copy);
   const contextPreview = composerContextPreview(props.contexts, copy);
 
   // Read at send time, so a message sent right after an image was added still takes it.
@@ -310,7 +380,7 @@ function AgentPanelLoaded(props: AgentPanelProps) {
           <ChevronDown aria-hidden="true" />
         </button>
         <div className="toolbar-actions">
-          <span className="agent-model">{props.oauthMode === "connected" ? "OAuth" : props.backendOffline ? "Local" : "OAuth"}</span>
+          <AnswerModeToggle mode={props.answerMode} onChange={props.onAnswerModeChange} />
           <button
             className="agent-action-button icon-only"
             type="button"
@@ -378,9 +448,14 @@ function AgentPanelLoaded(props: AgentPanelProps) {
             prompt={props.pendingSelectionPrompt}
             onConsumed={props.clearPendingSelectionPrompt}
           />
+          <ComposerPrefillRunner
+            prefill={props.composerPrefill}
+            inputRef={props.composerInputRef}
+            onConsumed={props.clearComposerPrefill}
+          />
           <AssistantThread
             page={page}
-            suggestions={suggestions}
+            answerMode={props.answerMode}
             contextPreview={contextPreview}
             attachments={props.attachments}
             selectedContext={props.selectedContext}

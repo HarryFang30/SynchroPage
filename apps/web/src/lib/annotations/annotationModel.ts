@@ -139,7 +139,15 @@ export function compactQuote(quote: string, max = 180) {
 export function annotationsToMarkdown(
   documentTitle: string,
   list: AnnotationRecord[],
-  labels: { title: (documentTitle: string) => string; page: (pageNo: number) => string; emptyNote: string },
+  labels: {
+    title: (documentTitle: string) => string;
+    page: (pageNo: number) => string;
+    emptyNote: string;
+    /** Prefix for the think-first question a reflection answers. */
+    prompt?: string;
+    /** Prefix when the reflection was written after reading the explanation. */
+    promptAfterReading?: string;
+  },
 ) {
   const lines: string[] = [`# ${labels.title(documentTitle)}`, ""];
   for (const [pageNo, items] of groupAnnotationsByPage(list)) {
@@ -150,6 +158,10 @@ export function annotationsToMarkdown(
           lines.push(`> ${quoteLine}`);
         }
         lines.push("");
+      }
+      if (item.prompt?.trim()) {
+        const label = item.afterReading ? labels.promptAfterReading || labels.prompt : labels.prompt;
+        lines.push(`**${label ? `${label} ` : ""}${item.prompt.trim()}**`, "");
       }
       lines.push(item.note.trim() || labels.emptyNote, "");
     }

@@ -11,7 +11,8 @@ import {
   Maximize2,
   Minimize2,
   MoreHorizontal,
-  NotebookText,
+  MessageCircle,
+  NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -22,13 +23,14 @@ import {
   Square,
   Trash2,
   Upload,
-  Zap,
 } from "lucide-react";
 import {
   lazy,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -47,6 +49,7 @@ import { PageHighlightLayer } from "./components/annotations/PageHighlightLayer"
 import { PageNotes, type PageNotesHandlers } from "./components/annotations/PageNotes";
 import {
   AgentPanel,
+  type ComposerPrefill,
   type QuickSelectionPrompt,
 } from "./components/agent/AgentPanel";
 import { selectedContextSourceLabel } from "./components/agent/agentLabels";
@@ -60,6 +63,14 @@ import {
   SlidePreview,
   StructurePanel,
 } from "./components/workspace/WorkspaceChrome";
+import { ExplanationMissing, ThinkFirstPrompt, ThinkFirstRecap, ThinkFirstVeil } from "./components/workspace/ThinkFirst";
+import {
+  loadRevealedPages,
+  pageReflection,
+  pageThinkFirstQuestion,
+  rememberRevealedPage,
+  thinkFirstApplies,
+} from "./lib/learning/thinkFirst";
 import { LessonMapPanel } from "./components/workspace/LessonMapPanel";
 import { useOAuthFlow } from "./hooks/useOAuthFlow";
 import { useGenerationEngine } from "./hooks/useGenerationEngine";
@@ -160,7 +171,7 @@ import {
   createId,
   isActiveTab,
   type ActiveTab,
-  isPanelVisibility,
+  restorePanelVisibility,
   normalizePack,
   pagePackFromPersistence,
   settingsRecordToPreferences,
@@ -214,15 +225,10 @@ function desktopApi() {
 
 const fullPanelVisibility: PanelVisibility = {
   rail: true,
-  notes: true,
-  agent: true,
+  side: true,
 };
 
-const defaultPanelVisibility: PanelVisibility = {
-  rail: true,
-  notes: true,
-  agent: false,
-};
+const defaultPanelVisibility: PanelVisibility = fullPanelVisibility;
 
 const samplePack: PagePack = {
   schema: "synchropage.lecture.v1",
@@ -376,6 +382,23 @@ const samplePacks: Record<UiPreferences["language"], PagePack> = {
 // contextSourceLabel, selectedContextSourceLabel, composerContextPreview,
 // pageSuggestions, readFileAsDataUrl moved to ./components/agent/AgentPanel.tsx
 
+function sideTabLabel(tab: ActiveTab, copy: AppCopy, short: boolean) {
+  switch (tab) {
+    case "notes":
+      return short ? copy.notes.tabNotesShort : copy.notes.tabNotes;
+    case "assistant":
+      return short ? copy.notes.tabAssistantShort : copy.notes.tabAssistant;
+    case "annotations":
+      return short ? copy.notes.tabAnnotationsShort : copy.notes.tabAnnotations;
+    case "map":
+      return short ? copy.notes.tabMapShort : copy.notes.tabMap;
+    case "structure":
+      return short ? copy.notes.tabStructureShort : copy.notes.tabStructure;
+    default:
+      return short ? copy.notes.tabJsonShort : copy.notes.tabJson;
+  }
+}
+
 function generationStatusLabel(status: GenerationPageStatus, copy: AppCopy) {
   if (status === "done") return copy.topbar.generationStatusDone;
   if (status === "running") return copy.topbar.generationStatusRunning;
@@ -395,16 +418,35 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("notes");
   // Structure and JSON are inspection views; they only exist while Debug mode is on.
   const notesTabs: ActiveTab[] = uiPreferences.debugMode
-    ? ["notes", "annotations", "map", "structure", "json"]
-    : ["notes", "annotations", "map"];
+    ? ["notes", "assistant", "annotations", "map", "structure", "json"]
+    : ["notes", "assistant", "annotations", "map"];
   useEffect(() => {
     if (!uiPreferences.debugMode && (activeTab === "structure" || activeTab === "json")) setActiveTab("notes");
   }, [activeTab, uiPreferences.debugMode]);
-  // Each tab is its own reading surface: coming back from a long lesson map
+  // The assistant sits over the tab the learner was reading, which stays
+  // mounted (hidden) with its scroll position, so a question asked halfway
+  // down an explanation comes back to the same place.
+  const [lastReadingTab, setLastReadingTab] = useState<ActiveTab>("notes");
+  useEffect(() => {
+    if (activeTab !== "assistant") setLastReadingTab(activeTab);
+  }, [activeTab]);
+  const readingTab: ActiveTab = activeTab === "assistant" ? lastReadingTab : activeTab;
+  // Each reading tab is its own surface: coming back from a long lesson map
   // must not land the reader halfway down the notes.
   const notesContentRef = useRef<HTMLDivElement | null>(null);
+  const notesScrollTopRef = useRef(0);
   useEffect(() => {
+    notesScrollTopRef.current = 0;
     notesContentRef.current?.scrollTo({ top: 0 });
+  }, [readingTab]);
+  // Hiding the reading tab behind the assistant can drop its scroll offset; put it back on return.
+  const previousActiveTabRef = useRef(activeTab);
+  useLayoutEffect(() => {
+    const cameFromAssistant = previousActiveTabRef.current === "assistant";
+    previousActiveTabRef.current = activeTab;
+    if (!cameFromAssistant || activeTab === "assistant") return;
+    const element = notesContentRef.current;
+    if (element) element.scrollTop = notesScrollTopRef.current;
   }, [activeTab]);
   const [panels, setPanels] = useState<PanelVisibility>(defaultPanelVisibility);
   const [query, setQuery] = useState("");
@@ -436,6 +478,7 @@ export default function App() {
   const [isGeneratingNotes, setIsGeneratingNotes] = useState(false);
   const [generationDetailsOpen, setGenerationDetailsOpen] = useState(false);
   const [pendingSelectionPrompt, setPendingSelectionPrompt] = useState<QuickSelectionPrompt | null>(null);
+  const [composerPrefill, setComposerPrefill] = useState<ComposerPrefill | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [courseProjects, setCourseProjects] = useState<CourseProjectRecord[]>([]);
@@ -464,6 +507,8 @@ export default function App() {
   // component, and routing the page number through deps would recreate the
   // chat adapter on every scroll tick.
   const annotationsRef = useRef<AnnotationRecord[]>([]);
+  // Whether the learner has opened the current page's explanation, read when a question is sent.
+  const explanationReadRef = useRef(true);
   const currentPageNoRef = useRef(1);
   const currentPdfObjectUrlRef = useRef("");
   const generationAbortControllerRef = useRef<AbortController | null>(null);
@@ -561,8 +606,17 @@ export default function App() {
         : generatePageMode === "all"
           ? copy.topbar.generateScopeAll
           : copy.topbar.generateScopeMissing;
-  const pdfOnly = !panels.rail && !panels.notes && !panels.agent;
-  const fullWorkbench = panels.rail && panels.notes && panels.agent;
+  const pdfOnly = !panels.rail && !panels.side;
+  const fullWorkbench = panels.rail && panels.side;
+  const assistantVisible = panels.side && activeTab === "assistant";
+  // The assistant mounts the first time its tab is opened and then stays
+  // mounted behind the other tabs, so an answer keeps streaming while the
+  // learner reads; closing the side column unmounts it.
+  const [assistantMounted, setAssistantMounted] = useState(false);
+  useEffect(() => {
+    if (!panels.side) setAssistantMounted(false);
+    else if (activeTab === "assistant") setAssistantMounted(true);
+  }, [activeTab, panels.side]);
   const sidebarDocuments: DocumentSidebarItem[] = documentItems.length
     ? documentItems
     : [
@@ -616,7 +670,7 @@ export default function App() {
     .sort((left, right) => (right.lastOpenedAt || right.updatedAt) - (left.lastOpenedAt || left.updatedAt))
     .filter((item) => item.documentId !== documentId)
     .slice(0, 4);
-  const visiblePaneCount = 1 + Number(panels.rail) + Number(panels.notes) + Number(panels.agent);
+  const visiblePaneCount = 1 + Number(panels.rail) + Number(panels.side);
   const pdfViewerSrc = pdfUrl
     ? `${pdfUrl}#page=${currentPdfPageNo}&toolbar=0&navpanes=0&scrollbar=0&view=FitH`
     : "";
@@ -635,6 +689,20 @@ export default function App() {
     setPanels((current) => ({ ...current, [key]: !current[key] }));
   }, []);
 
+  /** Bring the side column up on the assistant tab. */
+  const openAssistant = useCallback(() => {
+    setPanels((current) => (current.side ? current : { ...current, side: true }));
+    setActiveTab("assistant");
+  }, []);
+
+  const toggleAssistant = useCallback(() => {
+    if (panels.side && activeTab === "assistant") {
+      setPanels((current) => ({ ...current, side: false }));
+      return;
+    }
+    openAssistant();
+  }, [activeTab, openAssistant, panels.side]);
+
   const exitPdfFullscreen = useCallback(async () => {
     fullscreenIntentRef.current = false;
     if (document.fullscreenElement) {
@@ -645,7 +713,7 @@ export default function App() {
 
   const enterPdfFullscreen = useCallback(async () => {
     panelsBeforePdfFocusRef.current = panels;
-    setPanels({ rail: false, notes: false, agent: false });
+    setPanels({ rail: false, side: false });
     fullscreenIntentRef.current = true;
 
     const target = appShellRef.current;
@@ -681,7 +749,12 @@ export default function App() {
   }, []);
 
   const updatePreference = useCallback(<K extends keyof UiPreferences>(key: K, value: UiPreferences[K]) => {
-    setUiPreferences((current) => ({ ...current, [key]: value }));
+    setUiPreferences((current) => {
+      const next = { ...current, [key]: value };
+      // Choosing an answer-giving mode anywhere is what the 直答 switch goes back to.
+      if (key === "agentAnswerMode" && value !== "coach") next.directAnswerMode = value as UiPreferences["directAnswerMode"];
+      return next;
+    });
   }, []);
 
   const resetPreferences = useCallback(() => {
@@ -771,6 +844,7 @@ export default function App() {
       answerMode: uiPreferences.agentAnswerMode,
       reasoningEffort: agentAnswerModeReasoningEffort(uiPreferences.agentAnswerMode),
       assistantModel: modelApiConfig.defaults.assistant,
+      explanationRead: explanationReadRef.current,
     }),
     [contexts, modelApiConfig.defaults.assistant, pack, pdfTextContext, pdfUrl, selectedContext, uiPreferences],
   );
@@ -792,23 +866,23 @@ export default function App() {
       return;
     }
     setSelectedContext(context);
-    setPanels((current) => ({ ...current, agent: true }));
+    openAssistant();
     clearSelection();
     focusComposer();
     setJobStatus(copy.status.selectionAdded);
-  }, [clearSelection, copy.status.noSelection, copy.status.selectionAdded, focusComposer, selectionToolbar?.context]);
+  }, [clearSelection, copy.status.noSelection, copy.status.selectionAdded, focusComposer, openAssistant, selectionToolbar?.context]);
 
-  const sendSelectionPrompt = useCallback((context: SelectedContext, intent: "explain" | "summarize") => {
+  const sendSelectionPrompt = useCallback((context: SelectedContext, intent: "explain" | "hint") => {
     const label = selectedContextSourceLabel(context, copy);
     const prompt = intent === "explain"
       ? copy.agent.quickExplainPrompt(label)
-      : copy.agent.quickSummarizePrompt(label);
+      : copy.agent.quickHintPrompt(label);
     setSelectedContext(context);
-    setPanels((current) => ({ ...current, agent: true }));
+    openAssistant();
     setPendingSelectionPrompt({ id: createId("quick_prompt"), prompt, context });
     clearSelection();
-    setJobStatus(intent === "explain" ? copy.status.explainingSelection : copy.status.summarizingSelection);
-  }, [clearSelection, copy]);
+    setJobStatus(intent === "explain" ? copy.status.explainingSelection : copy.status.hintingSelection);
+  }, [clearSelection, copy, openAssistant]);
 
   const refreshStorageEstimate = useCallback(async () => {
     const estimate = await estimateStorage();
@@ -1045,8 +1119,10 @@ export default function App() {
         contexts?: unknown;
         attachments?: unknown;
       };
-      if (isPanelVisibility(layout.panels)) setPanels(layout.panels);
+      const restoredPanels = restorePanelVisibility(layout.panels);
+      if (restoredPanels) setPanels(restoredPanels.panels);
       if (isActiveTab(layout.activeTab)) setActiveTab(layout.activeTab);
+      if (restoredPanels?.assistantOnly) setActiveTab("assistant");
       if (typeof layout.query === "string") setQuery(layout.query);
       if (typeof layout.activeProjectId === "string") setActiveProjectId(layout.activeProjectId);
       if (Array.isArray(layout.contexts)) setContexts(layout.contexts as AgentContextItem[]);
@@ -1989,8 +2065,11 @@ export default function App() {
   // the assistant runtime mounted) must not fire later when the panel is
   // reopened for something else.
   useEffect(() => {
-    if (!panels.agent) setPendingSelectionPrompt(null);
-  }, [panels.agent]);
+    if (!panels.side) {
+      setPendingSelectionPrompt(null);
+      setComposerPrefill(null);
+    }
+  }, [panels.side]);
 
   const askAboutAnnotation = useCallback((annotation: AnnotationRecord) => {
     const pdfPage = pdfTextContext?.pages.find((item) => item.page_no === annotation.pageNumber) || null;
@@ -2009,20 +2088,127 @@ export default function App() {
       createdAt: Date.now(),
     };
     setSelectedContext(context);
-    setPanels((current) => ({ ...current, agent: true }));
+    openAssistant();
     setPendingSelectionPrompt({
       id: createId("quick_prompt"),
       prompt: buildNoteCheckPrompt({
         pageNumber: annotation.pageNumber,
         quote: annotation.quote,
         note: annotation.note,
+        prompt: annotation.prompt,
+        afterReading: annotation.afterReading,
         language: uiPreferences.language,
       }),
       context,
     });
     setActiveAnnotationId(annotation.id);
     setJobStatus(copy.status.checkingNote(annotation.pageNumber));
-  }, [copy, pack.document.title, pdfTextContext, setActiveAnnotationId, uiPreferences.language]);
+  }, [copy, openAssistant, pack.document.title, pdfTextContext, setActiveAnnotationId, uiPreferences.language]);
+
+  // Think first, then compare. A page's explanation opens once the learner has
+  // written their own take on its question, or chose to see it straight away.
+  // The revealed set is derived from the document id, so a document switch
+  // never shows the previous document's pages as open for a frame.
+  const [revealVersion, setRevealVersion] = useState(0);
+  const revealedPages = useMemo(
+    () => (revealVersion >= 0 ? loadRevealedPages(pack.document.id) : new Set<number>()),
+    [pack.document.id, revealVersion],
+  );
+  const [editingReflection, setEditingReflection] = useState<{ documentId: string; pageNo: number } | null>(null);
+
+  const revealExplanation = useCallback((pageNo: number) => {
+    rememberRevealedPage(pack.document.id, pageNo);
+    setRevealVersion((version) => version + 1);
+  }, [pack.document.id]);
+
+  /** Saves the learner's answer as the page's reflection note; false when nothing could be kept. */
+  const saveReflection = useCallback(async (pageNo: number, question: string, text: string, afterReading: boolean) => {
+    const existing = pageReflection(annotationsRef.current, pageNo, documentId);
+    if (existing) {
+      updateAnnotationNote(existing.id, text, afterReading ? { afterReading: true } : undefined);
+    } else {
+      if (!documentId) {
+        setJobStatus(copy.annotations.requiresDocument);
+        return false;
+      }
+      const record = await addAnnotation({ pageNumber: pageNo, kind: "note", note: text, prompt: question, color: "blue", afterReading });
+      // A failed write has already reported itself; keep the text in the box.
+      if (!record) return false;
+    }
+    setEditingReflection(null);
+    revealExplanation(pageNo);
+    setJobStatus(copy.thinkFirst.saved(pageNo));
+    return true;
+  }, [addAnnotation, copy.annotations.requiresDocument, copy.thinkFirst, documentId, revealExplanation, updateAnnotationNote]);
+
+  const pagePlanInfo = lessonPlanNoteInfo(pack.document.lesson_plan, page.page_no);
+  // Same test as the generation engine: a stopped run leaves pages as drafts that keep their notes.
+  const pageFailed = page.status === "failed";
+  const pageHasExplanation = !pageFailed && Boolean(page.teaching.speaker_notes_md.trim());
+  const pageReflectionNote = pageReflection(annotations, page.page_no, documentId);
+  const pageStatus = generationStatusByPage.get(page.page_no);
+  const pageIsGenerating = isGeneratingNotes && (pageStatus === "running" || pageStatus === "retrying");
+  const thinkFirstOn = thinkFirstApplies({
+    enabled: uiPreferences.thinkFirst,
+    hasDocument: Boolean(documentId),
+    plan: pagePlanInfo,
+    page,
+  });
+  const pageOwnQuestion = pageThinkFirstQuestion(page);
+  const thinkFirstQuestion =
+    pageReflectionNote?.prompt?.trim() || pageOwnQuestion || copy.thinkFirst.genericQuestion(pagePlanInfo?.role);
+  const reflectionWritten = Boolean(pageReflectionNote?.note.trim());
+  const explanationRevealed = !thinkFirstOn || revealedPages.has(page.page_no) || reflectionWritten;
+  const isEditingReflection =
+    editingReflection?.documentId === pack.document.id && editingReflection.pageNo === page.page_no;
+  explanationReadRef.current = explanationRevealed || !pageHasExplanation;
+  const draftKey = `${pack.document.id}:${page.page_no}`;
+  let explanationLead: ReactNode = null;
+  if (thinkFirstOn && (!explanationRevealed || isEditingReflection)) {
+    explanationLead = (
+      <ThinkFirstPrompt
+        key={`${draftKey}:${isEditingReflection ? "edit" : "new"}`}
+        draftKey={draftKey}
+        question={thinkFirstQuestion}
+        generic={!pageReflectionNote?.prompt && !pageOwnQuestion}
+        hasExplanation={pageHasExplanation}
+        initialText={isEditingReflection ? pageReflectionNote?.note : undefined}
+        editing={isEditingReflection}
+        copy={copy}
+        // Written while the explanation is open, it is a say-back rather than a prediction.
+        onSubmit={(text) => saveReflection(page.page_no, thinkFirstQuestion, text, explanationRevealed && pageHasExplanation)}
+        onReveal={() => revealExplanation(page.page_no)}
+        onCancelEdit={() => setEditingReflection(null)}
+      />
+    );
+  } else if (thinkFirstOn && pageReflectionNote && reflectionWritten) {
+    explanationLead = (
+      <ThinkFirstRecap
+        reflection={pageReflectionNote}
+        copy={copy}
+        onEdit={() => setEditingReflection({ documentId: pack.document.id, pageNo: page.page_no })}
+        onCheck={() => askAboutAnnotation(pageReflectionNote)}
+      />
+    );
+  }
+  const explanationAfter = pageFailed ? (
+    <ExplanationMissing copy={copy} failed generating={pageIsGenerating} onGenerate={() => handleGenerateNotes("current")} />
+  ) : thinkFirstOn && explanationRevealed && pageHasExplanation && !reflectionWritten && !isEditingReflection ? (
+    <button
+      type="button"
+      className="think-first-after"
+      onClick={() => setEditingReflection({ documentId: pack.document.id, pageNo: page.page_no })}
+    >
+      {copy.thinkFirst.writeAfter}
+    </button>
+  ) : null;
+  // A failed page shows its failure reason in place of an explanation, as before.
+  const explanationBodyHidden = pageFailed ? false : !pageHasExplanation || !explanationRevealed;
+  const explanationHiddenBody = !pageHasExplanation ? (
+    <ExplanationMissing copy={copy} generating={pageIsGenerating} onGenerate={() => handleGenerateNotes("current")} />
+  ) : (
+    <ThinkFirstVeil copy={copy} onReveal={() => revealExplanation(page.page_no)} />
+  );
 
   const createAnnotationFromSelection = useCallback(async (context: SelectedContext, withNote: boolean) => {
     if (!documentId) {
@@ -2231,11 +2417,11 @@ export default function App() {
             <IconButton label={panels.rail ? copy.topbar.hideRail : copy.topbar.showRail} active={panels.rail} onClick={() => togglePanel("rail")}>
               {panels.rail ? <PanelLeftClose /> : <PanelLeftOpen />}
             </IconButton>
-            <IconButton label={panels.notes ? copy.topbar.hideNotes : copy.topbar.showNotes} active={panels.notes} onClick={() => togglePanel("notes")}>
-              <NotebookText />
+            <IconButton label={assistantVisible ? copy.topbar.hideAgent : copy.topbar.showAgent} active={assistantVisible} onClick={toggleAssistant}>
+              <MessageCircle />
             </IconButton>
-            <IconButton label={panels.agent ? copy.topbar.hideAgent : copy.topbar.showAgent} active={panels.agent} onClick={() => togglePanel("agent")}>
-              {panels.agent ? <PanelRightClose /> : <PanelRightOpen />}
+            <IconButton label={panels.side ? copy.topbar.hideNotes : copy.topbar.showNotes} active={panels.side} onClick={() => togglePanel("side")}>
+              {panels.side ? <PanelRightClose /> : <PanelRightOpen />}
             </IconButton>
             <IconButton label={pdfOnly ? copy.topbar.exitPdfFocus : copy.topbar.pdfOnly} active={pdfOnly || isBrowserFullscreen} onClick={togglePdfOnly}>
               {isBrowserFullscreen ? <Minimize2 /> : <Maximize2 />}
@@ -2324,7 +2510,7 @@ export default function App() {
               }}
               title={isGeneratingNotes ? copy.topbar.stopGeneration : generateScopeSummary}
             >
-              {isGeneratingNotes ? <Square /> : <Zap />}
+              {isGeneratingNotes ? <Square /> : <NotebookPen />}
               {isGeneratingNotes ? copy.topbar.stopGeneration : copy.topbar.generate}
             </button>
             <button
@@ -2466,8 +2652,12 @@ export default function App() {
       <SelectionToolbar
         state={selectionToolbar}
         onAdd={(context) => captureSelection(context)}
-        onExplain={(context) => sendSelectionPrompt(context, "explain")}
-        onSummarize={(context) => sendSelectionPrompt(context, "summarize")}
+        onExplainYourself={(context) => {
+          captureSelection(context);
+          setComposerPrefill({ id: createId("prefill"), text: copy.agent.explainYourselfPrefill });
+        }}
+        onAsk={(context) => sendSelectionPrompt(context, uiPreferences.agentAnswerMode === "coach" ? "hint" : "explain")}
+        coaching={uiPreferences.agentAnswerMode === "coach"}
         onHighlight={documentId ? (context) => { void createAnnotationFromSelection(context, false); } : undefined}
         onNote={documentId ? (context) => { void createAnnotationFromSelection(context, true); } : undefined}
       />
@@ -2535,7 +2725,8 @@ export default function App() {
 
       <main className="workspace" data-pane-count={visiblePaneCount}>
         <PanelGroup orientation="horizontal" className="workspace-panels">
-          <Panel className="workspace-panel" hidden={!panels.rail} defaultSize={20} minSize={16}>
+          {/* react-resizable-panels v4 reads bare numbers as pixels: sizes carry units. */}
+          <Panel className="workspace-panel" hidden={!panels.rail} defaultSize="17%" minSize="200px">
             <aside className="page-rail document-rail">
               <div className="rail-top">
                 <div className="rail-header">
@@ -2752,7 +2943,7 @@ export default function App() {
 
           {panels.rail && <WorkspaceResizeHandle />}
 
-          <Panel className="workspace-panel" defaultSize={pdfOnly ? 100 : panels.notes && panels.agent ? 32 : 52} minSize={30}>
+          <Panel className="workspace-panel" defaultSize={pdfOnly ? "100%" : panels.side ? "46%" : "83%"} minSize="30%">
             <section className="pdf-pane">
               <PaneToolbar
                 title={pdfUrl ? copy.common.sourcePdfPage(currentPdfPageNo) : copy.pdf.samplePdfPage}
@@ -2802,13 +2993,54 @@ export default function App() {
             </section>
           </Panel>
 
-          {(panels.notes || panels.agent) && <WorkspaceResizeHandle />}
+          {panels.side && <WorkspaceResizeHandle />}
 
-          <Panel className="workspace-panel" hidden={!panels.notes} defaultSize={panels.agent ? 18 : 42} minSize={18}>
-            <section className="notes-pane">
-              <PaneToolbar
-                title={copy.notes.title}
-                right={
+          <Panel className="workspace-panel" hidden={!panels.side} defaultSize="37%" minSize="340px">
+            <section className={`notes-pane side-pane side-pane-${activeTab}`}>
+              <div className="pane-toolbar side-pane-toolbar">
+                <div
+                  className="tab-group side-tabs"
+                  role="tablist"
+                  aria-label={copy.notes.sideTabsLabel}
+                  onKeyDown={(event) => {
+                    const index = notesTabs.indexOf(activeTab);
+                    const next =
+                      event.key === "ArrowRight" ? notesTabs[(index + 1) % notesTabs.length]
+                        : event.key === "ArrowLeft" ? notesTabs[(index - 1 + notesTabs.length) % notesTabs.length]
+                          : event.key === "Home" ? notesTabs[0]
+                            : event.key === "End" ? notesTabs[notesTabs.length - 1]
+                              : null;
+                    if (!next) return;
+                    event.preventDefault();
+                    setActiveTab(next);
+                    window.requestAnimationFrame(() => document.getElementById(`side-tab-${next}`)?.focus());
+                  }}
+                >
+                  {notesTabs.map((tab) => {
+                    const fullLabel = sideTabLabel(tab, copy, false);
+                    const shortLabel = sideTabLabel(tab, copy, true);
+                    return (
+                      <button
+                        key={tab}
+                        id={`side-tab-${tab}`}
+                        type="button"
+                        role="tab"
+                        className={`tab-button ${activeTab === tab ? "active" : ""}`}
+                        // The full label is display:none in a narrow pane; keep the name stable.
+                        aria-label={fullLabel}
+                        aria-selected={activeTab === tab}
+                        aria-controls={tab === "assistant" ? "side-panel-assistant" : "side-panel-reading"}
+                        tabIndex={activeTab === tab ? 0 : -1}
+                        title={fullLabel}
+                        onClick={() => setActiveTab(tab)}
+                      >
+                        <span className="tab-label-full">{fullLabel}</span>
+                        <span className="tab-label-short" aria-hidden="true">{shortLabel}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {activeTab !== "assistant" && (
                   <div className="notes-toolbar-right">
                     <div className="generation-details-control">
                       <button
@@ -2834,42 +3066,35 @@ export default function App() {
                         />
                       )}
                     </div>
-                    <div className="tab-group">
-                      {notesTabs.map((tab) => {
-                        const fullLabel = tab === "notes" ? copy.notes.tabNotes : tab === "annotations" ? copy.notes.tabAnnotations : tab === "map" ? copy.notes.tabMap : tab === "structure" ? copy.notes.tabStructure : copy.notes.tabJson;
-                        const shortLabel = tab === "notes" ? copy.notes.tabNotesShort : tab === "annotations" ? copy.notes.tabAnnotationsShort : tab === "map" ? copy.notes.tabMapShort : tab === "structure" ? copy.notes.tabStructureShort : copy.notes.tabJsonShort;
-                        return (
-                          <button
-                            key={tab}
-                            type="button"
-                            className={`tab-button ${activeTab === tab ? "active" : ""}`}
-                            // The full label is display:none in a narrow pane; keep the name stable.
-                            aria-label={fullLabel}
-                            aria-pressed={activeTab === tab}
-                            title={fullLabel}
-                            onClick={() => setActiveTab(tab)}
-                          >
-                            <span className="tab-label-full">{fullLabel}</span>
-                            <span className="tab-label-short" aria-hidden="true">{shortLabel}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
                   </div>
-                }
-              />
-              <div className="notes-content" ref={notesContentRef}>
-                {activeTab === "notes" && <MarkdownBlock
-                    markdown={page.teaching.speaker_notes_md}
+                )}
+              </div>
+              <div
+                className="notes-content"
+                ref={notesContentRef}
+                hidden={activeTab === "assistant"}
+                role="tabpanel"
+                id="side-panel-reading"
+                aria-labelledby={`side-tab-${readingTab}`}
+                onScroll={(event) => {
+                  notesScrollTopRef.current = event.currentTarget.scrollTop;
+                }}
+              >
+                {readingTab === "notes" && <MarkdownBlock
+                    markdown={pageHasExplanation || pageFailed ? page.teaching.speaker_notes_md : ""}
                     concepts={page.teaching.concepts}
                     title={page.teaching.slide_title}
                     pageNo={page.page_no}
                     pageType={page.source.page_type}
-                    plan={lessonPlanNoteInfo(pack.document.lesson_plan, page.page_no)}
+                    plan={pagePlanInfo}
                     textLayer={pageIsTranscribed(page) ? "transcribed" : pageTextLayerIsUnreadable(page) ? "unreadable" : undefined}
                     onJumpToPage={jumpToPdfPage}
+                    lead={explanationLead}
+                    bodyHidden={explanationBodyHidden}
+                    hiddenBody={explanationHiddenBody}
+                    after={explanationAfter}
                   />}
-                {activeTab === "map" && (
+                {readingTab === "map" && (
                   <LessonMapPanel
                     plan={pack.document.lesson_plan}
                     pages={pack.pages}
@@ -2878,7 +3103,7 @@ export default function App() {
                     onJumpToPage={jumpToPdfPage}
                   />
                 )}
-                {activeTab === "annotations" && (
+                {readingTab === "annotations" && (
                   <AnnotationsPanel
                     documentTitle={pack.document.title}
                     annotations={annotations}
@@ -2890,16 +3115,19 @@ export default function App() {
                     onExported={(count) => setJobStatus(copy.annotations.exported(count))}
                   />
                 )}
-                {activeTab === "structure" && <StructurePanel page={page} copy={copy} />}
-                {activeTab === "json" && <pre className="json-panel">{JSON.stringify(page, null, 2)}</pre>}
+                {readingTab === "structure" && <StructurePanel page={page} copy={copy} />}
+                {readingTab === "json" && <pre className="json-panel">{JSON.stringify(page, null, 2)}</pre>}
               </div>
-            </section>
-          </Panel>
-
-          {panels.notes && panels.agent && <WorkspaceResizeHandle />}
-
-          <Panel className="workspace-panel" hidden={!panels.agent} defaultSize={panels.notes ? 30 : 34} minSize={22}>
-            {panels.agent && (
+              {/* The assistant stays mounted while another tab is showing, so an
+                  answer keeps streaming into its conversation behind the explanation. */}
+              {panels.side && (assistantMounted || assistantVisible) && (
+                <div
+                  className="side-assistant"
+                  hidden={activeTab !== "assistant"}
+                  role="tabpanel"
+                  id="side-panel-assistant"
+                  aria-labelledby="side-tab-assistant"
+                >
               <AgentPanel
                 key={agentRuntimeKey}
                 contexts={contexts}
@@ -2933,8 +3161,14 @@ export default function App() {
                 onDeleteConversation={deletePersistedConversation}
                 onSearchConversations={searchPersistedConversations}
                 onJumpToPage={jumpToPdfPage}
+                answerMode={uiPreferences.agentAnswerMode}
+                onAnswerModeChange={(mode) => updatePreference("agentAnswerMode", mode === "coach" ? "coach" : uiPreferences.directAnswerMode)}
+                composerPrefill={composerPrefill}
+                clearComposerPrefill={(id) => setComposerPrefill((current) => (current?.id === id ? null : current))}
               />
-            )}
+                </div>
+              )}
+            </section>
           </Panel>
         </PanelGroup>
       </main>

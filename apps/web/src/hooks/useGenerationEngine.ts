@@ -186,8 +186,10 @@ export interface GenerationEngineParams {
 }
 
 export function useGenerationEngine(p: GenerationEngineParams) {
-  const handleGenerateNotes = useCallback(() => {
+  /** `scope` overrides the Generate menu's scope for one run (the explanation pane's "prepare this page"). */
+  const handleGenerateNotes = useCallback((scope?: GeneratePageMode) => {
     if (p.isGeneratingNotes) return;
+    const pageMode = scope ?? p.generatePageMode;
     const pageOutputLanguage = p.teachingOutputLanguage;
     const pageOutputLanguageLabel = teachingOutputLanguageName(pageOutputLanguage);
     const totalPages = Math.max(p.pdfPageCount || p.pack.document.page_count || p.pack.pages.length || p.pdfExtractedPages.length, 1);
@@ -205,7 +207,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
         sourceTextByPage.set(page.page_no, page.source.text_md);
       }
     }
-    const targetPageNumbers = generateTargetPageNumbers(p.generatePageMode, p.generateRangeDraft, p.currentPdfPageNo, totalPages);
+    const targetPageNumbers = generateTargetPageNumbers(pageMode, p.generateRangeDraft, p.currentPdfPageNo, totalPages);
     if (!targetPageNumbers?.length) {
       p.setJobStatus(p.copy.status.generationInvalidPageRange(totalPages));
       return;
@@ -231,7 +233,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
     let scopedPages = workingPack.pages.filter((item) => targetPageSet.has(item.page_no));
     // "All" re-plans the lesson and rewrites every page; the other scopes only
     // fill what is missing.
-    const forceRegenerate = p.generatePageMode === "all";
+    const forceRegenerate = pageMode === "all";
     const generatedThisRun = new Set<number>();
     // Pages this run gave up on; excluded from later passes of the same run
     // only, so a page that failed in an earlier session is still retried.
@@ -251,7 +253,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
     }
 
     p.setIsGeneratingNotes(true);
-    p.setPanels((current) => ({ ...current, notes: true }));
+    p.setPanels((current) => ({ ...current, side: true }));
     p.setActiveTab("notes");
     p.setJobStatus(p.copy.status.generationPreparingCache(pagesToGenerate.length));
     p.setPack(workingPack);
@@ -874,7 +876,7 @@ export function useGenerationEngine(p: GenerationEngineParams) {
     }
 
     p.setIsGeneratingNotes(true);
-    p.setPanels((current) => ({ ...current, notes: true }));
+    p.setPanels((current) => ({ ...current, side: true }));
     p.setActiveTab("notes");
     const estimatedPages = projectDocumentItems.reduce((sum, item) => sum + Math.max(item.pageCount || 0, 1), 0);
     p.setJobStatus(p.copy.status.generationBatchStarted(projectDocumentItems.length, estimatedPages));

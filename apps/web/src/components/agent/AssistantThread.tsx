@@ -8,6 +8,8 @@ import {
   Target,
   X,
 } from "lucide-react";
+import { type AgentAnswerMode } from "../../settings";
+import { composerTextWithPrefill } from "../../lib/assistant/composerText";
 import {
   createContext,
   lazy,
@@ -57,6 +59,9 @@ const MarkdownRenderer = lazy(() => import("../MarkdownRenderer"));
 // Past this many messages a conversation has usually drifted over several topics.
 const LONG_CONVERSATION_MESSAGES = 24;
 const JumpToPageContext = createContext<(pageNo: number) => void>(() => undefined);
+const AnswerModeContext = createContext<AgentAnswerMode>("coach");
+/** A worked-problem answer and whether it was handed in, per assistant message, for the session. */
+const problemDrafts = new Map<string, { answer: string; submitted: boolean }>();
 const CHALLENGE_COUNT_OPTIONS = [1, 3, 5, 10] as const;
 const DEFAULT_CHALLENGE_COUNT = 3;
 type ChallengeKind = "quiz" | "problem";
@@ -65,7 +70,7 @@ type ChallengeKind = "quiz" | "problem";
 
 export function AssistantThread({
   page,
-  suggestions,
+  answerMode,
   contextPreview,
   attachments,
   selectedContext,
@@ -83,7 +88,7 @@ export function AssistantThread({
   onJumpToPage,
 }: {
   page: PageData;
-  suggestions: string[];
+  answerMode: AgentAnswerMode;
   contextPreview: string;
   attachments: AgentAttachment[];
   selectedContext: SelectedContext | null;
@@ -106,26 +111,47 @@ export function AssistantThread({
   const { ThreadPrimitive } = assistantUi;
   const messageCount = assistantUi.useAuiState((state) => state.thread.messages.length);
   const appendUserText = useAppendUserText();
+  const thread = assistantUi.useThreadRuntime();
   const [challengeCount, setChallengeCount] = useState(DEFAULT_CHALLENGE_COUNT);
   const [challengeKind, setChallengeKind] = useState<ChallengeKind>("quiz");
-  const sendSuggestion = appendUserText;
   const sendChallenge = useCallback((kind = challengeKind, count = challengeCount) => {
     appendUserText(copy.agent.challengeUserMessage(kind, normalizeChallengeCount(count)));
   }, [appendUserText, challengeCount, challengeKind, copy.agent]);
+  // Starters begin with the learner: most put the start of a sentence in the
+  // composer for them to finish; only the hint and the quiz are sent at once.
+  const startWith = useCallback((starter: AssistantStarter) => {
+    if (starter.kind === "quiz") {
+      sendChallenge("quiz", 1);
+      return;
+    }
+    if (starter.kind === "send") {
+      appendUserText(starter.text);
+      return;
+    }
+    thread.composer.setText(composerTextWithPrefill(thread.composer.getState().text, starter.text));
+    window.setTimeout(() => {
+      const input = composerInputRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }, 20);
+  }, [appendUserText, composerInputRef, sendChallenge, thread]);
 
   return (
     <JumpToPageContext.Provider value={onJumpToPage}>
+    <AnswerModeContext.Provider value={answerMode}>
     <ThreadPrimitive.Root className="aui-thread-root">
       <ThreadPrimitive.Viewport className="aui-thread-viewport">
         <div className="aui-thread-inner">
           <ThreadPrimitive.Empty>
             <div className="aui-welcome">
               <span className="aui-welcome-kicker">PDF p.{page.page_no} · {compactText(page.teaching.slide_title, 36)}</span>
-              <h2>{copy.agent.askCurrentPage}</h2>
-              <div className="prompt-suggestions" aria-label="Prompt suggestions">
-                {suggestions.map((suggestion) => (
-                  <button key={suggestion} type="button" onClick={() => sendSuggestion(suggestion)}>
-                    {suggestion}
+              <h2>{answerMode === "coach" ? copy.agent.welcomeCoach : copy.agent.askCurrentPage}</h2>
+              <p className="aui-welcome-lede">{answerMode === "coach" ? copy.agent.welcomeCoachLede : copy.agent.welcomeDirectLede}</p>
+              <div className="prompt-suggestions" aria-label={copy.agent.startersLabel}>
+                {copy.agent.starters.map((starter) => (
+                  <button key={starter.label} type="button" data-starter-kind={starter.kind} onClick={() => startWith(starter)}>
+                    {starter.label}
                   </button>
                 ))}
               </div>
@@ -173,9 +199,17 @@ export function AssistantThread({
         </div>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
+    </AnswerModeContext.Provider>
     </JumpToPageContext.Provider>
   );
 }
+
+export type AssistantStarter = {
+  label: string;
+  /** "prefill" starts a sentence in the composer, "send" sends at once, "quiz" starts a one-question challenge. */
+  kind: "prefill" | "send" | "quiz";
+  text: string;
+};
 
 function ChallengePanel({
   kind,
@@ -402,6 +436,13 @@ function AgentMessage() {
   const failureText = status?.type === "incomplete" && status.reason === "error"
     ? assistantText
     : "";
+  const answerMode = useContext(AnswerModeContext);
+  const isLast = assistantUi.useAuiState((state) => Boolean(state.message.isLast));
+  const appendUserText = useAppendUserText();
+  // A coached reply ends with a question for the learner; the full answer is
+  // one explicit click away, never the default.
+  const offerDirectAnswer =
+    answerMode === "coach" && isLast && !isRunning && !failureText && !challengeContent && !isChallengeParseFailed && Boolean(assistantText.trim());
 
   return (
     <MessagePrimitive.Root className="aui-message assistant-message">
@@ -419,7 +460,7 @@ function AgentMessage() {
         ) : challengeContent?.kind === "quiz" ? (
           <ChallengeQuizCard quiz={challengeContent.quiz} isStreaming={isRunning} messageId={messageId} />
         ) : challengeContent?.kind === "problem" ? (
-          <ChallengeProblemCard problem={challengeContent.problem} />
+          <ChallengeProblemCard problem={challengeContent.problem} messageId={messageId} />
         ) : (
           <>
             <MessagePrimitive.Parts components={{ Text: MarkdownPart }} />
@@ -433,6 +474,16 @@ function AgentMessage() {
         )}
       </div>
       <div className="assistant-footer">
+        {offerDirectAnswer && (
+          <button
+            type="button"
+            className="direct-answer-button"
+            onClick={() => appendUserText(copy.agent.tellMeDirectly, null, { ignoreSelection: true })}
+            title={copy.agent.tellMeDirectlyHint}
+          >
+            {copy.agent.tellMeDirectlyLabel}
+          </button>
+        )}
         <ActionBarPrimitive.Root className="message-actions" hideWhenRunning autohide="not-last">
           <ActionBarPrimitive.Copy asChild>
             <button type="button" aria-label={copy.agent.copy} title={copy.agent.copy}><Copy /></button>
@@ -506,11 +557,28 @@ function ChallengeQuizCard({ quiz, isStreaming, messageId }: { quiz: QuizSet; is
   );
 }
 
-function ChallengeProblemCard({ problem }: { problem: ChallengeProblem }) {
+function ChallengeProblemCard({ problem, messageId }: { problem: ChallengeProblem; messageId: string }) {
   const copy = useAppCopy();
   const appendUserText = useAppendUserText();
   const [showHint, setShowHint] = useState(false);
   const [showSelfCheck, setShowSelfCheck] = useState(false);
+  // Closing the side column or switching conversations remounts the card; the answer must survive it.
+  const [answer, setAnswerState] = useState(() => problemDrafts.get(messageId)?.answer ?? "");
+  const [submitted, setSubmittedState] = useState(() => problemDrafts.get(messageId)?.submitted ?? false);
+  const setAnswer = (value: string) => {
+    setAnswerState(value);
+    problemDrafts.set(messageId, { answer: value, submitted });
+  };
+  const setSubmitted = (value: boolean) => {
+    setSubmittedState(value);
+    problemDrafts.set(messageId, { answer, submitted: value });
+  };
+  const submitAnswer = () => {
+    const text = answer.trim();
+    if (!text) return;
+    setSubmitted(true);
+    appendUserText(copy.agent.challengeProblemSubmitPrompt(compactText(problem.stem, 160), text), null, { ignoreSelection: true });
+  };
   const meta = [
     problem.problemType,
     problem.difficulty,
@@ -543,15 +611,36 @@ function ChallengeProblemCard({ problem }: { problem: ChallengeProblem }) {
       {!!problem.tasks.length && (
         <ChallengeProblemList title={copy.agent.challengeProblemTasksLabel} items={problem.tasks} ordered />
       )}
+      {/* The learner answers first; the rubric is for checking an attempt, not for reading instead of one. */}
+      <label className="challenge-problem-answer">
+        <span>{copy.agent.challengeProblemAnswerLabel}</span>
+        <textarea
+          rows={4}
+          value={answer}
+          placeholder={copy.agent.challengeProblemAnswerPlaceholder}
+          spellCheck={false}
+          onChange={(event) => setAnswer(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              submitAnswer();
+            }
+          }}
+        />
+      </label>
       <div className="challenge-problem-actions">
+        <button type="button" className="primary" disabled={!answer.trim()} onClick={submitAnswer}>
+          {submitted ? copy.agent.challengeProblemResubmit : copy.agent.challengeProblemSubmit}
+        </button>
         <button type="button" onClick={() => setShowHint((current) => !current)}>
           {copy.agent.challengeProblemHintAction}
         </button>
-        <button type="button" onClick={() => setShowSelfCheck((current) => !current)}>
-          {copy.agent.challengeProblemSelfCheckAction}
+        <button type="button" className="quiet" onClick={() => setShowSelfCheck((current) => !current)}>
+          {submitted ? copy.agent.challengeProblemSelfCheckAction : copy.agent.challengeProblemPeekRubric}
         </button>
         <button
           type="button"
+          className="quiet"
           onClick={() => appendUserText(copy.agent.challengeUserMessage("problem", 1))}
         >
           {copy.agent.challengeProblemAgain}
@@ -625,6 +714,7 @@ function AssistantComposer({
   const thread = assistantUi.useThreadRuntime();
   const isRunning = assistantUi.useAuiState((state) => state.thread.isRunning);
   const jumpToPage = useContext(JumpToPageContext);
+  const answerMode = useContext(AnswerModeContext);
 
   useEffect(() => {
     thread.composer.setQuote(
@@ -688,7 +778,13 @@ function AssistantComposer({
         <ComposerPrimitive.Input
           ref={inputRef}
           className="aui-composer-input"
-          placeholder={selectedContext ? copy.agent.askWithSelectionPlaceholder : copy.agent.askPlaceholder}
+          placeholder={
+            selectedContext
+              ? copy.agent.askWithSelectionPlaceholder
+              : answerMode === "coach"
+                ? copy.agent.coachPlaceholder
+                : copy.agent.askPlaceholder
+          }
           rows={2}
           submitMode="enter"
           aria-label={copy.agent.inputAria}
