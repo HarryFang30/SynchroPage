@@ -7,7 +7,8 @@ export type ScrollbarStyle = "thin" | "subtle" | "native";
 export type Language = "zh-CN" | "en-US";
 export type ExplanationLanguage = "auto" | Language;
 export type ModelReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
-export type AgentAnswerMode = "concise" | "guided" | "detailed";
+/** "coach" leads the learner to the answer; the other modes give it at increasing depth. */
+export type AgentAnswerMode = "coach" | "concise" | "guided" | "detailed";
 export type ApiProviderType =
   | "codex-oauth"
   | "openai-compatible"
@@ -97,7 +98,19 @@ export type UiPreferences = {
   pdfContextEdgePageCount: number;
   scrollbarStyle: ScrollbarStyle;
   debugMode: boolean;
+  /** Each page asks the learner to write their own take before its explanation opens. */
+  thinkFirst: boolean;
+  /** The answer-giving mode the assistant's 直答 switch returns to. */
+  directAnswerMode: Exclude<AgentAnswerMode, "coach">;
+  /**
+   * Version of the learning defaults the stored preferences have seen. Version 1
+   * made coaching and think-first the defaults; stored preferences from before it
+   * still carry the old default answer mode and are moved over once.
+   */
+  learningDefaultsVersion: number;
 };
+
+export const LEARNING_DEFAULTS_VERSION = 1;
 
 export const uiPreferencesStorageKey = "synchropage.uiPreferences.v1";
 
@@ -105,7 +118,7 @@ export const defaultUiPreferences: UiPreferences = {
   language: "zh-CN",
   explanationLanguage: "auto",
   modelReasoningEffort: "medium",
-  agentAnswerMode: "concise",
+  agentAnswerMode: "coach",
   autoSaveSession: true,
   theme: "dark",
   accentColor: "clay",
@@ -120,6 +133,9 @@ export const defaultUiPreferences: UiPreferences = {
   pdfContextEdgePageCount: 10,
   scrollbarStyle: "thin",
   debugMode: false,
+  thinkFirst: true,
+  directAnswerMode: "concise",
+  learningDefaultsVersion: LEARNING_DEFAULTS_VERSION,
 };
 
 export const defaultModelApiConfig: ModelApiConfig = {
@@ -214,7 +230,7 @@ export function loadUiPreferences() {
   try {
     const stored = window.localStorage.getItem(uiPreferencesStorageKey);
     if (!stored) return defaultUiPreferences;
-    const merged = { ...defaultUiPreferences, ...(JSON.parse(stored) as Partial<UiPreferences>) };
+    const merged = migrateLearningDefaults(JSON.parse(stored) as Partial<UiPreferences>);
     const pdfViewMode: PdfViewMode = merged.pdfViewMode === "single-page" ? "single-page" : "continuous";
     return {
       ...merged,
@@ -247,7 +263,31 @@ export function normalizeModelReasoningEffort(value: unknown): ModelReasoningEff
 }
 
 export function normalizeAgentAnswerMode(value: unknown): AgentAnswerMode {
-  return value === "guided" || value === "detailed" ? value : "concise";
+  return value === "concise" || value === "guided" || value === "detailed" ? value : "coach";
+}
+
+/**
+ * Merge stored preferences over the defaults. Preferences saved before the
+ * learning defaults changed still hold the old default answer mode ("concise")
+ * and no think-first flag; they move to coaching and think-first once, and a
+ * later explicit choice sticks because the version is then current.
+ */
+export function migrateLearningDefaults(stored: Partial<UiPreferences> | null | undefined): UiPreferences {
+  const source = stored || {};
+  const merged = { ...defaultUiPreferences, ...source };
+  const version = typeof source.learningDefaultsVersion === "number" ? source.learningDefaultsVersion : 0;
+  if (version < 1) {
+    if (!source.agentAnswerMode || source.agentAnswerMode === "concise") merged.agentAnswerMode = "coach";
+    merged.thinkFirst = true;
+  }
+  merged.thinkFirst = merged.thinkFirst !== false;
+  merged.directAnswerMode =
+    merged.directAnswerMode === "guided" || merged.directAnswerMode === "detailed" ? merged.directAnswerMode : "concise";
+  if (merged.agentAnswerMode === "concise" || merged.agentAnswerMode === "guided" || merged.agentAnswerMode === "detailed") {
+    merged.directAnswerMode = merged.agentAnswerMode;
+  }
+  merged.learningDefaultsVersion = LEARNING_DEFAULTS_VERSION;
+  return merged;
 }
 
 export function normalizeModelApiConfig(value: unknown): ModelApiConfig {

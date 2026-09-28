@@ -21,6 +21,10 @@ export type LearnerNote = {
   quote: string;
   /** Already compacted to MAX_NOTE_CHARS. */
   note: string;
+  /** The think-first question this note answers, when it is a reflection. */
+  prompt?: string;
+  /** The reflection was written after the explanation was open. */
+  afterReading?: boolean;
   /** Inside the focus window around the current page. */
   near: boolean;
 };
@@ -54,6 +58,8 @@ function toLearnerNote(annotation: AnnotationRecord, currentPage: number | null)
     kind: annotation.kind,
     quote: compactQuote(annotation.quote || "", MAX_QUOTE_CHARS),
     note: compactQuote(annotation.note || "", MAX_NOTE_CHARS),
+    ...(annotation.prompt?.trim() ? { prompt: compactQuote(annotation.prompt, MAX_QUOTE_CHARS) } : {}),
+    ...(annotation.prompt?.trim() && annotation.afterReading ? { afterReading: true } : {}),
     near: currentPage !== null && Math.abs(annotation.pageNumber - currentPage) <= FOCUS_WINDOW,
   };
 }
@@ -125,9 +131,13 @@ export function selectLearnerNotes(
 
 export function learnerNoteLine(note: LearnerNote) {
   if (note.note) {
-    return note.quote
-      ? `  - p.${note.pageNumber}｜我划的原文：「${note.quote}」｜我写的：${note.note}`
-      : `  - p.${note.pageNumber}｜本页笔记：${note.note}`;
+    if (note.quote) return `  - p.${note.pageNumber}｜我划的原文：「${note.quote}」｜我写的：${note.note}`;
+    if (note.prompt) {
+      return note.afterReading
+        ? `  - p.${note.pageNumber}｜读完讲解后我对「${note.prompt}」用自己的话写的复述：${note.note}`
+        : `  - p.${note.pageNumber}｜读讲解之前我对「${note.prompt}」写下的想法：${note.note}`;
+    }
+    return `  - p.${note.pageNumber}｜本页笔记：${note.note}`;
   }
   return `  - p.${note.pageNumber}｜只划了线没写字：「${note.quote}」`;
 }
@@ -243,33 +253,58 @@ export function learnerNotesContextItem(pack: LearnerNotesPack | null | undefine
 
 /**
  * The "让 AI 检查" action on a note card. Sent as a normal user message, so it
- * must never start with the challenge prefix (challenge:/挑战：).
+ * must never start with the challenge prefix (challenge:/挑战：). The check
+ * critiques what the learner wrote and leaves the rewriting to them: it names
+ * what holds and the one thing to fix, then asks a question, and never hands
+ * back a replacement note.
  */
-export function buildNoteCheckPrompt(input: { pageNumber: number; quote: string; note: string; language?: string }) {
+export function buildNoteCheckPrompt(input: {
+  pageNumber: number;
+  quote: string;
+  note: string;
+  prompt?: string;
+  afterReading?: boolean;
+  language?: string;
+}) {
   const quote = compactQuote(input.quote || "", MAX_QUOTE_CHARS);
   const note = compactQuote(input.note || "", MAX_NOTE_CHARS);
+  const question = compactQuote(input.prompt || "", MAX_QUOTE_CHARS);
   if (input.language === "en-US") {
+    const location = quote
+      ? `｜highlighted text: “${quote}”`
+      : question
+        ? input.afterReading
+          ? `｜my own words after reading the explanation, answering: “${question}”`
+          : `｜written before reading the explanation, answering: “${question}”`
+        : "｜page note (the Selected text above is my own note, not the source)";
     return [
-      "Please check my understanding in this note. Do not write a new quiz and do not summarize the whole page:",
-      `- Location: PDF p.${input.pageNumber}${quote ? `｜highlighted text: “${quote}”` : "｜page note (the Selected text above is my own note, not the source)"}`,
-      `- What I wrote: ${note || "(I only highlighted it; I have not written my understanding yet)"}`,
+      "Please check what I wrote. Critique it only: do not rewrite it for me, and do not hand me the full answer:",
+      `- Location: PDF p.${input.pageNumber}${location}`,
+      `- What I wrote: ${note || "(nothing yet)"}`,
       "",
       "Answer in this order:",
-      "1. Verdict: say first whether my note is “correct”, “mostly correct but incomplete”, “wrong” or “cannot tell”, then the reasons.",
-      "2. Compare: line my claims up with the page text point by point; name every missing condition, reversed direction or conflated concept, and point to the sentence on the page that should have stopped me.",
-      "3. Rewrite: give one version I can paste over my note, at most two sentences, keeping my own wording, not a textbook definition.",
-      "4. One question: ask one small question that tests whether I really understand, without the answer; if my note is only a highlight, aim it at why I highlighted this.",
+      "1. Verdict: “correct”, “mostly correct but incomplete”, “wrong” or “cannot tell”.",
+      "2. What holds: one sentence on the part I got right.",
+      "3. The one thing to fix: the most important missing condition, reversed direction or conflated concept, why it is wrong, and the sentence on the page that should have stopped me. Name any other problem in a few words without explaining it. Do not give me a corrected version.",
+      "4. One question: a small question that lets me fix it myself, without the answer.",
     ].join("\n");
   }
+  const location = quote
+    ? `｜我划的原文：「${quote}」`
+    : question
+      ? input.afterReading
+        ? `｜这是我读完讲解后，用自己的话对「${question}」写的复述`
+        : `｜这是我读讲解之前对「${question}」写下的想法`
+      : "｜本页笔记（上面 Selected text 里那段是我自己写的笔记，不是原文）";
   return [
-    "请检查我对这条笔记的理解，不要重新出题，也不要泛讲整页：",
-    `- 位置：PDF p.${input.pageNumber}${quote ? `｜我划的原文：「${quote}」` : "｜本页笔记（上面 Selected text 里那段是我自己写的笔记，不是原文）"}`,
-    `- 我写的：${note || "（我只划了线，还没写下理解）"}`,
+    "请检查我写下的理解。只点评，不要替我改写，也不要把完整答案直接讲给我：",
+    `- 位置：PDF p.${input.pageNumber}${location}`,
+    `- 我写的：${note || "（还没写）"}`,
     "",
     "请按这个顺序回答：",
-    "1. 判定：先给结论——我这条笔记是「对」「基本对但不完整」「有错」还是「看不出结论」，再讲理由。",
-    "2. 对照：把我的说法和这一页原文逐点对上，我漏掉的条件、写反的方向、混淆的概念要逐条点名，指出原文里哪一句本可以拦住我。",
-    "3. 改写：给出一条可以直接替换掉我原笔记的版本，两句以内，保留我自己的措辞习惯，不要写成教科书定义。",
-    "4. 一问：出一个能验证我是否真懂的小问题，不要给答案；如果我这条笔记只有高亮没有文字，这一问要指向我当初为什么会划它。",
+    "1. 判定：先说我写的是「对」「基本对但不完整」「有错」还是「看不出结论」。",
+    "2. 哪里对：用一句话点出我说对的部分。",
+    "3. 最该改的一处：点出最关键的漏掉的条件、写反的方向或混淆的概念，说清为什么不对，指出原文里哪一句本可以拦住我。别的问题只点名，不展开。不要给出改好的版本。",
+    "4. 一问：问我一个小问题，让我自己把这一处补上，不要给答案。",
   ].join("\n");
 }

@@ -216,6 +216,8 @@ def _normalize_generated_page_candidate(
         "teaching": {
             "output_language": output_language_code,
             "slide_title": _string_value(teaching.get("slide_title"), f"PDF p.{page_no}"),
+            "question": " ".join(_string_value(teaching.get("question"), "").split()),
+            "point": " ".join(_string_value(teaching.get("point"), "").split()),
             "speaker_notes_md": notes,
             "handoff": " ".join(_string_value(teaching.get("handoff"), "").split()),
             "concepts": _string_list(teaching.get("concepts")),

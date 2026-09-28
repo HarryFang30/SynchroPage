@@ -4,8 +4,11 @@ import type { SelectedContext, SelectionToolbarState } from "../hooks/usePageSel
 export function SelectionToolbar(props: {
   state: SelectionToolbarState | null;
   onAdd: (context: SelectedContext) => void;
-  onExplain: (context: SelectedContext) => void;
-  onSummarize: (context: SelectedContext) => void;
+  /** The learner explains the selection in their own words; the assistant checks. */
+  onExplainYourself: (context: SelectedContext) => void;
+  /** Coach mode: a hint toward the selection's meaning. Direct mode: an explanation. */
+  onAsk: (context: SelectedContext) => void;
+  coaching: boolean;
   /** Present only when the selection can be turned into a PDF highlight. */
   onHighlight?: (context: SelectedContext) => void;
   onNote?: (context: SelectedContext) => void;
@@ -33,14 +36,14 @@ export function SelectionToolbar(props: {
         </button>
       )}
       {canAnnotate && <span className="selection-toolbar-divider" aria-hidden="true" />}
+      <button type="button" className="selection-toolbar-primary" onClick={() => props.onExplainYourself(context)}>
+        {copy.agent.explainYourself}
+      </button>
+      <button type="button" onClick={() => props.onAsk(context)}>
+        {props.coaching ? copy.agent.hintSelection : copy.agent.explainSelection}
+      </button>
       <button type="button" onClick={() => props.onAdd(context)}>
         {copy.agent.addToConversation}
-      </button>
-      <button type="button" onClick={() => props.onExplain(context)}>
-        {copy.agent.explainSelection}
-      </button>
-      <button type="button" onClick={() => props.onSummarize(context)}>
-        {copy.agent.summarizeSelection}
       </button>
     </div>
   );

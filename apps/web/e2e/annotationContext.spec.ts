@@ -129,15 +129,23 @@ test.describe("learner notes context", () => {
   test("the note-check prompt is a normal message, not a challenge", () => {
     const withNote = buildNoteCheckPrompt({ pageNumber: 3, quote: "原文", note: "我的理解" });
     expect(/^(challenge|挑战)[:：]/i.test(withNote)).toBe(false);
-    expect(withNote).toContain("请检查我对这条笔记的理解");
+    expect(withNote).toContain("请检查我写下的理解");
     expect(withNote).toContain("「原文」");
-    const bare = buildNoteCheckPrompt({ pageNumber: 3, quote: "原文", note: "" });
-    expect(bare).toContain("我只划了线，还没写下理解");
+    // A check critiques; it never offers a version to paste over the learner's own words.
+    expect(withNote).toContain("不要替我改写");
+    expect(withNote).toContain("不要给出改好的版本");
+    expect(withNote).not.toContain("替换掉我原笔记");
     const pageNote = buildNoteCheckPrompt({ pageNumber: 3, quote: "", note: "整页感想" });
     expect(pageNote).toContain("不是原文");
+    const reflection = buildNoteCheckPrompt({ pageNumber: 3, quote: "", note: "因为没有调用点", prompt: "为什么叶函数不存？" });
+    expect(reflection).toContain("读讲解之前对「为什么叶函数不存？」写下的想法");
+    expect(reflection).not.toContain("不是原文");
+    const sayBack = buildNoteCheckPrompt({ pageNumber: 3, quote: "", note: "没有调用点", prompt: "为什么？", afterReading: true });
+    expect(sayBack).toContain("读完讲解后，用自己的话对「为什么？」写的复述");
     const english = buildNoteCheckPrompt({ pageNumber: 3, quote: "source", note: "my take", language: "en-US" });
     expect(/^(challenge|挑战)[:：]/i.test(english)).toBe(false);
-    expect(english).toContain("Please check my understanding");
+    expect(english).toContain("Please check what I wrote");
+    expect(english).toContain("do not rewrite it for me");
     expect(english).toContain("“source”");
   });
 

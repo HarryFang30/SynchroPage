@@ -18,12 +18,14 @@ test.describe("Agent Panel", () => {
     await expect(page.locator(".agent-panel")).toBeVisible();
   });
 
-  test("agent toolbar shows model label", async ({ page }) => {
+  test("agent toolbar shows the answer-mode switch, coaching by default", async ({ page }) => {
     await activateAgent(page);
     const toolbar = page.locator(".agent-toolbar");
     await expect(toolbar).toBeVisible();
     await expect(toolbar.locator(".conversation-switcher")).toBeVisible();
-    await expect(toolbar.locator(".agent-model")).toHaveText(/OAuth|Local/);
+    const toggle = toolbar.getByRole("radiogroup", { name: /回答方式|How to answer/ });
+    await expect(toggle.getByRole("radio", { name: /引导|Coach/ })).toHaveAttribute("aria-checked", "true");
+    await expect(toggle.getByRole("radio", { name: /直答|Direct/ })).toHaveAttribute("aria-checked", "false");
   });
 
   test("composer input accepts text", async ({ page }) => {
@@ -368,7 +370,10 @@ test.describe("Agent Panel", () => {
 
     await problem.getByRole("button", { name: "看第一步提示" }).click();
     await expect(problem).toContainText("第一步不要急着 softmax");
-    await problem.getByRole("button", { name: "我做完了，看检查点" }).click();
+    // The rubric waits for an attempt; skipping straight to it stays possible.
+    await expect(problem).not.toContainText("自查采分点");
+    await expect(problem.getByRole("button", { name: "交给 AI 批改" })).toBeDisabled();
+    await problem.getByRole("button", { name: "不做了，直接看要点" }).click();
     await expect(problem).toContainText("自查采分点");
     await expect(problem).toContainText("常见误区");
     await expect(problem).toContainText("打分、归一化和加权求和");
@@ -380,6 +385,14 @@ test.describe("Agent Panel", () => {
     await expect.poll(() => requestPayload?.model || "").toBe("gpt-5.5");
     await expect.poll(() => requestPayload?.reasoningEffort || "").toBe("xhigh");
     await expect.poll(() => requestPayload?.messages?.length ?? -1).toBe(0);
+
+    // The learner hands in an attempt; the marking request asks for a critique, not a model solution.
+    await problem.locator(".challenge-problem-answer textarea").fill("先算 q·k1 和 q·k2，再除以根号 d_k，比较大小。");
+    await problem.getByRole("button", { name: "交给 AI 批改" }).click();
+    await expect.poll(() => requestPayload?.input || "").toContain("请按你出题时给的评分要点批改");
+    expect(requestPayload?.input).toContain("先算 q·k1 和 q·k2");
+    expect(requestPayload?.input).toContain("不要给出完整答案");
+    await expect.poll(() => requestPayload?.messages?.length ?? -1).toBe(2);
   });
 
   test("sending a message via Enter renders mocked assistant reply", async ({ page }) => {
@@ -629,8 +642,8 @@ test.describe("Agent Panel", () => {
     const tray = page.locator(".composer-shell .composer-image-preview");
     await expect(tray).toHaveCount(1);
 
-    // A prompt suggestion is sent without the composer; the image still goes with it.
-    await page.locator(".prompt-suggestions button").first().click();
+    // A starter that sends at once goes without the composer; the image still goes with it.
+    await page.locator('.prompt-suggestions button[data-starter-kind="send"]').first().click();
     await expect(page.locator(".user-message .message-images img")).toHaveCount(1);
     await expect(tray).toHaveCount(0);
     await expect(page.locator(".assistant-message").last()).toContainText("Mock reply.", { timeout: 10_000 });

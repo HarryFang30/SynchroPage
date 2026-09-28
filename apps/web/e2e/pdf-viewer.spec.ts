@@ -53,7 +53,7 @@ test.describe("PDF Viewer keeps its place when the pane resizes", () => {
     await resetStorage(page);
   });
 
-  test("opening and closing the assistant panel does not move the reader to another page", async ({ page }) => {
+  test("closing and reopening the side column does not move the reader to another page", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await uploadPdfFromRail(page, "eight-page.pdf");
     await expect(page.locator(".pdf-page-shell")).toHaveCount(8, { timeout: 15_000 });
@@ -91,22 +91,22 @@ test.describe("PDF Viewer keeps its place when the pane resizes", () => {
     const before = await measure();
     expect(before.anchorPage).toBe(3);
 
-    await page.getByRole("button", { name: /显示助手|Show assistant/ }).click();
-    await page.waitForTimeout(1_200);
-    const shown = await measure();
-    expect(shown.reported).toBe("3 / 8");
-    expect(shown.anchorPage).toBe(3);
-    expect(shown.pageHeight).toBeLessThan(before.pageHeight);
-    expect(Math.abs(shown.fraction - before.fraction)).toBeLessThan(0.05);
-
-    await page.getByRole("button", { name: /隐藏助手|Hide assistant/ }).click();
+    await page.getByRole("button", { name: /隐藏侧栏|Hide side panel/ }).click();
     await page.waitForTimeout(1_200);
     const hidden = await measure();
     expect(hidden.reported).toBe("3 / 8");
-    expect(Math.abs(hidden.scrollTop - before.scrollTop)).toBeLessThan(3);
+    expect(hidden.anchorPage).toBe(3);
+    expect(hidden.pageHeight).toBeGreaterThan(before.pageHeight);
+    expect(Math.abs(hidden.fraction - before.fraction)).toBeLessThan(0.05);
+
+    await page.getByRole("button", { name: /显示侧栏|Show side panel/ }).click();
+    await page.waitForTimeout(1_200);
+    const shown = await measure();
+    expect(shown.reported).toBe("3 / 8");
+    expect(Math.abs(shown.scrollTop - before.scrollTop)).toBeLessThan(3);
   });
 
-  test("a page jump that is still animating lands on the requested page when the assistant opens", async ({ page }) => {
+  test("a page jump that is still animating lands on the requested page when the side column closes", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await uploadPdfFromRail(page, "eight-page.pdf");
     await expect(page.locator(".pdf-page-shell")).toHaveCount(8, { timeout: 15_000 });
@@ -116,7 +116,7 @@ test.describe("PDF Viewer keeps its place when the pane resizes", () => {
     await page.locator(".pdf-js-viewer").focus();
     await page.keyboard.press("End");
     await page.waitForTimeout(120);
-    await page.getByRole("button", { name: /显示助手|Show assistant/ }).click();
+    await page.getByRole("button", { name: /隐藏侧栏|Hide side panel/ }).click();
     await expect(page.locator(".topbar-page-nav output")).toContainText("8 / 8", { timeout: 10_000 });
     await page.waitForTimeout(800);
     await expect(page.locator(".topbar-page-nav output")).toContainText("8 / 8");
@@ -138,7 +138,7 @@ test.describe("PDF Viewer keeps its place when the pane resizes", () => {
     await page.reload();
     await expect(page.locator(".pdf-page-shell").first()).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(150);
-    await page.getByRole("button", { name: /显示助手|Show assistant/ }).click();
+    await page.getByRole("button", { name: /隐藏侧栏|Hide side panel/ }).click();
     await page.waitForTimeout(1_500);
     await expect(page.locator(".topbar-page-nav output")).toContainText("5 / 8");
     const anchorPage = await page.evaluate(() => {

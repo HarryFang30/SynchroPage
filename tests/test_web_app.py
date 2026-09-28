@@ -405,6 +405,31 @@ class WebAppTest(unittest.TestCase):
             ],
         )
 
+    def test_agent_transcript_keeps_a_worked_problem_with_its_rubric(self) -> None:
+        # The learner hands in a solution in a later turn; marking needs the statement, tasks and rubric.
+        problem = r"""{
+          "type": "synchropage.challenge_problem.v1",
+          "title": "缩放点积注意力",
+          "problem": {
+            "stem": "给定 \vec{q} 和 \vec{k}_1, \vec{k}_2，判断更关注哪个 token。",
+            "given": ["打分为 s_i = \frac{q \cdot k_i}{\sqrt{d_k}}"],
+            "tasks": ["写出打分表达式", "说明为什么要除以 \sqrt{d_k}"],
+            "rubric": ["先写出 logits", "说明缩放控制量级"]
+          },
+          "coach": {"common_traps": ["把 softmax 当成硬选择"]}
+        }"""
+        messages = _transcript_messages(
+            [{"role": "user", "content": "挑战：大题", "page_no": 5}, {"role": "assistant", "content": problem}],
+            "这是我的解答",
+        )
+        summary = messages[1]
+        self.assertTrue(summary.startswith("assistant: [The assistant set a worked problem: 缩放点积注意力."))
+        self.assertIn("Problem: 给定 \\vec{q}", summary)
+        self.assertIn("Tasks: (1) 写出打分表达式 (2) 说明为什么要除以", summary)
+        self.assertIn("Marking rubric (mark a solution the learner hands in against these; do not reveal them before that): (1) 先写出 logits (2) 说明缩放控制量级", summary)
+        self.assertIn("Common traps: 把 softmax 当成硬选择", summary)
+        self.assertNotIn("synchropage.challenge_problem", summary)
+
     def test_agent_payload_sends_each_image_once(self) -> None:
         first = {"type": "file", "name": "a.png", "mime": "image/png", "data_url": "data:image/png;base64,AAAA"}
         second = {"type": "file", "name": "b.png", "mime": "image/png", "data_url": "data:image/png;base64,BBBB"}
@@ -872,6 +897,35 @@ class WebAppTest(unittest.TestCase):
         self.assertFalse(page["teaching"]["needs_review"])
         self.assertEqual(page["teaching"]["handoff"], "The student now knows what a loss is.")
 
+    def test_generated_page_keeps_the_think_first_question(self) -> None:
+        body = {"model": "gpt-5.4-mini", "page": {"page_no": 1, "source": {"text_md": "overview", "pdf_page_ref": "#page=1"}}}
+        page = _parse_generated_page(
+            json.dumps(
+                {
+                    "page": {
+                        "page_no": 1,
+                        "teaching": {
+                            "slide_title": "Intro",
+                            "question": "  为什么比较两个值\n 不能只用 CBZ？ ",
+                            "point": "CBZ 只能问一个寄存器是不是零。",
+                            "speaker_notes_md": "CBZ 只能问一个寄存器是不是零。",
+                        },
+                    }
+                }
+            ),
+            body,
+        )
+        self.assertEqual(page["teaching"]["question"], "为什么比较两个值 不能只用 CBZ？")
+        self.assertEqual(list(page["teaching"]).index("question"), list(page["teaching"]).index("point") - 1)
+
+        for teaching_extra in ({}, {"question": None}, {"question": "   "}):
+            with self.subTest(teaching_extra=teaching_extra):
+                page = _parse_generated_page(
+                    json.dumps({"page": {"page_no": 1, "teaching": {"slide_title": "Cover", "speaker_notes_md": "Lecture 4.", **teaching_extra}}}),
+                    body,
+                )
+                self.assertEqual(page["teaching"]["question"], "")
+
     def test_teaching_batch_prompt_carries_one_plan_row_per_target_page(self) -> None:
         prompt = _build_teaching_generation_prompt(
             {
@@ -896,7 +950,7 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("segment: Opening (pages 3-7)", prompt)
         self.assertIn("- p3: role=title depth=skim — cover", prompt)
         self.assertIn("- p7: role=concept depth=full key=true — the definition", prompt)
-        self.assertIn("handoff_from_previous_page: none", prompt)
+        self.assertIn("student_already_holds: nothing from this run", prompt)
         self.assertIn("--- Target page 3 ---", prompt)
         self.assertIn("source_text:", prompt)
         self.assertNotIn("Pages JSONL:", prompt)

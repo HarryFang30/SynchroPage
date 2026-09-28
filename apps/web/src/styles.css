@@ -13,5 +13,6 @@
 @import "./styles/calm-surface.css";
 @import "./styles/annotations.css";
 @import "./styles/agent-conversations.css";
+@import "./styles/study.css";
 
 @tailwind utilities;

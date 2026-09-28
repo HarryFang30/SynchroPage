@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 export const DB_NAME = "synchropage-reader";
 export const LS_KEYS = [
   "synchropage.lastWorkspaceId.v1",
+  "synchropage.revealedPages.v1",
   "synchropage.uiPreferences.v1",
   "synchropage.quizWeakPoints.v1",
   "synchropage.generationWindow.v1",
@@ -50,6 +51,23 @@ export async function resetStorage(page: Page) {
     },
     { dbName: DB_NAME, lsKeys: LS_KEYS },
   );
+  await page.reload();
+  await page.waitForSelector(".app-shell", { timeout: 10_000 });
+}
+
+/**
+ * Most specs exercise generation, notes and the assistant, not the think-first
+ * gate, and read an explanation right after it is generated. They start with
+ * think-first off; thinkFirst.spec.ts covers the default.
+ */
+export async function resetStorageWithExplanationsOpen(page: Page) {
+  await resetStorage(page);
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      "synchropage.uiPreferences.v1",
+      JSON.stringify({ thinkFirst: false, learningDefaultsVersion: 1 }),
+    );
+  });
   await page.reload();
   await page.waitForSelector(".app-shell", { timeout: 10_000 });
 }
@@ -106,12 +124,11 @@ export async function uploadPdfFromRail(page: Page, fileName = "two-page.pdf") {
   await expect(page.locator(".pdf-pane")).toContainText(/PDF|Source|来源/i, { timeout: 10_000 });
 }
 
+/** Bring up the assistant tab of the side column (opening the column when it is closed). */
 export async function activateAgent(page: Page) {
-  let panel = page.locator(".agent-panel");
-  if ((await panel.count()) === 0) {
-    await page.getByRole("button", { name: /显示助手|Show assistant/i }).click();
-    panel = page.locator(".agent-panel");
-  }
+  const show = page.getByRole("button", { name: /显示助手|Show assistant/i });
+  if (await show.count()) await show.click();
+  const panel = page.locator(".agent-panel");
   await expect(panel).toBeVisible();
   await panel.hover();
   const composer = page.locator(".aui-composer-input");

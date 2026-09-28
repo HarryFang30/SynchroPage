@@ -116,6 +116,8 @@ export function normalizeGeneratedPage(rawPage: GeneratedTeachingPageResponse["p
       output_language: normalizeTeachingOutputLanguage(rawTeaching.output_language),
       slide_title: rawTeaching.slide_title || rawTeaching.title || "",
       speaker_notes_md: rawTeaching.speaker_notes_md || rawTeaching.notes || "",
+      point: typeof rawTeaching.point === "string" ? rawTeaching.point.replace(/\s+/g, " ").trim() : "",
+      question: typeof rawTeaching.question === "string" ? rawTeaching.question.replace(/\s+/g, " ").trim() : "",
       handoff: typeof rawTeaching.handoff === "string" ? rawTeaching.handoff.replace(/\s+/g, " ").trim() : "",
       concepts: Array.isArray(rawTeaching.concepts) ? rawTeaching.concepts : [],
       visual_explanations: Array.isArray(rawTeaching.visual_explanations)
@@ -158,7 +160,11 @@ export function normalizeGeneratedPage(rawPage: GeneratedTeachingPageResponse["p
       ...normalized.teaching,
       slide_title: normalized.teaching.slide_title || fallback.teaching.slide_title || `PDF p.${fallback.page_no}`,
       speaker_notes_md: normalized.teaching.speaker_notes_md || fallback.teaching.speaker_notes_md,
-      handoff: normalized.teaching.handoff || fallback.teaching.handoff || "",
+      // A returned string is the new generation's answer, even when empty (a
+      // skim page asks no question); only an absent key keeps the old value.
+      point: typeof rawTeaching.point === "string" ? normalized.teaching.point || "" : fallback.teaching.point || "",
+      question: typeof rawTeaching.question === "string" ? normalized.teaching.question || "" : fallback.teaching.question || "",
+      handoff: typeof rawTeaching.handoff === "string" ? normalized.teaching.handoff || "" : fallback.teaching.handoff || "",
       concepts: normalized.teaching.concepts.length ? normalized.teaching.concepts : fallback.teaching.concepts,
       visual_explanations: normalized.teaching.visual_explanations.length ? normalized.teaching.visual_explanations : fallback.teaching.visual_explanations,
       prerequisites: normalized.teaching.prerequisites.length ? normalized.teaching.prerequisites : fallback.teaching.prerequisites,
