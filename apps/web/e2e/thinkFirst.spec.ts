@@ -65,9 +65,6 @@ async function openGeneratedDocument(page: Page) {
   await page.locator(".generate-main-button").click();
   await expect(page.locator(".generate-main-button")).toContainText(/备课|Prepare/, { timeout: 15_000 });
   await expect(page.locator(".notes-content")).toContainText(PAGE_ONE_NOTES, { timeout: 10_000 });
-  // A page turn in the first moments after a planned generation finishes is
-  // swallowed by the viewer (also on master); let it settle first.
-  await page.waitForTimeout(1_500);
 }
 
 async function goToPageTwo(page: Page) {

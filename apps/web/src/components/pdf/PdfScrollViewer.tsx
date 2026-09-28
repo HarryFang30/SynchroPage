@@ -66,6 +66,8 @@ export type PdfScrollViewerProps = {
 // ── Constants ────────────────────────────────────────────────
 
 const pdfIntersectionThresholds = [0, 0.25, 0.5, 0.75, 1];
+// Keys that scroll the focused viewer, natively or through handleKeyDown.
+const readerScrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 
 // ── Utility functions ────────────────────────────────────────
 
@@ -493,7 +495,21 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
     root.scrollTo({ top, behavior });
   }, [onActivePageChange, pageCount, updateRenderWindowCenter]);
 
-  useImperativeHandle(ref, () => ({ scrollToPage }), [scrollToPage]);
+  // The initial restore puts the reader back on the page they had open. Once
+  // they move on their own (page arrows, a note jump, keys, wheel, touch) it
+  // is over: a pass still pending would scroll them back to the page of the
+  // moment the document opened and swallow the page turn.
+  const cancelInitialRestore = useCallback(() => {
+    initialRestoreTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    initialRestoreTimersRef.current = [];
+  }, []);
+
+  const navigateToPage = useCallback((targetPage: number, behavior?: ScrollBehavior) => {
+    cancelInitialRestore();
+    scrollToPage(targetPage, behavior);
+  }, [cancelInitialRestore, scrollToPage]);
+
+  useImperativeHandle(ref, () => ({ scrollToPage: navigateToPage }), [navigateToPage]);
 
   const registerPageElement = useCallback((pageNo: number) => (node: HTMLDivElement | null) => {
     if (node) {
@@ -628,7 +644,8 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
     // The timers are deliberately not cleared when a dependency (the pane
     // width, say) changes: the restore has already been claimed for this url
     // and a re-run would return early, so clearing here would drop it. A
-    // document switch resets restoredUrlRef, which makes stale timers no-ops.
+    // document switch resets restoredUrlRef, which makes stale timers no-ops;
+    // the reader moving first clears them (cancelInitialRestore).
     const restore = () => {
       if (restoredUrlRef.current === url) scrollToPage(targetPage, "auto");
     };
@@ -697,6 +714,7 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
     if (event.defaultPrevented) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+    if (readerScrollKeys.has(event.key)) cancelInitialRestore();
     if (event.key === "PageDown") {
       event.preventDefault();
       scrollToPage(Math.min(safePageNumber + 1, Math.max(pageCount, 1)), "smooth");
@@ -710,7 +728,7 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
       event.preventDefault();
       scrollToPage(Math.max(pageCount, 1), "smooth");
     }
-  }, [pageCount, safePageNumber, scrollToPage]);
+  }, [cancelInitialRestore, pageCount, safePageNumber, scrollToPage]);
 
   const handleScroll = useCallback(() => {
     // Scroll events raised by the re-anchoring itself are not the reader moving.
@@ -737,6 +755,8 @@ export const PdfScrollViewer = forwardRef<PdfScrollViewerHandle, PdfScrollViewer
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onScroll={handleScroll}
+      onWheel={cancelInitialRestore}
+      onTouchStart={cancelInitialRestore}
     >
       {!pdfDocument && <div className="pdf-layer-note">正在加载 PDF...</div>}
       {pdfDocument && (
