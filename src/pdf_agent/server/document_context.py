@@ -29,6 +29,7 @@ from pdf_agent.server.constants import (
     TRANSCRIPT_RECENT_MESSAGE_CHARS,
     TRANSCRIPT_RECENT_MESSAGES,
 )
+from pdf_agent.server.markdown_math import json_loads_with_latex_repair
 from pdf_agent.server.pdf_file_cache import (
     PdfFileCache,
 )
@@ -520,6 +521,8 @@ def _text_from_parts(value: Any) -> str:
 
 _CHALLENGE_PAYLOAD_RE = re.compile(r'"type"\s*:\s*"synchropage\.challenge_(quiz|problem)')
 _CHALLENGE_TITLE_RE = re.compile(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"')
+# A worked problem stays in the transcript with its rubric; this bounds it.
+MAX_CHALLENGE_SUMMARY_CHARS = 2400
 _SKIPPED_TRANSCRIPT_STATUSES = {"error", "failed", "pending"}
 _STOPPED_TRANSCRIPT_STATUSES = {"stopped", "cancelled", "canceled", "incomplete"}
 
@@ -581,14 +584,65 @@ def _transcript_turn_label(role: str, item: Mapping[str, Any]) -> str:
 
 
 def _compact_challenge_payload(content: str) -> str:
-    """A quiz the assistant generated is a JSON payload: keep only what it was."""
+    """A challenge the assistant generated is a JSON payload: keep only what it was.
+
+    A quiz collapses to one line. A worked problem keeps its statement, tasks
+    and marking rubric, because the learner hands in a solution in a later turn
+    and the answer to that turn is marked against them.
+    """
     match = _CHALLENGE_PAYLOAD_RE.search(content)
     if not match:
         return content
-    kind = "an interactive quiz" if match.group(1) == "quiz" else "a worked-problem challenge"
     title_match = _CHALLENGE_TITLE_RE.search(content)
     title = title_match.group(1).strip() if title_match else ""
+    if match.group(1) == "problem":
+        problem = _worked_problem_summary(content)
+        if problem:
+            return problem
+    kind = "an interactive quiz" if match.group(1) == "quiz" else "a worked-problem challenge"
     return f"[The assistant generated {kind}{f': {title}' if title else ''}. The questions are not repeated here.]"
+
+
+def _worked_problem_summary(content: str) -> str:
+    """Statement, givens, tasks, rubric and traps of a worked-problem payload, or "" when it does not parse."""
+    start = content.find("{")
+    end = content.rfind("}")
+    if start < 0 or end <= start:
+        return ""
+    try:
+        value = json_loads_with_latex_repair(content[start : end + 1])
+    except ValueError:
+        return ""
+    if not isinstance(value, Mapping):
+        return ""
+    problem = value.get("problem") if isinstance(value.get("problem"), Mapping) else {}
+    coach = value.get("coach") if isinstance(value.get("coach"), Mapping) else {}
+
+    def items(raw: Any) -> list[str]:
+        return [" ".join(str(item).split()) for item in raw if str(item).strip()] if isinstance(raw, list) else []
+
+    stem = " ".join(str(problem.get("stem") or value.get("stem") or "").split())
+    if not stem:
+        return ""
+    title = _string_value(value.get("title"), "")
+    heading = f"[The assistant set a worked problem: {title}." if title else "[The assistant set a worked problem."
+    lines = [heading, f"Problem: {stem}"]
+    given = items(problem.get("given"))
+    if given:
+        lines.append("Given: " + "; ".join(given))
+    tasks = items(problem.get("tasks"))
+    if tasks:
+        lines.append("Tasks: " + " ".join(f"({index}) {task}" for index, task in enumerate(tasks, start=1)))
+    rubric = items(problem.get("rubric") or coach.get("rubric"))
+    if rubric:
+        lines.append(
+            "Marking rubric (mark a solution the learner hands in against these; do not reveal them before that): "
+            + " ".join(f"({index}) {item}" for index, item in enumerate(rubric, start=1))
+        )
+    traps = items(coach.get("common_traps"))
+    if traps:
+        lines.append("Common traps: " + "; ".join(traps))
+    return _truncate("\n".join(lines), MAX_CHALLENGE_SUMMARY_CHARS) + "]"
 
 
 def _message_content(message: Mapping[str, Any]) -> str:

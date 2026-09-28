@@ -95,11 +95,15 @@ def _apply_prompt_cache_fields(
 # ---------------------------------------------------------------------------
 
 
+_AGENT_ANSWER_MODES = frozenset({"coach", "concise", "guided", "detailed"})
+
+
 def _agent_answer_mode(body: Mapping[str, Any]) -> str:
+    """The answer mode of a chat request; coach unless the learner chose another."""
     value = str(body.get("answerMode") or "").strip()
-    if value in {"concise", "guided", "detailed"}:
+    if value in _AGENT_ANSWER_MODES:
         return value
-    return "concise"
+    return "coach"
 
 
 def _agent_answer_mode_effort(mode: str) -> str:
@@ -212,6 +216,10 @@ def _teaching_page_output_contract(page_no: Any) -> dict[str, Any]:
         "teaching": {
             "output_language": "zh-CN|en-US",
             "slide_title": "the page's title in the source's own words",
+            "question": (
+                "one question in the explanation language that this page answers, for the student to try from the slide alone "
+                "before reading your explanation; your point is its answer; empty string on a skim page"
+            ),
             "point": "one sentence: the claim the student must take away from this page",
             "gap": "what the slide leaves unsaid that the student needs, or none",
             "speaker_notes_md": "the explanation in Markdown: opens with the point, then closes the gap; labelled blockquotes are the only devices, no headings",
@@ -479,7 +487,7 @@ def _teaching_prompt_rules(body: Mapping[str, Any], *, batch: bool) -> list[str]
         page_rule,
         "- Always return source.page_type: echo the page_type given for the page, or your own classification when it was unknown. Do not copy source text; omit every other source field except source.pdf_page_ref.",
         f"- Device labels, exactly: {label_list}. The answer of the {labels['check']} device starts the next line of the same blockquote with {labels['answer']}{colon}. No other blockquotes, no headings.",
-        "- Write teaching.point and teaching.gap before teaching.speaker_notes_md, in that order; the first sentence of the explanation states the point and the rest closes the gap.",
+        "- Write teaching.question, teaching.point and teaching.gap before teaching.speaker_notes_md, in that order; the first sentence of the explanation states the point and the rest closes the gap.",
         "- The depth the lesson plan gives a page is a ceiling on length, never a target: skim is one sentence, brief at most a short paragraph, full at most a few paragraphs; a key page may run longer when its gap is that large. Never pad, and never restate what the student can read on the slide.",
         "- Fill teaching.handoff with one sentence on what the student holds after this page; the request for the next page receives it so that it is not explained twice.",
         "- Fill teaching.concepts with 2-5 short terms named on this page (at most 12 characters each), teaching.stuck_points with 0-3 mistakes people really make on this page, and teaching.exam_angles with 0-2 angles only when the page is really examinable. All three stay empty on skim pages and are never repeated in the prose.",
@@ -908,7 +916,33 @@ def _build_ocr_payload(
 
 
 def _agent_answer_mode_prompt(mode: str) -> str:
-    """How deep an ordinary answer goes.  A mode sets depth, never a template."""
+    """How an ordinary answer is given.  A mode sets depth, never a template.
+
+    Coach, the default, leads the learner to the answer one step at a time;
+    the other modes give the answer at increasing depth.
+    """
+    if mode == "coach":
+        return (
+            "Mode: coach (the learner wants to work it out themselves)\n"
+            "- Do not hand over the answer. Start from what the learner already has. When their message contains their own attempt, "
+            "explanation or guess, say in one sentence what is right in it, then point at the first thing that is wrong or missing "
+            "(which part, not what the right version is), and stop there. When it contains no attempt, either ask for one with a "
+            "single concrete question, or give the smallest hint that lets them take the next step alone: the line, figure or term "
+            "on the page to look at, or the question they should ask themselves.\n"
+            "- One step per turn: two to four sentences, at most about 120 Chinese characters or 80 English words before the "
+            "closing question; count before you answer and cut whatever goes past the one step. End with exactly one question or "
+            "task for the learner that can be answered in a line (\"what does bar() do to r1?\"), never \"any questions?\" or "
+            "\"does that make sense?\".\n"
+            "- Give the full answer, as a direct answer would and at the length it needs, when the learner asks for it outright "
+            "(\"直接告诉我\", \"告诉我答案\", \"just tell me\") or has reached it themselves (confirm it and add the one thing they "
+            "are missing). When there is nothing to reason out (a definition, what a symbol stands for, where something is in the "
+            "document, a fact to look up), answer in one or two sentences.\n"
+            "- Never put the answer inside the hint, never lecture, and never praise the question or the attempt beyond naming "
+            "what is right.\n"
+            "- A request to check the learner's note or solution is answered as a check, in the order the request asks for and "
+            "at the length it needs (the one-step limit above does not apply): what holds, what does not and why, then one "
+            "question; never rewrite it for them or hand over a corrected version."
+        )
     if mode == "detailed":
         return (
             "Mode: detailed\n"
@@ -953,6 +987,22 @@ def _build_user_request(input_text: str, selected_context: Any, pdf_context: Any
         sections.extend(["Corresponding original PDF page text:", pdf_source_text])
     sections.extend(["User question:", user_question])
     return "\n\n".join(sections)
+
+
+def _existing_notes_label(body: Mapping[str, Any]) -> str:
+    """How the page's prepared explanation is introduced in the chat prompt.
+
+    The client sends ``explanationRead: false`` while the learner is still
+    working the page out before opening the explanation; an absent value
+    (older clients) keeps the "already read" reading.
+    """
+    # Withholding the explanation is part of coaching; the answer-giving modes answer in full.
+    if body.get("explanationRead") is False and _agent_answer_mode(body) == "coach":
+        return (
+            "Existing notes (prepared for this page; the learner has NOT read them yet and is working the page out first; "
+            "do not quote them or give their content away unless they ask for the answer outright):"
+        )
+    return "Existing notes (the explanation of this page the learner has already read):"
 
 
 def _build_agent_interaction_prompt(
@@ -1013,7 +1063,7 @@ def _build_agent_interaction_prompt(
     if teaching.get("speaker_notes_md"):
         sections.extend(
             [
-                "Existing notes (the explanation of this page the learner has already read):",
+                _existing_notes_label(body),
                 _truncate(str(teaching.get("speaker_notes_md")), MAX_CONTEXT_CHARS),
             ]
         )

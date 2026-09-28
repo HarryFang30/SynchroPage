@@ -70,6 +70,29 @@ class TeachingInstructionsTest(unittest.TestCase):
         self.assertIn("The first sentence says the point", TEACHING_GENERATOR_INSTRUCTIONS)
         self.assertIn("Then close the gap, and only the gap.", TEACHING_GENERATOR_INSTRUCTIONS)
 
+    def test_decides_the_think_first_question_before_the_point(self) -> None:
+        self.assertIn("all three go into the JSON ahead of the explanation", TEACHING_GENERATOR_INSTRUCTIONS)
+        question = TEACHING_GENERATOR_INSTRUCTIONS.index(
+            "- question: the student is asked this before they see your explanation and tries to answer it from the slide alone"
+        )
+        point = TEACHING_GENERATOR_INSTRUCTIONS.index("- point: the one thing the student must take away")
+        self.assertLess(question, point)
+        bullet = TEACHING_GENERATOR_INSTRUCTIONS[question:point]
+        for rule in (
+            "so it asks for the point, not for a fact to copy",
+            "never a question whose answer is printed on the slide, never a yes/no question",
+            "Your point is its answer.",
+            "at most 40 Chinese characters or 25 English words",
+            "A skim page gets an empty question.",
+        ):
+            self.assertIn(rule, bullet)
+
+    def test_self_check_asks_something_other_than_the_page_question(self) -> None:
+        self.assertIn(
+            "one small question, which must ask something different from the page's question",
+            TEACHING_GENERATOR_INSTRUCTIONS,
+        )
+
     def test_forbids_the_ways_an_explanation_misses_the_point(self) -> None:
         for rule in (
             "No bridge from the previous page",
@@ -110,7 +133,7 @@ class TeachingInstructionsTest(unittest.TestCase):
         self.assertIn(r"$000 \to 001 \to 010 \to \cdots \to 111 \to 000$", TEACHING_GENERATOR_INSTRUCTIONS)
 
     def test_does_not_collide_with_the_json_contract_keys(self) -> None:
-        for quoted_key in ('"concepts"', '"evidence"', '"speaker_notes_md"', '"point"', '"gap"'):
+        for quoted_key in ('"concepts"', '"evidence"', '"speaker_notes_md"', '"question"', '"point"', '"gap"'):
             self.assertNotIn(quoted_key, TEACHING_GENERATOR_INSTRUCTIONS)
 
 
@@ -143,6 +166,14 @@ class TeachingOutputContractTest(unittest.TestCase):
         self.assertIn("stuck_points", contract["teaching"])
         self.assertIn("exam_angles", contract["teaching"])
 
+    def test_contract_lists_the_question_right_before_the_point(self) -> None:
+        keys = list(_teaching_page_output_contract(5)["teaching"])
+        self.assertEqual(keys.index("question") + 1, keys.index("point"))
+        self.assertLess(keys.index("point"), keys.index("speaker_notes_md"))
+        question = _teaching_page_output_contract(5)["teaching"]["question"]
+        self.assertIn("for the student to try from the slide alone before reading your explanation", question)
+        self.assertIn("your point is its answer; empty string on a skim page", question)
+
     def test_contract_stays_minimal(self) -> None:
         contract = _teaching_page_output_contract(5)
         self.assertNotIn("concepts", contract["teaching"])
@@ -169,6 +200,13 @@ class TeachingPromptRulesTest(unittest.TestCase):
         self.assertIn("teaching.stuck_points with 0-3", rules)
         self.assertIn("teaching.exam_angles with 0-2", rules)
         self.assertIn("never repeated in the prose", rules)
+
+    def test_rules_write_question_point_and_gap_first(self) -> None:
+        rules = "\n".join(_teaching_prompt_rules({}, batch=False))
+        self.assertIn(
+            "- Write teaching.question, teaching.point and teaching.gap before teaching.speaker_notes_md, in that order;",
+            rules,
+        )
 
     def test_batch_rule_demands_one_object_per_page(self) -> None:
         rules = "\n".join(_teaching_prompt_rules({}, batch=True))
@@ -309,6 +347,8 @@ class TeachingBatchPromptTest(unittest.TestCase):
         self.assertEqual(prompt.count('"page_no":"<target_page_no>"'), 1)
         self.assertEqual(prompt.count('"speaker_notes_md"'), 1)
         self.assertEqual(prompt.count('"handoff"'), 1)
+        self.assertEqual(prompt.count('"question"'), 1)
+        self.assertLess(prompt.index('"question"'), prompt.index('"point"'))
         self.assertNotIn('"concepts"', prompt)
         self.assertNotIn('"evidence"', prompt)
 
