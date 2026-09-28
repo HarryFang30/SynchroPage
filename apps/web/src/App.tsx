@@ -1615,14 +1615,16 @@ export default function App() {
           await refreshDocumentItems(saved.workspace.id, saved.document.id, saved.workspace.activeProjectId || saved.document.projectId || null);
           setThreadId(saved.thread.id);
           setAgentRuntimeKey(`${saved.thread.id}:0:${Date.now()}`);
-          setPack({
-            ...next,
+          // The pack may already be in use (a generation run started while it
+          // was saving): take the stored identity, keep its pages and plan.
+          setPack((current) => current.document.id !== next.document.id ? current : {
+            ...current,
             document: {
-              ...next.document,
+              ...current.document,
               id: saved.document.id,
               title: saved.document.title,
               source_pdf_url: saved.document.fileName,
-              page_count: saved.document.pageCount || next.document.page_count,
+              page_count: saved.document.pageCount || current.document.page_count,
             },
           });
           return saved;

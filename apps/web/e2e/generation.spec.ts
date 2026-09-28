@@ -331,6 +331,9 @@ test.describe("Teaching Generation (mocked)", () => {
   test("network-aborted single-page request is retried", async ({ page }) => {
     test.setTimeout(45_000);
     await uploadPdfFromRail(page);
+    // The viewer opens once the upload is saved, with the saved document's
+    // pack; a run started before that would be replaced by it.
+    await expect(page.locator(".pdf-page-shell").first().locator("canvas")).toBeVisible({ timeout: 15_000 });
     await page.unroute("**/api/**");
 
     const pageCalls = new Map<number, number>();
