@@ -197,6 +197,13 @@ export type AnnotationRecord = {
   quote: string;
   rects: AnnotationRect[];
   note: string;
+  /**
+   * The think-first question a page note answers: the learner wrote it before
+   * opening the page's explanation. Absent on ordinary notes and highlights.
+   */
+  prompt?: string;
+  /** The reflection was written, or last rewritten, after the explanation was open (a say-back, not a prediction). */
+  afterReading?: boolean;
   createdAt: number;
   updatedAt: number;
 };

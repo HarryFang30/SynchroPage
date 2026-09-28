@@ -43,6 +43,9 @@ async function ask(page: Page, question: string) {
   await composer.fill(question);
   await page.keyboard.press("Enter");
   await expect(page.locator(".assistant-message").last()).toContainText(`Reply to: ${question}`, { timeout: 10_000 });
+  // The reply shows before the run ends, and while it runs Enter in the
+  // composer is a newline; the next question must wait for the send button.
+  await expect(page.locator(".composer-stop")).toHaveCount(0);
 }
 
 function newChatButton(page: Page) {
@@ -280,7 +283,7 @@ test.describe("Assistant conversations", () => {
     const payloads = await mockChat(page);
     await openDocument(page);
     await selectPdfText(page, "Page One");
-    await page.locator(".selection-toolbar").getByRole("button", { name: /解释选中内容|Explain selection/ }).click();
+    await page.locator(".selection-toolbar").getByRole("button", { name: /给我提示|Give me a hint/ }).click();
     await expect(page.locator(".assistant-message").last()).toContainText("Reply to:", { timeout: 10_000 });
 
     const first = page.locator(".user-message").first();

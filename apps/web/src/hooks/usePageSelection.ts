@@ -240,8 +240,11 @@ function shouldIgnoreSelection(element: Element) {
 
 function detectSelectionSource(element: Element, copy: AppCopy): { sourceType: SelectedContextSourceType; label: string } {
   if (element.closest(".pdf-page-layered, .pdf-text-layer")) return { sourceType: "pdf-page", label: copy.agent.selectionSources.pdfPage };
-  if (element.closest(".notes-pane")) return { sourceType: "generated-explanation", label: copy.agent.selectionSources.notes };
+  // The assistant shares the side column with the explanation: check it first,
+  // and count only the explanation body as explanation text.
   if (element.closest(".assistant-message")) return { sourceType: "assistant-message", label: copy.agent.selectionSources.assistant };
+  if (element.closest(".side-assistant")) return { sourceType: "unknown", label: copy.agent.selectionSources.page };
+  if (element.closest(".notes-content")) return { sourceType: "generated-explanation", label: copy.agent.selectionSources.notes };
   if (element.closest(".page-rail")) return { sourceType: "page", label: copy.agent.selectionSources.rail };
   return { sourceType: "unknown", label: copy.agent.selectionSources.page };
 }

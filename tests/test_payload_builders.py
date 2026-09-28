@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import unittest
+from typing import Any
 
 from pdf_agent.harness.types import PageTeaching
+from pdf_agent.server.constants import AGENT_INSTRUCTIONS
 from pdf_agent.server.payload_builders import (
     _agent_answer_mode,
     _agent_answer_mode_effort,
+    _agent_answer_mode_prompt,
     _build_responses_payload,
     _build_teaching_generation_payload,
     _reasoning_effort,
@@ -23,18 +26,141 @@ from pdf_agent.server.payload_builders import (
 class AgentAnswerModeTest(unittest.TestCase):
 
     def test_known_modes(self) -> None:
+        self.assertEqual(_agent_answer_mode({"answerMode": "coach"}), "coach")
         self.assertEqual(_agent_answer_mode({"answerMode": "concise"}), "concise")
         self.assertEqual(_agent_answer_mode({"answerMode": "guided"}), "guided")
         self.assertEqual(_agent_answer_mode({"answerMode": "detailed"}), "detailed")
 
-    def test_defaults_to_concise(self) -> None:
-        self.assertEqual(_agent_answer_mode({}), "concise")
-        self.assertEqual(_agent_answer_mode({"answerMode": "unknown"}), "concise")
+    def test_defaults_to_coach(self) -> None:
+        self.assertEqual(_agent_answer_mode({}), "coach")
+        self.assertEqual(_agent_answer_mode({"answerMode": ""}), "coach")
+        self.assertEqual(_agent_answer_mode({"answerMode": None}), "coach")
+
+    def test_unknown_modes_fall_back_to_coach(self) -> None:
+        self.assertEqual(_agent_answer_mode({"answerMode": "unknown"}), "coach")
+        self.assertEqual(_agent_answer_mode({"answerMode": "Concise"}), "coach")
 
     def test_effort_mappings(self) -> None:
+        self.assertEqual(_agent_answer_mode_effort("coach"), "medium")
         self.assertEqual(_agent_answer_mode_effort("concise"), "medium")
         self.assertEqual(_agent_answer_mode_effort("guided"), "high")
         self.assertEqual(_agent_answer_mode_effort("detailed"), "xhigh")
+
+    def test_coach_request_reasons_at_medium(self) -> None:
+        self.assertEqual(_reasoning_effort({"answerMode": "coach"}), "medium")
+
+
+def _chat_prompt(**body: Any) -> str:
+    payload = _build_responses_payload(
+        {
+            "document": {"id": "doc_1", "title": "Doc"},
+            "page": {
+                "page_no": 3,
+                "source": {"text_md": "bar(r1)"},
+                "teaching": {"slide_title": "Calls", "speaker_notes_md": "bar() overwrites r1 before returning."},
+            },
+            "input": "为什么 r1 变了？",
+            **body,
+        },
+        default_model="fallback-model",
+    )
+    return payload["input"][0]["content"][-1]["text"]
+
+
+class AgentAnswerModePromptTest(unittest.TestCase):
+
+    def test_coach_prompt_leads_instead_of_answering(self) -> None:
+        prompt = _agent_answer_mode_prompt("coach")
+        self.assertTrue(prompt.startswith("Mode: coach (the learner wants to work it out themselves)\n- Do not hand over the answer."))
+        self.assertIn("One step per turn: two to four sentences, at most about 120 Chinese characters", prompt)
+        self.assertIn('("直接告诉我", "告诉我答案", "just tell me")', prompt)
+        self.assertIn("Never put the answer inside the hint", prompt)
+        self.assertTrue(prompt.endswith("never rewrite it for them or hand over a corrected version."))
+        # Checks and hand-ins follow their own structure; the one-step cap would cut them short.
+        self.assertIn("the one-step limit above does not apply", prompt)
+
+    def test_chat_prompt_uses_coach_for_coach_and_by_default(self) -> None:
+        for body in ({"answerMode": "coach"}, {}, {"answerMode": "unknown"}):
+            with self.subTest(body=body):
+                prompt = _chat_prompt(**body)
+                self.assertIn("# Answer mode\n\nMode: coach (the learner wants to work it out themselves)", prompt)
+                self.assertNotIn("Mode: concise", prompt)
+
+    def test_chat_payload_for_coach_reasons_at_medium(self) -> None:
+        payload = _build_responses_payload({"input": "hi", "answerMode": "coach"}, default_model="fallback-model")
+        self.assertEqual(payload["reasoning"], {"effort": "medium"})
+
+    def test_other_modes_keep_their_own_prompt(self) -> None:
+        for mode in ("concise", "guided", "detailed"):
+            with self.subTest(mode=mode):
+                prompt = _chat_prompt(answerMode=mode)
+                self.assertIn(f"Mode: {mode}\n", prompt)
+                self.assertNotIn("Mode: coach", prompt)
+
+
+class ExistingNotesLabelTest(unittest.TestCase):
+
+    READ = "Existing notes (the explanation of this page the learner has already read):"
+    NOT_READ = "Existing notes (prepared for this page; the learner has NOT read them yet"
+
+    def test_not_read_label_only_when_explanation_read_is_false(self) -> None:
+        prompt = _chat_prompt(explanationRead=False)
+        self.assertIn(
+            "Existing notes (prepared for this page; the learner has NOT read them yet and is working the page out first; "
+            "do not quote them or give their content away unless they ask for the answer outright):",
+            prompt,
+        )
+        self.assertNotIn(self.READ, prompt)
+        self.assertIn("bar() overwrites r1 before returning.", prompt)
+
+    def test_answer_giving_modes_never_withhold_the_explanation(self) -> None:
+        for mode in ("concise", "guided", "detailed"):
+            with self.subTest(mode=mode):
+                prompt = _chat_prompt(explanationRead=False, answerMode=mode)
+                self.assertIn(self.READ, prompt)
+                self.assertNotIn(self.NOT_READ, prompt)
+
+    def test_read_label_when_true_absent_or_not_a_boolean(self) -> None:
+        for body in ({"explanationRead": True}, {}, {"explanationRead": None}, {"explanationRead": 0}):
+            with self.subTest(body=body):
+                prompt = _chat_prompt(**body)
+                self.assertIn(self.READ, prompt)
+                self.assertNotIn(self.NOT_READ, prompt)
+
+    def test_no_label_without_notes(self) -> None:
+        payload = _build_responses_payload(
+            {"page": {"page_no": 3, "teaching": {"slide_title": "Calls"}}, "input": "hi", "explanationRead": False},
+            default_model="fallback-model",
+        )
+        prompt = payload["input"][0]["content"][-1]["text"]
+        self.assertNotIn("Existing notes (", prompt)
+
+
+class AgentInstructionsTest(unittest.TestCase):
+
+    def test_instructions_put_the_learners_thinking_first(self) -> None:
+        self.assertTrue(AGENT_INSTRUCTIONS.startswith("You are the AI agent panel inside SynchroPage: a study companion"))
+        self.assertIn("in coach mode you move their thinking forward one step at a time and never do it for them", AGENT_INSTRUCTIONS)
+        self.assertIn("in the other modes the learner has asked for the answer, and you give it in full.", AGENT_INSTRUCTIONS)
+        self.assertNotIn("Answer the question that was asked", AGENT_INSTRUCTIONS)
+
+    def test_answer_first_only_applies_when_the_answer_is_given(self) -> None:
+        asked = AGENT_INSTRUCTIONS.index("Work out what is being asked\n")
+        given = AGENT_INSTRUCTIONS.index("When you give the answer (concise, guided and detailed modes;")
+        context = AGENT_INSTRUCTIONS.index("Use the context the way the learner means it")
+        self.assertLess(asked, given)
+        self.assertLess(given, context)
+        self.assertIn("In every mode: no greeting, no restating the question, no praise for the question.", AGENT_INSTRUCTIONS[asked:given])
+        self.assertIn("The first sentence answers the question", AGENT_INSTRUCTIONS[given:context])
+        self.assertIn("Length follows the question.", AGENT_INSTRUCTIONS[given:context])
+        # Correcting and giving the reason belong to answering; coach mode only says what is wrong.
+        self.assertIn('"Is this right?" gets yes or no and then the reason', AGENT_INSTRUCTIONS[given:context])
+        self.assertNotIn("and correct it", AGENT_INSTRUCTIONS[asked:given])
+        self.assertNotIn("yes or no", AGENT_INSTRUCTIONS[asked:given])
+
+    def test_existing_notes_rule_covers_both_states(self) -> None:
+        self.assertIn('"Existing notes" is the explanation prepared for this page.', AGENT_INSTRUCTIONS)
+        self.assertIn("When the request says they have not read it yet", AGENT_INSTRUCTIONS)
 
 
 class ReasoningEffortTest(unittest.TestCase):

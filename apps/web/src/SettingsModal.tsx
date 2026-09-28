@@ -258,16 +258,28 @@ export function SettingsModal(props: SettingsModalProps) {
 
               {section === "agent" && (
                 <SettingsGroup>
+                  <SettingsRow label={copy.settings.agent.thinkFirstLabel} description={copy.settings.agent.thinkFirstDescription}>
+                    <SettingsSwitch
+                      checked={props.preferences.thinkFirst}
+                      onCheckedChange={(checked) => props.onPreferenceChange("thinkFirst", checked)}
+                    />
+                  </SettingsRow>
+                  <SettingsRow label={copy.settings.agent.answerModeLabel} description={copy.settings.agent.answerModeDescription}>
+                    <SettingsSelect
+                      value={props.preferences.agentAnswerMode}
+                      onChange={(value) => props.onPreferenceChange("agentAnswerMode", value as UiPreferences["agentAnswerMode"])}
+                      options={[
+                        ["coach", copy.settings.agent.answerModeCoach],
+                        ["concise", copy.settings.agent.answerModeConcise],
+                        ["guided", copy.settings.agent.answerModeGuided],
+                        ["detailed", copy.settings.agent.answerModeDetailed],
+                      ]}
+                    />
+                  </SettingsRow>
                   <SettingsRow label={copy.settings.agent.sourcePillsLabel} description={copy.settings.agent.sourcePillsDescription}>
                     <SettingsSwitch
                       checked={props.preferences.showSourcePills}
                       onCheckedChange={(checked) => props.onPreferenceChange("showSourcePills", checked)}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label={copy.settings.agent.pageSuggestionsLabel} description={copy.settings.agent.pageSuggestionsDescription}>
-                    <SettingsSwitch
-                      checked={props.preferences.pageAwareSuggestions}
-                      onCheckedChange={(checked) => props.onPreferenceChange("pageAwareSuggestions", checked)}
                     />
                   </SettingsRow>
                   <SettingsRow label={copy.settings.agent.shareNotesLabel} description={copy.settings.agent.shareNotesDescription}>
@@ -284,17 +296,6 @@ export function SettingsModal(props: SettingsModalProps) {
                         ["auto", copy.settings.agent.explanationLanguageAuto],
                         ["zh-CN", copy.settings.agent.explanationLanguageChinese],
                         ["en-US", copy.settings.agent.explanationLanguageEnglish],
-                      ]}
-                    />
-                  </SettingsRow>
-                  <SettingsRow label={copy.settings.agent.answerModeLabel} description={copy.settings.agent.answerModeDescription}>
-                    <SettingsSelect
-                      value={props.preferences.agentAnswerMode}
-                      onChange={(value) => props.onPreferenceChange("agentAnswerMode", value as UiPreferences["agentAnswerMode"])}
-                      options={[
-                        ["concise", copy.settings.agent.answerModeConcise],
-                        ["guided", copy.settings.agent.answerModeGuided],
-                        ["detailed", copy.settings.agent.answerModeDetailed],
                       ]}
                     />
                   </SettingsRow>

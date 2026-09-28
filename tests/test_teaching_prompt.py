@@ -59,23 +59,66 @@ def _lesson_plan(**overrides):
 
 class TeachingInstructionsTest(unittest.TestCase):
 
-    def test_frames_the_task_as_teaching_not_form_filling(self) -> None:
+    def test_frames_the_task_as_adding_what_the_slide_cannot_say(self) -> None:
         self.assertIn("You are the SynchroPage teaching assistant", TEACHING_GENERATOR_INSTRUCTIONS)
-        self.assertIn("not filling in a form for every page", TEACHING_GENERATOR_INSTRUCTIONS)
-        self.assertIn("never use fixed openers", TEACHING_GENERATOR_INSTRUCTIONS)
-        self.assertIn("do not comment on every page's place in the course", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("can read everything that is written on it", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("An explanation that repeats the slide in full sentences, however fluent, has failed", TEACHING_GENERATOR_INSTRUCTIONS)
 
-    def test_states_the_three_depths_and_the_key_allowance(self) -> None:
+    def test_decides_the_point_and_the_gap_before_writing(self) -> None:
+        self.assertIn("- point: the one thing the student must take away from this page, as a claim", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("- gap: what a student who reads the slide carefully would still not know", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("The first sentence says the point", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("Then close the gap, and only the gap.", TEACHING_GENERATOR_INSTRUCTIONS)
+
+    def test_decides_the_think_first_question_before_the_point(self) -> None:
+        self.assertIn("all three go into the JSON ahead of the explanation", TEACHING_GENERATOR_INSTRUCTIONS)
+        question = TEACHING_GENERATOR_INSTRUCTIONS.index(
+            "- question: the student is asked this before they see your explanation and tries to answer it from the slide alone"
+        )
+        point = TEACHING_GENERATOR_INSTRUCTIONS.index("- point: the one thing the student must take away")
+        self.assertLess(question, point)
+        bullet = TEACHING_GENERATOR_INSTRUCTIONS[question:point]
+        for rule in (
+            "so it asks for the point, not for a fact to copy",
+            "never a question whose answer is printed on the slide, never a yes/no question",
+            "Your point is its answer.",
+            "at most 40 Chinese characters or 25 English words",
+            "A skim page gets an empty question.",
+        ):
+            self.assertIn(rule, bullet)
+
+    def test_self_check_asks_something_other_than_the_page_question(self) -> None:
+        self.assertIn(
+            "one small question, which must ask something different from the page's question",
+            TEACHING_GENERATOR_INSTRUCTIONS,
+        )
+
+    def test_forbids_the_ways_an_explanation_misses_the_point(self) -> None:
+        for rule in (
+            "No bridge from the previous page",
+            "Never walk through the slide",
+            "Write about the subject, not about the slide or yourself.",
+            "Say each fact once",
+            "Look at the page before you read its text.",
+            "Hard facts are given exactly.",
+            "Never tell the student what you could not see",
+            "Recompute every address, offset, count and sum",
+        ):
+            self.assertIn(rule, TEACHING_GENERATOR_INSTRUCTIONS)
+
+    def test_depths_are_ceilings_without_a_minimum(self) -> None:
         for tier in ("- skim:", "- brief:", "- full:"):
             self.assertIn(tier, TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("these are ceilings, never targets, and nothing has a minimum", TEACHING_GENERATOR_INSTRUCTIONS)
         self.assertIn("at most 40 Chinese characters", TEACHING_GENERATOR_INSTRUCTIONS)
-        self.assertIn("80 to 200 Chinese characters", TEACHING_GENERATOR_INSTRUCTIONS)
-        self.assertIn("300 to 800 Chinese characters", TEACHING_GENERATOR_INSTRUCTIONS)
-        self.assertIn("marks key may run to 1200", TEACHING_GENERATOR_INSTRUCTIONS)
-        self.assertIn("cut until it fits", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("at most 450 Chinese characters", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("Length follows the gap, not the depth label", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertNotIn("300 to 800", TEACHING_GENERATOR_INSTRUCTIONS)
 
-    def test_bounds_the_devices(self) -> None:
-        self.assertIn("at most two per page; none on a skim page; at most one on a brief page", TEACHING_GENERATOR_INSTRUCTIONS)
+    def test_devices_are_optional_and_bounded(self) -> None:
+        self.assertIn("Teaching devices (optional; most pages have none)", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("At most one on a page, two on a key page, none on a skim page", TEACHING_GENERATOR_INSTRUCTIONS)
+        self.assertIn("a device never repeats what the prose already said", TEACHING_GENERATOR_INSTRUCTIONS)
         self.assertIn("Use no other blockquotes and no headings.", TEACHING_GENERATOR_INSTRUCTIONS)
 
     def test_forbids_claiming_knowledge_of_a_real_exam(self) -> None:
@@ -90,7 +133,7 @@ class TeachingInstructionsTest(unittest.TestCase):
         self.assertIn(r"$000 \to 001 \to 010 \to \cdots \to 111 \to 000$", TEACHING_GENERATOR_INSTRUCTIONS)
 
     def test_does_not_collide_with_the_json_contract_keys(self) -> None:
-        for quoted_key in ('"concepts"', '"evidence"', '"speaker_notes_md"'):
+        for quoted_key in ('"concepts"', '"evidence"', '"speaker_notes_md"', '"question"', '"point"', '"gap"'):
             self.assertNotIn(quoted_key, TEACHING_GENERATOR_INSTRUCTIONS)
 
 
@@ -123,6 +166,14 @@ class TeachingOutputContractTest(unittest.TestCase):
         self.assertIn("stuck_points", contract["teaching"])
         self.assertIn("exam_angles", contract["teaching"])
 
+    def test_contract_lists_the_question_right_before_the_point(self) -> None:
+        keys = list(_teaching_page_output_contract(5)["teaching"])
+        self.assertEqual(keys.index("question") + 1, keys.index("point"))
+        self.assertLess(keys.index("point"), keys.index("speaker_notes_md"))
+        question = _teaching_page_output_contract(5)["teaching"]["question"]
+        self.assertIn("for the student to try from the slide alone before reading your explanation", question)
+        self.assertIn("your point is its answer; empty string on a skim page", question)
+
     def test_contract_stays_minimal(self) -> None:
         contract = _teaching_page_output_contract(5)
         self.assertNotIn("concepts", contract["teaching"])
@@ -149,6 +200,13 @@ class TeachingPromptRulesTest(unittest.TestCase):
         self.assertIn("teaching.stuck_points with 0-3", rules)
         self.assertIn("teaching.exam_angles with 0-2", rules)
         self.assertIn("never repeated in the prose", rules)
+
+    def test_rules_write_question_point_and_gap_first(self) -> None:
+        rules = "\n".join(_teaching_prompt_rules({}, batch=False))
+        self.assertIn(
+            "- Write teaching.question, teaching.point and teaching.gap before teaching.speaker_notes_md, in that order;",
+            rules,
+        )
 
     def test_batch_rule_demands_one_object_per_page(self) -> None:
         rules = "\n".join(_teaching_prompt_rules({}, batch=True))
@@ -190,14 +248,14 @@ class LessonPlanRowsTest(unittest.TestCase):
         self.assertIn("segment_goal: Derive the locus condition.", lines)
         self.assertIn("- p5: role=derivation depth=full key=true — first derivation; show the angle condition", lines)
         self.assertIn("- p6: role=transition depth=skim — section title only", lines)
-        self.assertIn("handoff_from_previous_page: The student can write 1+KGH=0", lines)
+        self.assertIn("build on it, do not open by recapping it): The student can write 1+KGH=0", lines)
         self.assertNotIn("No lesson plan was computed", lines)
 
     def test_lines_explain_the_missing_plan(self) -> None:
         lines = "\n".join(_teaching_lesson_plan_lines({}, [{"page_no": 5, "source": {"page_type": "figure"}}]))
         self.assertIn("No lesson plan was computed for this document.", lines)
         self.assertIn("- p5: role=concept depth=full", lines)
-        self.assertIn("handoff_from_previous_page: none", lines)
+        self.assertIn("student_already_holds: nothing from this run", lines)
 
 
 class TeachingPageTypeHelpersTest(unittest.TestCase):
@@ -222,7 +280,7 @@ class TeachingSinglePagePromptTest(unittest.TestCase):
         self.assertIn("You are the SynchroPage teaching assistant", prompt)
         self.assertIn("Lesson plan for this request:", prompt)
         self.assertIn("- p5: role=derivation depth=full key=true", prompt)
-        self.assertIn("handoff_from_previous_page: The student can write", prompt)
+        self.assertIn("student_already_holds (from the previous page; build on it, do not open by recapping it): The student can write", prompt)
         self.assertIn("Target page:", prompt)
         self.assertIn("page_no: 5", prompt)
         self.assertIn("page_type: formula", prompt)
@@ -289,6 +347,8 @@ class TeachingBatchPromptTest(unittest.TestCase):
         self.assertEqual(prompt.count('"page_no":"<target_page_no>"'), 1)
         self.assertEqual(prompt.count('"speaker_notes_md"'), 1)
         self.assertEqual(prompt.count('"handoff"'), 1)
+        self.assertEqual(prompt.count('"question"'), 1)
+        self.assertLess(prompt.index('"question"'), prompt.index('"point"'))
         self.assertNotIn('"concepts"', prompt)
         self.assertNotIn('"evidence"', prompt)
 

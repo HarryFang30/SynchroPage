@@ -42,10 +42,38 @@ function readStringField(source: Record<string, unknown> | null, key: string) {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+/** The error a failed response stands for: backend code, message and Retry-After. */
+export async function httpRequestErrorFromResponse(
+  response: Response,
+  accountNotFoundMessage = "请先连接 OpenAI OAuth 后再发送。",
+) {
+  const detail = await response.text().catch(() => "");
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const candidate = JSON.parse(detail) as unknown;
+    parsed = candidate && typeof candidate === "object" && !Array.isArray(candidate)
+      ? (candidate as Record<string, unknown>)
+      : null;
+  } catch {
+    parsed = null;
+  }
+  const code = readStringField(parsed, "error");
+  const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get("Retry-After"));
+  const message = code === "account_not_found"
+    ? accountNotFoundMessage
+    : readStringField(parsed, "message") || code || detail || `HTTP ${response.status}`;
+  return new HttpRequestError(message, {
+    status: response.status,
+    code,
+    retryAfterSeconds,
+    body: detail || undefined,
+  });
+}
+
 export async function requestJson<T>(
   path: string,
   options: RequestInit = {},
-  accountNotFoundMessage = "请先连接 OpenAI OAuth 后再发送。",
+  accountNotFoundMessage?: string,
 ) {
   const response = await fetch(path, {
     ...options,
@@ -54,28 +82,6 @@ export async function requestJson<T>(
       ...(options.headers || {}),
     },
   });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    let parsed: Record<string, unknown> | null = null;
-    try {
-      const candidate = JSON.parse(detail) as unknown;
-      parsed = candidate && typeof candidate === "object" && !Array.isArray(candidate)
-        ? (candidate as Record<string, unknown>)
-        : null;
-    } catch {
-      parsed = null;
-    }
-    const code = readStringField(parsed, "error");
-    const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get("Retry-After"));
-    const message = code === "account_not_found"
-      ? accountNotFoundMessage
-      : readStringField(parsed, "message") || code || detail || `HTTP ${response.status}`;
-    throw new HttpRequestError(message, {
-      status: response.status,
-      code,
-      retryAfterSeconds,
-      body: detail || undefined,
-    });
-  }
+  if (!response.ok) throw await httpRequestErrorFromResponse(response, accountNotFoundMessage);
   return (await response.json()) as T;
 }

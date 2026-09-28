@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import concurrent.futures
 import hashlib
 import json
 import logging
 import math
 import mimetypes
 import os
+import queue
 import re
 import shutil
 import threading
@@ -23,12 +25,13 @@ from pdf_agent.auth import OpenAIOAuthApi, OpenAIOAuthError, OpenAIOAuthManager
 from pdf_agent.gateway import (
     redacted_gateway_error,
 )
-from pdf_agent.server.agent_gateway import AgentChatGateway
+from pdf_agent.server.agent_gateway import AgentChatGateway, ChatStreamSink
 from pdf_agent.server.constants import (
     DEFAULT_AGENT_MODEL,
     MAX_PDF_FILE_DATA_CHARS,
 )
 from pdf_agent.server.errors import HttpError
+from pdf_agent.server.gateway_transport import abort_response
 from pdf_agent.server.json_utils import (
     json_bytes_utf8_safe as _json_bytes_utf8_safe,
 )
@@ -63,6 +66,14 @@ WEB_ROOT = DIST_WEB_ROOT if DIST_WEB_ROOT.exists() else SOURCE_WEB_ROOT
 OAUTH_CONFIG_PATH = PROJECT_ROOT / "config" / "auth" / "openai_oauth.yaml"
 DEFAULT_MAX_JSON_BODY_BYTES = 100_000_000
 MAX_JSON_BODY_BYTES = _env_positive_int("PDF_AGENT_MAX_JSON_BODY_BYTES", DEFAULT_MAX_JSON_BODY_BYTES)
+#: A streamed chat answer writes this often while the model is silent, so a
+#: reader that went away is noticed and its upstream request is stopped.
+CHAT_STREAM_HEARTBEAT_SECONDS = 2.0
+_CHAT_STREAM_END = "_end"
+
+
+class _ReaderGone(Exception):
+    """The browser closed the connection while an answer was being streamed."""
 LOGGER = logging.getLogger("pdf_agent.server.web_app")
 
 
@@ -224,7 +235,10 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
                 )))
             elif path == "/api/agent/chat":
                 body = self._read_json()
-                self._send_json(self.server.runner.run(self.server.chat_gateway.chat(body)))
+                if body.get("stream") is True:
+                    self._stream_agent_chat(body)
+                else:
+                    self._send_json(self.server.runner.run(self.server.chat_gateway.chat(body)))
             elif path == "/api/pdf/cache":
                 body = self._read_json()
                 self._send_json(self._cache_pdf_file_payload(body.get("documentFile") or body))
@@ -303,6 +317,100 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(data)
 
+    def _stream_agent_chat(self, body: Mapping[str, Any]) -> None:
+        """Answer ``/api/agent/chat`` as Server-Sent Events.
+
+        Events: ``start`` (the model began to respond), ``thinking`` (a
+        reasoning model is still thinking), ``delta`` (``text``: the next piece
+        of the answer), then ``done`` (the same object the JSON route returns)
+        or ``error``.  Until the model has sent its first byte nothing is
+        written, so a request that fails outright (no account, bad key, 429)
+        still gets an ordinary JSON error with its HTTP status.
+        """
+        events: queue.Queue[dict[str, Any]] = queue.Queue()
+        reader_gone = threading.Event()
+        thinking = threading.Event()
+
+        def on_thinking() -> None:
+            # One event per silence is enough: it only switches the indicator.
+            if not thinking.is_set():
+                thinking.set()
+                events.put({"type": "thinking"})
+
+        def on_text(text: str) -> None:
+            thinking.clear()
+            events.put({"type": "delta", "text": text})
+
+        upstream: list[Any] = []
+        sink = ChatStreamSink(
+            on_text=on_text,
+            on_thinking=on_thinking,
+            on_start=lambda: events.put({"type": "start"}),
+            on_response=upstream.append,
+            cancelled=reader_gone.is_set,
+        )
+        future = asyncio.run_coroutine_threadsafe(self.server.chat_gateway.chat_stream(body, sink), self.server.runner.loop)
+        # The end of the request is queued behind its last delta.
+        future.add_done_callback(lambda _future: events.put({"type": _CHAT_STREAM_END}))
+        streaming = False
+        try:
+            while True:
+                try:
+                    event = events.get(timeout=CHAT_STREAM_HEARTBEAT_SECONDS)
+                except queue.Empty:
+                    if streaming:
+                        self._write_stream(b": ping\n\n")
+                    continue
+                if event["type"] == _CHAT_STREAM_END:
+                    break
+                if not streaming:
+                    streaming = True
+                    self.close_connection = True
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache, no-transform")
+                    self.send_header("X-Accel-Buffering", "no")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                self._write_stream_event(event)
+            try:
+                result = future.result()
+            except (concurrent.futures.CancelledError, asyncio.CancelledError):
+                if streaming:
+                    self._write_stream_event({"type": "error", "error": "cancelled", "message": "The answer was stopped before it finished", "status": 499})
+                else:
+                    self._send_json({"error": "cancelled", "message": "The answer was stopped before it finished"}, status=499)
+                return
+            except Exception as exc:
+                if not streaming:
+                    self._send_exception(exc)
+                    return
+                self._write_stream_event({"type": "error", **_exception_payload(exc)})
+                return
+            if streaming:
+                self._write_stream_event({"type": "done", **result})
+            else:
+                self._send_json(result)
+        except _ReaderGone:
+            # The reader stopped or left: stop paying for an answer nobody
+            # reads. Closing the upstream socket wakes a read blocked on a
+            # silent model at once.
+            reader_gone.set()
+            future.cancel()
+            for response in upstream:
+                abort_response(response)
+            self.close_connection = True
+
+    def _write_stream_event(self, event: Mapping[str, Any]) -> None:
+        self._write_stream(b"data: " + _json_bytes_utf8_safe(event, ensure_ascii=False, separators=(",", ":")) + b"\n\n")
+
+    def _write_stream(self, data: bytes) -> None:
+        try:
+            self.wfile.write(data)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionError, TimeoutError) as exc:
+            raise _ReaderGone() from exc
+
     def _send_static(self, path: str, *, include_body: bool = True) -> None:
         file_path = _resolve_static_path(self.server.web_root, path)
         if not file_path.exists() or not file_path.is_file():
@@ -329,17 +437,10 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
                 shutil.copyfileobj(file, self.wfile, length=1024 * 1024)
 
     def _send_exception(self, exc: Exception) -> None:
-        if isinstance(exc, OpenAIOAuthError):
-            status = 401 if exc.code in {"account_not_found", "refresh_token_invalid"} else 400
-            self._send_json({"error": exc.code, "message": str(exc)}, status=status)
-        elif isinstance(exc, HttpError):
-            self._send_json(
-                {"error": exc.code, "message": str(exc)},
-                status=exc.status,
-                headers=_retry_after_header(exc),
-            )
-        else:
-            self._send_json({"error": "internal_error", "message": redacted_gateway_error(str(exc))}, status=500)
+        payload = _exception_payload(exc)
+        status = payload.pop("status")
+        headers = _retry_after_header(exc) if isinstance(exc, HttpError) else None
+        self._send_json(payload, status=status, headers=headers)
 
     def _cache_pdf_file_payload(self, value: Any) -> dict[str, Any]:
         if not isinstance(value, Mapping):
@@ -367,6 +468,16 @@ class PdfAgentRequestHandler(BaseHTTPRequestHandler):
         }
         self.server.pdf_file_cache.store(record)
         return {key: record[key] for key in ("filename", "mimeType", "size", "sha256")}
+
+
+def _exception_payload(exc: Exception) -> dict[str, Any]:
+    """``{"error", "message", "status"}`` for *exc*, as the JSON error body carries it."""
+    if isinstance(exc, OpenAIOAuthError):
+        status = 401 if exc.code in {"account_not_found", "refresh_token_invalid"} else 400
+        return {"error": exc.code, "message": str(exc), "status": status}
+    if isinstance(exc, HttpError):
+        return {"error": exc.code, "message": str(exc), "status": exc.status}
+    return {"error": "internal_error", "message": redacted_gateway_error(str(exc)), "status": 500}
 
 
 def _retry_after_header(exc: HttpError) -> dict[str, str]:

@@ -249,6 +249,10 @@ export function MarkdownBlock({
   plan,
   textLayer,
   onJumpToPage,
+  lead,
+  bodyHidden = false,
+  hiddenBody,
+  after,
 }: {
   markdown: string;
   concepts: string[];
@@ -260,6 +264,13 @@ export function MarkdownBlock({
   /** The page's text came from a transcription of the page image, or is unreadable noise. */
   textLayer?: "transcribed" | "unreadable";
   onJumpToPage?: (pageNo: number) => void;
+  /** Shown between the header and the explanation (the think-first question or the learner's answer). */
+  lead?: ReactNode;
+  /** The explanation waits until the learner has thought first; `hiddenBody` stands in its place. */
+  bodyHidden?: boolean;
+  hiddenBody?: ReactNode;
+  /** Shown after the explanation. */
+  after?: ReactNode;
 }) {
   const copy = useAppCopy();
   const sections = useMemo(() => splitNoteSections(markdown), [markdown]);
@@ -278,7 +289,7 @@ export function MarkdownBlock({
   const roleLabel = plan ? copy.notes.roles[plan.role] || plan.role : typeLabel;
   const depthLabel = plan ? copy.notes.depths[plan.depth] || plan.depth : undefined;
   const segmentStart = plan && plan.depth === "skim" && plan.segmentStartPage !== pageNo ? plan.segmentStartPage : undefined;
-  const showHeader = Boolean(heading || concepts.length);
+  const showHeader = Boolean(heading || concepts.length || lead);
   let order = 0;
   return (
     // Keyed by page so a page change replays the entrance instead of morphing
@@ -309,7 +320,7 @@ export function MarkdownBlock({
               <ReaderMarkdown className="note-title-text" inline text={heading} />
             </h1>
           )}
-          {concepts.length > 0 && (
+          {concepts.length > 0 && !bodyHidden && (
             <ul className="note-concepts" aria-label={copy.notes.conceptsLabel}>
               {concepts.map((item) => (
                 <li key={item}>
@@ -325,7 +336,17 @@ export function MarkdownBlock({
           )}
         </header>
       )}
-      {sections.map((section, index) => {
+      {lead && (
+        <div className="note-lead-slot" style={noteOrder(order++)}>
+          {lead}
+        </div>
+      )}
+      {bodyHidden && hiddenBody && (
+        <div className="note-hidden-slot" style={noteOrder(order++)}>
+          {hiddenBody}
+        </div>
+      )}
+      {!bodyHidden && sections.map((section, index) => {
         const Icon = section.key ? NOTE_SECTION_ICONS[section.key] : null;
         return (
           <section
@@ -354,6 +375,11 @@ export function MarkdownBlock({
           </section>
         );
       })}
+      {after && (
+        <div className="note-after-slot" style={noteOrder(order++)}>
+          {after}
+        </div>
+      )}
     </article>
   );
 }

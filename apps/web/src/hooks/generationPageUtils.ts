@@ -22,16 +22,16 @@ export function buildRunningPageData(
   basePage: PageData,
   outputLanguage: TeachingOutputLanguage,
 ): PageData {
+  const discard = basePage.status === "failed" || basePage.teaching.output_language !== outputLanguage;
   return {
     ...basePage,
     status: "running",
     teaching: {
       ...basePage.teaching,
       output_language: outputLanguage,
-      speaker_notes_md:
-        basePage.status === "failed" || basePage.teaching.output_language !== outputLanguage
-          ? ""
-          : basePage.teaching.speaker_notes_md,
+      speaker_notes_md: discard ? "" : basePage.teaching.speaker_notes_md,
+      // Written in the old language, these would outlive the explanation they belonged to.
+      ...(discard ? { question: "", point: "", handoff: "" } : {}),
     },
   };
 }

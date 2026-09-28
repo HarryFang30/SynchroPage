@@ -113,6 +113,14 @@
             "slide_title": {
               "type": "string"
             },
+            "question": {
+              "type": "string",
+              "description": "The think-first question: shown before the explanation for the student to try from the slide alone; the point is its answer. Empty on skim pages."
+            },
+            "point": {
+              "type": "string",
+              "description": "The one claim the student must take away from this page; the explanation opens with it."
+            },
             "speaker_notes_md": {
               "type": "string"
             },
